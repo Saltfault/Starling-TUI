@@ -9,10 +9,49 @@ and voice calls via direct QUIC streams. Birds discover each other through
 the murmuration using iroh's relay and discovery infrastructure — no central
 server required. An invite ticket is all a new bird needs to join a flock.
 
+---
+
+## Getting Starling
+
+There are two ways to get the app. Either way, you'll need [Rust](#installing-rust)
+and [system dependencies](#system-dependencies) installed first.
+
+### Option A: Clone with git (recommended)
+
+Gives you the full project including the `justfile` for automated setup:
+
+```bash
+git clone https://forgejo.hearthhome.lol/Saltfault/Starling.git
+cd Starling
+just install-deps    # installs system packages (Linux/macOS)
+just run             # builds and starts the app
+```
+
+### Option B: Install with cargo (binary only)
+
+Cargo can clone and build the binary in one step — no git clone needed.
+The `starling` binary is installed to `~/.cargo/bin/`:
+
+```bash
+cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling.git
+```
+
+Then run it directly:
+
+```bash
+starling open            # start a new flock
+starling join <ticket>   # join an existing flock
+```
+
+> **Note:** You still need to install [system dependencies](#system-dependencies)
+> manually with this method since you won't have the `justfile`.
+
+---
+
 ## Quick start
 
-Once you have [Rust](#installing-rust) and [system dependencies](#system-dependencies)
-installed:
+Once you have [Rust](#installing-rust), [`just`](#installing-just), and
+[system dependencies](#system-dependencies) installed:
 
 ```bash
 just run             # start a new session (you are the flock opener)
@@ -89,10 +128,12 @@ rustc --version
 cargo --version
 ```
 
-### Installing `just`
+---
 
-The `justfile` automates dependency installation and builds. Install
-[`just`](https://github.com/casey/just) with cargo:
+## Installing `just`
+
+The [`justfile`](https://github.com/casey/just) automates dependency
+installation and builds. Install `just` with cargo:
 
 ```bash
 cargo install just
@@ -111,7 +152,7 @@ brew install just
 winget install Casey.Just
 ```
 
-You can also run `just --list` at any time to see all available commands.
+You can run `just --list` at any time to see all available commands.
 
 ---
 
