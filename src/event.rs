@@ -29,8 +29,6 @@ pub enum AppEvent {
     PeerConnected(EndpointId),
     /// A gossip neighbor went offline.
     PeerDisconnected(EndpointId),
-    /// The endpoint finished binding and this is the shareable invite ticket.
-    Ticket(String),
     /// A 20 ms Opus voice frame arrived from a remote peer.
     VoiceFrame(Vec<u8>),
 }
@@ -40,7 +38,7 @@ pub enum AppEvent {
 pub struct ChatMessage {
     /// Unique identifier (UUID v4) so duplicates can be deduped.
     pub id: String,
-    /// Display name of the sender (from `STARLING_NAME` env var).
+    /// Display name of the sender.
     pub author: String,
     /// Message body (plain text).
     pub body: String,

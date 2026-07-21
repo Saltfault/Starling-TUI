@@ -13,7 +13,7 @@
 
 use crate::event::{AppEvent, ChatMessage, Command};
 use iroh::{
-    Endpoint, EndpointId,
+    Endpoint,
     endpoint::{Connection, presets},
     protocol::Router,
 };
@@ -37,15 +37,17 @@ pub fn topic_for(name: &str) -> TopicId {
 
 /// The main network loop. Spawned once by `main`.
 ///
-/// * `topic` — the gossip topic to subscribe to.
-/// * `bootstrap` — peer IDs from a join ticket (empty if we are the opener).
+/// * `topic` — the gossip topic to subscribe to (derived from the room code).
 /// * `cmd_rx` — receives commands from the UI.
 /// * `evt_tx` — sends events to the UI.
 /// * `muted` — shared mute flag, passed through to the mic capture callback.
 /// * `name` — the bird's display name, used as the author on chat messages.
+///
+/// Both the opener and joiner call this with the same topic (derived from the
+/// room code) and an empty bootstrap list. iroh's relay connects them on the
+/// topic automatically — no node IDs need to be exchanged.
 pub async fn run(
     topic: TopicId,
-    bootstrap: Vec<EndpointId>,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     muted: Arc<AtomicBool>,
@@ -70,14 +72,10 @@ pub async fn run(
         )
         .spawn();
 
-    // Hand the UI a short invite ticket — just our node ID (64 hex chars).
-    // iroh's N0 discovery system resolves it for joiners, so we don't need
-    // to encode the full endpoint address.
-    let node_id = endpoint.addr().id;
-    let _ = evt_tx.send(AppEvent::Ticket(node_id.to_string()));
-
-    // Subscribe to the gossip topic and join the mesh.
-    let (sender, mut receiver) = gossip.subscribe_and_join(topic, bootstrap).await?.split();
+    // Subscribe to the gossip topic. Both opener and joiner use the same
+    // topic (derived from the room code) with empty bootstrap — iroh's
+    // relay connects peers on the same topic automatically.
+    let (sender, mut receiver) = gossip.subscribe_and_join(topic, vec![]).await?.split();
 
     // Keep the mic capture stream alive for the duration of a call.
     // Dropping this stops the mic.

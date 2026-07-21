@@ -7,7 +7,7 @@ peer-to-peer network called **the murmuration**.
 Starling runs in the terminal and provides text chat via gossip protocol
 and voice calls via direct QUIC streams. Birds discover each other through
 the murmuration using iroh's relay and discovery infrastructure — no central
-server required. An invite ticket is all a new bird needs to join a flock.
+server required. A room code is all a new bird needs to join a flock.
 
 ---
 
@@ -40,7 +40,7 @@ Then run it directly:
 
 ```bash
 starling open            # start a new flock
-starling join <ticket>   # join an existing flock
+starling join BIRD324524   # join an existing flock
 ```
 
 > **Note:** You still need to install [system dependencies](#system-dependencies)
@@ -57,10 +57,10 @@ Once you have [Rust](#installing-rust), [`just`](#installing-just), and
 just run             # start a new session (you are the flock opener)
 ```
 
-Share the invite ticket (shown in the header) with another bird. They join with:
+Share the room code (shown in the header) with another bird. They join with:
 
 ```bash
-just join <ticket>   # join an existing flock
+just join BIRD324524   # join an existing flock
 ```
 
 When the app starts, a popup asks for your display name (the name other
@@ -70,7 +70,7 @@ Or without `just`:
 
 ```bash
 cargo run -- open            # start a new session
-cargo run -- join <ticket>   # join an existing session
+cargo run -- join BIRD324524   # join an existing session
 ```
 
 ---
@@ -242,21 +242,20 @@ just run
 cargo run -- open
 ```
 
-The app starts and the header shows an invite ticket — a 64-character
-hex string that is the opener's node ID:
+The app starts and the header shows a room code:
 
 ```
-invite: a1b2c3d4e5f6...
+flock: BIRD324524
 ```
 
-Share this with another bird so they can join your flock.
+Share this code with another bird so they can join your flock.
 
 ### Join an existing flock
 
 ```bash
-just join <ticket>
+just join BIRD324524
 # or
-cargo run -- join <ticket>
+cargo run -- join BIRD324524
 ```
 
 ### Set your name
@@ -316,12 +315,13 @@ There is no need for environment variables or config files.
 Birds connect to the murmuration through iroh's global relay network and
 node discovery. No central server coordinates them:
 
-1. A bird opens a flock by binding a QUIC endpoint and subscribing to a
-   gossip topic (derived from a shared name via SHA-256).
-2. The opener's invite ticket is their node ID (64 hex chars). iroh's N0
-   discovery resolves it to their relay and direct addresses.
-3. Other birds join by connecting to the opener's endpoint, which bootstraps
-   them into the gossip mesh.
+1. A bird opens a flock by generating a random room code (e.g.
+   `BIRD324524`) and subscribing to a gossip topic derived from it via
+   SHA-256.
+2. Other birds join by entering the same room code — they subscribe to
+   the same gossip topic.
+3. iroh's relay connects both peers on the topic automatically. No node
+   IDs or addresses need to be exchanged.
 4. Text messages broadcast over gossip reach all birds in the mesh.
 5. Voice calls are direct peer-to-peer QUIC datagram streams — no relay
    needed if direct connectivity is available, with relay fallback.

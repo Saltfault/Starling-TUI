@@ -39,7 +39,7 @@ pub struct App {
     pub peers: Vec<EndpointId>,
     /// Index into `peers` for the currently selected peer (for calling).
     pub selected_peer: usize,
-    /// Shareable invite ticket string (shown in the header).
+    /// Room code shown in the header (e.g. "BIRD324524").
     pub invite: Option<String>,
     /// Whether we are currently in a call.
     pub in_call: bool,
@@ -145,17 +145,17 @@ fn draw_name_entry(f: &mut Frame, app: &App) {
 /// Render the full chat UI: header, messages + birds panel, status, input.
 fn draw_chat(f: &mut Frame, app: &App) {
     let chunks = Layout::vertical([
-        Constraint::Length(1), // header: invite ticket
+        Constraint::Length(1), // header: room code
         Constraint::Min(1),    // messages + birds panel
         Constraint::Length(1), // call status
         Constraint::Length(3), // input
     ])
     .split(f.area());
 
-    // ── Header: invite ticket ──────────────────────────────────────────
+    // ── Header: room code ──────────────────────────────────────────────
     let invite = app.invite.as_deref().unwrap_or("waiting for endpoint...");
     f.render_widget(
-        Paragraph::new(format!(" invite: {} ", invite)).style(Style::new().fg(Color::DarkGray)),
+        Paragraph::new(format!(" flock: {} ", invite)).style(Style::new().fg(Color::DarkGray)),
         chunks[0],
     );
 
@@ -209,7 +209,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
     };
     f.render_widget(peer_list, middle[1]);
 
-    // ── Status: call state + selected peer ─────────────────────────────
+    // ── Status: call state + keybindings ───────────────────────────────
     let status = if app.in_call {
         format!(
             "🔊 in call · {} · Ctrl+K to hang up",

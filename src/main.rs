@@ -50,18 +50,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 use ui::App;
 
+/// Generate a random room code: "BIRD" + 6 digits (e.g. "BIRD324524").
+fn generate_room_code() -> String {
+    let uuid = uuid::Uuid::new_v4();
+    let bytes = uuid.as_bytes();
+    let digits: String = (0..6)
+        .map(|i| char::from_digit((bytes[i] % 10) as u32, 10).unwrap())
+        .collect();
+    format!("BIRD{digits}")
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // ── Parse CLI args: `starling open` or `starling join <node-id>` ──
+    // ── Parse CLI args: `starling open` or `starling join <code>` ─────
     let args: Vec<String> = std::env::args().collect();
-    let (topic, bootstrap) = match args.get(1).map(String::as_str) {
+    let (topic, room_code) = match args.get(1).map(String::as_str) {
         Some("join") => {
-            // The ticket is just the opener's node ID (64 hex chars).
-            // iroh's N0 discovery resolves it to their relay/direct address.
-            let node_id: iroh::EndpointId = args[2].parse()?;
-            (net::topic_for("starling/global"), vec![node_id])
+            let code = args[2].clone();
+            (net::topic_for(&format!("starling/flock/{code}")), code)
         }
-        _ => (net::topic_for("starling/global"), vec![]), // "open"
+        _ => {
+            // "open" — generate a random room code
+            let code = generate_room_code();
+            (net::topic_for(&format!("starling/flock/{code}")), code)
+        }
     };
 
     // ── Set up the terminal ───────────────────────────────────────────
@@ -70,6 +82,9 @@ async fn main() -> anyhow::Result<()> {
     execute!(stdout, EnterAlternateScreen)?;
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
+
+    // The room code is the invite — display it in the header immediately.
+    app.invite = Some(room_code);
 
     // ── Phase 1: Name entry ───────────────────────────────────────────
     //
@@ -104,7 +119,6 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(net::run(
         topic,
-        bootstrap,
         cmd_rx,
         evt_tx,
         muted_flag.clone(),
@@ -141,7 +155,6 @@ async fn main() -> anyhow::Result<()> {
                         app.selected_peer = 0;
                     }
                 }
-                AppEvent::Ticket(t) => app.invite = Some(t),
                 AppEvent::VoiceFrame(bytes) => {
                     if let Some(p) = &mut playback {
                         p.push_opus(&bytes);
