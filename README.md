@@ -469,4 +469,4 @@ gzipped to `logs/<timestamp>.log.gz`.
 
 ## License
 
-MIT
+Apache 2.0
