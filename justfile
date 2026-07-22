@@ -4,12 +4,13 @@
 #   just install-deps   # one-time: install all system packages
 #   just run            # check deps, then run the app
 #   just build          # check deps, then build
+#   just join BIRD123   # join an existing flock
 
 # Install all system dependencies needed to build and run starling.
-# Detects the distro and uses the appropriate package manager.
+# Detects the OS/distro and uses the appropriate package manager.
 install-deps:
     @if command -v apt-get >/dev/null 2>&1; then \
-        echo "Detected Debian/Ubuntu — installing..."; \
+        echo "Detected Debian/Ubuntu/WSL — installing..."; \
         sudo apt-get update && sudo apt-get install -y \
             build-essential cmake pkg-config libasound2-dev libpulse-dev; \
     elif command -v dnf >/dev/null 2>&1; then \
@@ -19,9 +20,16 @@ install-deps:
     elif command -v pacman >/dev/null 2>&1; then \
         echo "Detected Arch — installing..."; \
         sudo pacman -S --noconfirm base-devel cmake pkgconf alsa-lib pulseaudio; \
+    elif command -v brew >/dev/null 2>&1; then \
+        echo "Detected macOS (Homebrew) — installing..."; \
+        brew install cmake pkg-config; \
     else \
-        echo "Unsupported distro. Please install manually:"; \
-        echo "  gcc, cmake, pkg-config, alsa-lib-dev, pulseaudio-dev"; \
+        echo "Could not detect a supported package manager."; \
+        echo ""; \
+        echo "Please install manually:"; \
+        echo "  Linux:  gcc, cmake, pkg-config, alsa-lib-dev, pulseaudio-dev"; \
+        echo "  macOS:  cmake, pkg-config (via Homebrew)"; \
+        echo "  Windows: Visual Studio Build Tools + CMake (see README)"; \
         exit 1; \
     fi
 
@@ -30,20 +38,30 @@ install-deps:
 check-deps:
     #!/usr/bin/env bash
     missing=0
-    for tool in cmake pkg-config cc; do
+    for tool in cmake cc; do
         if ! command -v "$tool" >/dev/null 2>&1; then
             echo "✗ '$tool' not found"
             missing=1
         fi
     done
-    if ! pkg-config --exists alsa 2>/dev/null; then
-        echo "✗ ALSA development headers not found (install libasound2-dev)"
-        missing=1
+
+    # Platform-specific library checks (only on Linux)
+    if [ "$(uname -s)" = "Linux" ]; then
+        if command -v pkg-config >/dev/null 2>&1; then
+            if ! pkg-config --exists alsa 2>/dev/null; then
+                echo "✗ ALSA development headers not found (install libasound2-dev)"
+                missing=1
+            fi
+            if ! pkg-config --exists libpulse 2>/dev/null; then
+                echo "✗ PulseAudio development headers not found (install libpulse-dev)"
+                missing=1
+            fi
+        else
+            echo "✗ pkg-config not found"
+            missing=1
+        fi
     fi
-    if ! pkg-config --exists libpulse 2>/dev/null; then
-        echo "✗ PulseAudio development headers not found (install libpulse-dev)"
-        missing=1
-    fi
+
     if [ "$missing" -ne 0 ]; then
         echo ""
         echo "Run 'just install-deps' to install everything."
@@ -55,13 +73,13 @@ check-deps:
 build: check-deps
     cargo build
 
-# Run the app in "open" mode — starts a new chat session.
+# Run the app — starts a new flock with a random room code.
 run: check-deps
     cargo run -- open
 
-# Run the app in "join" mode — joins an existing session via ticket.
-join ticket: check-deps
-    cargo run -- join {{ticket}}
+# Join an existing flock with a room code.
+join code: check-deps
+    cargo run -- join {{code}}
 
 # Run cargo check (fast, no binary output).
 check: check-deps

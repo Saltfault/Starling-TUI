@@ -7,7 +7,7 @@ edition = "2024"
 anyhow = "1.0.104"
 bytes = "1.12.1"
 chrono = { version = "0.4.45", features = ["serde"] }
-cpal = { version = "0.18.1", features = ["pulseaudio"] }
+cpal = "0.18.1"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 data-encoding = "2.11.0"
 flate2 = "1.1"
@@ -23,5 +23,11 @@ sha2 = "0.11.0"
 tokio = { version = "1.53.1", features = ["full"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
 
-[target.'cfg(unix)'.dependencies]
+# Linux: enable cpal's PulseAudio backend + libc for stderr suppression
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "0.18.1", features = ["pulseaudio"] }
+libc = "0.2"
+
+# Other Unix (macOS, BSDs): libc for stderr suppression
+[target.'cfg(all(unix, not(target_os = "linux")))'.dependencies]
 libc = "0.2"

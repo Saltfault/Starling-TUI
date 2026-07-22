@@ -9,12 +9,21 @@ and voice calls via direct QUIC streams. Birds discover each other through
 the murmuration using iroh's relay and discovery infrastructure — no central
 server required. A room code is all a new bird needs to join a flock.
 
+## Platform support
+
+| Feature | Windows | macOS | Linux | WSL2 |
+|---------|:-------:|:-----:|:-----:|:----:|
+| Text chat | ✓ | ✓ | ✓ | ✓ |
+| Voice calls (mic + playback) | ✓ | ✓ | ✓ | text only* |
+| Room codes | ✓ | ✓ | ✓ | ✓ |
+
+\* WSL2's audio may not work because the pure-Rust PulseAudio crate can't
+authenticate with WSLg's server. Text chat works fully. For voice, use a
+native Windows build instead.
+
 ---
 
 ## Getting Starling
-
-There are two ways to get the app. Either way, you'll need [Rust](#installing-rust)
-and [system dependencies](#system-dependencies) installed first.
 
 ### Option A: Clone with git (recommended)
 
@@ -23,152 +32,113 @@ Gives you the full project including the `justfile` for automated setup:
 ```bash
 git clone https://forgejo.hearthhome.lol/Saltfault/Starling.git
 cd Starling
-just install-deps    # installs system packages (Linux/macOS)
-just run             # builds and starts the app
 ```
 
 ### Option B: Install with cargo (binary only)
-
-Cargo can clone and build the binary in one step — no git clone needed.
-The `starling` binary is installed to `~/.cargo/bin/`:
 
 ```bash
 cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling.git
 ```
 
-Then run it directly:
-
-```bash
-starling open            # start a new flock
-starling join BIRD324524   # join an existing flock
-```
-
-> **Note:** You still need to install [system dependencies](#system-dependencies)
-> manually with this method since you won't have the `justfile`.
+Then run `starling open` or `starling join BIRD324524` directly. You'll still
+need the system dependencies below — `cargo install` doesn't include the
+`justfile`.
 
 ---
 
-## Quick start
+## Platform setup
 
-Once you have [Rust](#installing-rust), [`just`](#installing-just), and
-[system dependencies](#system-dependencies) installed:
+Follow the section for your platform. Each one covers Rust, `just`, system
+dependencies, and first run.
 
-```bash
-just run             # start a new session (you are the flock opener)
+### Windows
+
+**1. Install Visual Studio C++ Build Tools** (provides the MSVC compiler
+needed by native Rust crates):
+
+Download from [visualstudio.microsoft.com](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
+In the installer, select **"Desktop development with C++"**.
+
+**2. Install CMake** (needed to build the Opus codec from source):
+
+```powershell
+winget install Kitware.CMake
 ```
 
-Share the room code (shown in the header) with another bird. They join with:
+Or download from [cmake.org/download](https://cmake.org/download/) and add
+it to your `PATH`. Restart your terminal after installing.
 
-```bash
-just join BIRD324524   # join an existing flock
+**3. Install Rust:**
+
+```powershell
+winget install Rustlang.Rustup
 ```
 
-When the app starts, a popup asks for your display name (the name other
-birds see next to your messages). Type it and press Enter.
+Or download and run [rustup-init.exe](https://win.rustup.rs/x86_64).
 
-Or without `just`:
+**4. Install `just`:**
 
-```bash
-cargo run -- open            # start a new session
-cargo run -- join BIRD324524   # join an existing session
+```powershell
+cargo install just
 ```
 
----
+**5. Run:**
 
-## Installing Rust
-
-Starling requires the Rust toolchain (compiler + cargo). Install it with
-**rustup**, the official Rust installer.
-
-### Linux / WSL2
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"    # or restart your shell
+```powershell
+cargo run -- open
+# or
+just run
 ```
 
-Verify the installation:
-
-```bash
-rustc --version
-cargo --version
-```
+Audio uses WASAPI (Windows Audio Session API) — works out of the box, no
+extra audio packages needed.
 
 ### macOS
+
+**1. Install Xcode Command Line Tools** (provides the C compiler):
+
+```bash
+xcode-select --install
+```
+
+**2. Install [Homebrew](https://brew.sh)** if you don't have it:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+**3. Install CMake and pkg-config:**
+
+```bash
+brew install cmake pkg-config
+```
+
+**4. Install Rust:**
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-Or if you use [Homebrew](https://brew.sh):
-
-```bash
-brew install rustup-init
-rustup-init
-```
-
-### Windows
-
-Download and run [rustup-init.exe](https://win.rustup.rs/x86_64) from the
-official site, or use PowerShell:
-
-```powershell
-winget install Rustlang.Rustup
-```
-
-This installs the MSVC toolchain target by default. You'll also need the
-Visual Studio C++ Build Tools — see [System dependencies → Windows](#windows-1)
-below.
-
-Verify the installation:
-
-```powershell
-rustc --version
-cargo --version
-```
-
----
-
-## Installing `just`
-
-The [`justfile`](https://github.com/casey/just) automates dependency
-installation and builds. Install `just` with cargo:
+**5. Install `just`:**
 
 ```bash
 cargo install just
 ```
 
-Or via your system package manager:
+**6. Run:**
 
 ```bash
-# Linux (Debian/Ubuntu)
-sudo apt install just
-
-# macOS
-brew install just
-
-# Windows
-winget install Casey.Just
+just run
+# or
+cargo run -- open
 ```
 
-You can run `just --list` at any time to see all available commands.
+Audio uses CoreAudio — works out of the box, no extra audio packages needed.
 
----
+### Linux (native)
 
-## System dependencies
-
-Several Rust crates Starling depends on compile native C/C code (Opus codec,
-crypto, audio I/O). These require system-level tools and libraries that cargo
-can't install automatically.
-
-### Linux / WSL2
-
-```bash
-just install-deps
-```
-
-Or manually by distro:
+**1. Install system dependencies:**
 
 ```bash
 # Debian / Ubuntu
@@ -181,58 +151,92 @@ sudo dnf install gcc cmake pkgconf-pkg-config alsa-lib-devel pulseaudio-libs-dev
 sudo pacman -S base-devel cmake pkgconf alsa-lib pulseaudio
 ```
 
-| Package | Why it's needed |
-|---------|----------------|
-| `build-essential` / `base-devel` | C/C compiler (gcc) for native code |
-| `cmake` | Building libopus from source (`audiopus_sys` crate) |
-| `pkg-config` | Locating ALSA and PulseAudio libraries at build time |
-| `libasound2-dev` | ALSA headers — cpal compiles the ALSA backend on Linux |
-| `libpulse-dev` | PulseAudio headers — cpal uses PulseAudio at runtime |
-
-**WSL2 audio:** No extra setup needed. WSLg (Windows 11) provides a
-PulseAudio server automatically at `/mnt/wslg/PulseServer`. The app connects
-to it directly — no `libasound2-plugins` or `/etc/asound.conf` required.
-
-If you're on an older Windows 10 build without WSLg, you'll need to set up
-PulseAudio forwarding manually or use a native Windows build instead.
-
-### Windows
-
-Install the following:
-
-1. **Visual Studio Build Tools 2022** — provides the MSVC C/C compiler.
-   Download from [visualstudio.microsoft.com](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
-   In the installer, select "Desktop development with C++".
-
-2. **CMake** — required to build the Opus codec from source.
-   ```powershell
-   winget install Kitware.CMake
-   ```
-   Or download from [cmake.org/download](https://cmake.org/download/) and add
-   it to your `PATH`.
-
-3. **pkg-config** (optional but recommended):
-   ```powershell
-   winget install pkgconf
-   ```
-
-Audio I/O uses WASAPI (Windows Audio Session API) — no extra audio packages
-needed.
-
-### macOS
-
+Or with `just`:
 ```bash
-brew install cmake pkg-config
+just install-deps
 ```
 
-Audio I/O uses CoreAudio — no extra audio packages needed. The Opus codec is
-built from source via CMake (same as Linux).
+**2. Install Rust:**
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+**3. Install `just`:**
+
+```bash
+cargo install just
+```
+
+**4. Run:**
+
+```bash
+just run
+# or
+cargo run -- open
+```
+
+Audio uses PulseAudio (with ALSA fallback) — works out of the box on most
+Linux desktops.
+
+| Package | Why it's needed |
+|---------|----------------|
+| `build-essential` / `base-devel` | C compiler (gcc) for native code |
+| `cmake` | Building libopus from source |
+| `pkg-config` | Locating ALSA and PulseAudio libraries at build time |
+| `libasound2-dev` | ALSA headers — cpal compiles the ALSA backend on Linux |
+| `libpulse-dev` | PulseAudio headers — cpal's preferred backend at runtime |
+
+### WSL2 (Windows Subsystem for Linux)
+
+WSL2 setup is identical to Linux, but audio may not work.
+
+**1. Install WSL2** (if not already installed, from PowerShell):
+
+```powershell
+wsl --install
+```
+
+**2. Inside WSL, install system dependencies:**
+
+```bash
+sudo apt update
+sudo apt install build-essential cmake pkg-config libasound2-dev libpulse-dev
+```
+
+Or with `just`:
+```bash
+just install-deps
+```
+
+**3. Install Rust and `just`:**
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+cargo install just
+```
+
+**4. Run:**
+
+```bash
+just run
+# or
+cargo run -- open
+```
+
+**Audio note:** WSLg (Windows 11) provides a PulseAudio server at
+`/mnt/wslg/PulseServer`, but the pure-Rust `pulseaudio` crate that cpal uses
+may fail to authenticate with it. Text chat works fully; voice calls may not.
+For voice, use a [native Windows build](#windows) instead.
+
+If you're on an older Windows 10 build without WSLg, audio definitely won't
+work in WSL2 — use a native Windows build.
 
 ---
 
 ## Running Starling
-
-Once Rust and system dependencies are installed:
 
 ### Start a new flock
 
@@ -245,7 +249,7 @@ cargo run -- open
 The app starts and the header shows a room code:
 
 ```
-flock: BIRD324524
+ flock: BIRD324524
 ```
 
 Share this code with another bird so they can join your flock.
@@ -264,7 +268,11 @@ When you start Starling, a popup asks for your display name — the name
 other birds see next to your messages in the flock. Type it and press
 Enter to join the murmuration.
 
-There is no need for environment variables or config files.
+### Logs
+
+Errors are written to `logs/latest.log`. On each launch, the previous log is
+gzipped to `logs/<timestamp>.log.gz`. Check this file if something isn't
+working.
 
 ---
 
@@ -302,13 +310,15 @@ There is no need for environment variables or config files.
 
 | File | Responsibility |
 |------|---------------|
+| `main.rs` | Event loop, keyboard handling, wires everything together |
 | `event.rs` | `Command` (UI→net) and `AppEvent` (net→UI) types |
 | `net.rs` | Owns the iroh endpoint, gossip subscription, voice handler |
 | `call.rs` | Opens/accepts QUIC streams for voice datagrams |
 | `voice.rs` | Mic capture: cpal input → Opus encoder → channel |
 | `playback.rs` | Audio output: channel → Opus decoder → ring buffer → cpal output |
 | `ui.rs` | Terminal rendering and UI state (`App` struct) |
-| `main.rs` | Event loop, keyboard handling, wires everything together |
+| `logger.rs` | File logger with gzipped log rotation |
+| `util.rs` | Platform utilities (stderr suppression on Unix) |
 
 ### How the murmuration works
 
@@ -336,33 +346,44 @@ network jitter.
 
 ### `cmake not found`
 
-Install CMake (see [System dependencies](#system-dependencies) for your
-platform), or run `just install-deps` on Linux.
+Install CMake for your platform (see [Platform setup](#platform-setup)),
+or run `just install-deps` on Linux/macOS.
 
-### `pkg-config failed — alsa development headers are not installed`
+### `pkg-config failed — alsa development headers are not installed` (Linux)
 
-Install ALSA headers: `sudo apt install libasound2-dev` (Debian/Ubuntu).
+```bash
+sudo apt install libasound2-dev   # Debian/Ubuntu
+sudo dnf install alsa-lib-devel   # Fedora
+sudo pacman -S alsa-lib           # Arch
+```
 
 ### No microphone / no audio output (WSL2)
 
-Ensure you're running Windows 11 with WSLg enabled. WSLg provides PulseAudio
-automatically. If audio doesn't work, verify the PulseAudio server is
-accessible:
+This is a known limitation. WSLg's PulseAudio server uses an auth mechanism
+that the pure-Rust `pulseaudio` crate doesn't support. Text chat works; for
+voice calls, use a [native Windows build](#windows) instead.
+
+To verify PulseAudio is running (for debugging):
 
 ```bash
-pactl info    # should show "Server String: unix:/mnt/wslg/PulseServer"
+ls /mnt/wslg/PulseServer   # should exist
+echo $PULSE_SERVER          # should show unix:/mnt/wslg/PulseServer
 ```
 
-If `pactl` is not found, install it:
+### `link.exe not found` (Windows)
 
-```bash
-sudo apt install pulseaudio-utils
-```
+You need the Visual Studio C++ Build Tools. Reinstall them and make sure
+"Desktop development with C++" is selected.
 
 ### Build is slow on first compile
 
 The Opus codec is compiled from source via CMake on the first build.
-Subsequent builds are cached. expect 2–5 minutes for the initial build.
+Subsequent builds are cached. Expect 2–5 minutes for the initial build.
+
+### Check the logs
+
+Errors are written to `logs/latest.log`. On each launch, the previous log is
+gzipped to `logs/<timestamp>.log.gz`.
 
 ---
 
