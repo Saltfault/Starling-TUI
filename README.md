@@ -289,6 +289,25 @@ Share this code with another bird so they can join your flock.
 starling join BIRD-00CCFF-00CCFF-...
 ```
 
+### Join multiple flocks
+
+Once inside the app, you can join additional flocks at any time by typing
+`/join <code>` in the message input and pressing Enter. A flock rail appears
+on the left side of the screen showing all joined flocks. Use `Alt+↑` and
+`Alt+↓` to switch between them. Each flock has its own message list and
+end-to-end encryption key.
+
+```
+ flocks              ╔════════════════════════════════════╗
+╔════════╗           ║ BIRD-00CCFF-... . 3 birds          ║
+║> BIRD-…║           ║ Alice: hello!    ╔════════════════╗║
+║  BIRD-…║           ║ Bob: hi there   ║ birds           ║║
+╚════════╝           ╚═════════════════╩══════════════════╝
+```
+
+You start in your home flock automatically. Joining a new flock does not
+leave the current one — you remain subscribed to all of them simultaneously.
+
 ### Set your name
 
 When you start Starling for the first time, a popup asks for your display
@@ -308,7 +327,9 @@ working.
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Send typed message |
+| `Enter` | Send typed message (or `/join <code>` to join a flock) |
+| `Alt+↑` | Switch to previous flock |
+| `Alt+↓` | Switch to next flock |
 | `Ctrl+K` | Start call with selected peer / hang up |
 | `Ctrl+M` | Toggle mute |
 | `Ctrl+V` | Toggle video |
@@ -345,7 +366,7 @@ working.
 |------|---------------|
 | `main.rs` | Event loop, keyboard handling, subcommand dispatch |
 | `event.rs` | `Command` (UI→net) and `AppEvent` (net→UI) types |
-| `net.rs` | Owns the iroh endpoint, gossip subscription, voice/video handlers |
+| `net.rs` | Owns the iroh endpoint, flock map, voice/video handlers |
 | `call.rs` | Opens/accepts QUIC streams for voice datagrams and video |
 | `voice.rs` | Mic capture: cpal input → Opus encoder → channel |
 | `playback.rs` | Audio output: channel → Opus decoder → ring buffer → cpal output |
@@ -381,8 +402,10 @@ channel), sent as QUIC datagrams. Playback uses a 2-second ring buffer to
 absorb network jitter.
 
 All text messages are end-to-end encrypted with ChaCha20-Poly1305 using a
-key derived from the room code. Voice and video calls are E2E encrypted via
-iroh's QUIC TLS 1.3. Relays and intermediaries cannot read message content.
+key derived from the room code. Each flock gets its own encryption key, so
+messages from different flocks are isolated cryptographically. Voice and
+video calls are E2E encrypted via iroh's QUIC TLS 1.3. Relays and
+intermediaries cannot read message content.
 
 ### Persistent identity
 

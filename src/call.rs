@@ -5,9 +5,13 @@
 //! handled by [`handle_incoming`]/[`recv_video`], invoked by the protocol
 //! handlers in [`crate::net`].
 
+#[cfg(any(feature = "audio", feature = "video"))]
 use crate::event::AppEvent;
+#[cfg(any(feature = "audio", feature = "video"))]
 use iroh::{Endpoint, EndpointAddr, endpoint::Connection};
+#[cfg(feature = "video")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(any(feature = "audio", feature = "video"))]
 use tokio::sync::mpsc;
 
 /// ALPN string for the voice protocol.

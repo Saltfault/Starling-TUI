@@ -12,6 +12,7 @@
 //! 7. Review summary, save, and show the profile code
 
 use crate::config::Profile;
+#[cfg(feature = "audio")]
 use crate::util::suppress_stderr;
 #[cfg(feature = "audio")]
 use cpal::traits::HostTrait;

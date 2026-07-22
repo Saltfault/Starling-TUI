@@ -6,21 +6,30 @@
 //! E2E encrypted via iroh's QUIC TLS 1.3.
 
 use crate::crypto::FlockCrypto;
-use crate::event::{AppEvent, BirdStatus, ChatMessage, Command, GossipPayload};
-use iroh::{
-    Endpoint, EndpointId,
-    endpoint::{Connection, presets},
-    protocol::Router,
-};
+#[cfg(feature = "audio")]
+use crate::event::BirdStatus;
+use crate::event::{AppEvent, ChatMessage, Command, GossipPayload};
+#[cfg(any(feature = "audio", feature = "video"))]
+use iroh::endpoint::Connection;
+use iroh::{Endpoint, EndpointId, endpoint::presets, protocol::Router};
 use iroh_gossip::{
     api::Event,
     net::{GOSSIP_ALPN, Gossip},
     proto::TopicId,
 };
 use n0_future::StreamExt;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
+
+use iroh_gossip::api::GossipSender;
+
+#[allow(dead_code)]
+struct FlockHandle {
+    sender: GossipSender,
+    crypto: FlockCrypto,
+}
 
 /// Derive a deterministic gossip [`TopicId`] from a name via SHA-256.
 pub fn topic_for(name: &str) -> TopicId {
@@ -69,6 +78,7 @@ pub fn decode_node_id(code: &str) -> Option<EndpointId> {
 }
 
 /// Encrypt, serialize, and broadcast a gossip payload.
+#[allow(dead_code)]
 async fn broadcast_payload(
     sender: &iroh_gossip::api::GossipSender,
     crypto: &FlockCrypto,
@@ -97,6 +107,7 @@ pub async fn run(
     name: String,
     input_device: Option<String>,
 ) -> anyhow::Result<()> {
+    let _ = (&muted, &input_device);
     let secret = crate::config::Profile::load_or_create_secret();
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
@@ -107,36 +118,36 @@ pub async fn run(
     let my_node_id = endpoint.addr().id;
     let opener_id = bootstrap.first().copied().unwrap_or(my_node_id);
 
-    // The room code is the opener's full encoded node ID. Both the opener
-    // and every joiner derive the same topic and encryption key from it.
     let room_code = encode_node_id(&opener_id);
-    let topic = topic_for(&format!("starling/flock/{room_code}"));
-    let crypto = FlockCrypto::from_room_code(&room_code);
 
     let my_code = encode_node_id(&my_node_id);
     crate::logger::warn(&format!("endpoint bound: room_code={my_code}"));
     let _ = evt_tx.send(AppEvent::Ticket(my_code));
 
     let gossip = Gossip::builder().spawn(endpoint.clone());
-
     let history: crate::sync::History = Default::default();
 
-    let _router = Router::builder(endpoint.clone())
-        .accept(GOSSIP_ALPN, gossip.clone())
-        #[cfg(feature = "audio")]
-        .accept(
+    #[allow(unused_mut)]
+    let mut builder = Router::builder(endpoint.clone()).accept(GOSSIP_ALPN, gossip.clone());
+    #[cfg(feature = "audio")]
+    {
+        builder = builder.accept(
             crate::call::VOICE_ALPN,
             VoiceProto {
                 evt_tx: evt_tx.clone(),
             },
-        )
-        #[cfg(feature = "video")]
-        .accept(
+        );
+    }
+    #[cfg(feature = "video")]
+    {
+        builder = builder.accept(
             crate::call::VIDEO_ALPN,
             VideoProto {
                 evt_tx: evt_tx.clone(),
             },
-        )
+        );
+    }
+    let _router = builder
         .accept(
             crate::sync::SYNC_ALPN,
             crate::sync::SyncProto {
@@ -145,7 +156,16 @@ pub async fn run(
         )
         .spawn();
 
-    let (sender, mut receiver) = gossip.subscribe(topic, bootstrap).await?.split();
+    // Build the flock map and join the initial flock.
+    let mut flocks: HashMap<String, FlockHandle> = HashMap::new();
+    join_flock(
+        &gossip,
+        room_code.clone(),
+        bootstrap,
+        &mut flocks,
+        evt_tx.clone(),
+    )
+    .await?;
 
     // Joiners ask the opener for messages they missed.
     if opener_id != my_node_id {
@@ -163,100 +183,80 @@ pub async fn run(
     let mut _cam_thread: Option<std::thread::JoinHandle<()>> = None;
 
     loop {
-        tokio::select! {
-            Some(cmd) = cmd_rx.recv() => match cmd {
-                Command::SendText(text) => {
+        let Some(cmd) = cmd_rx.recv().await else {
+            break;
+        };
+        match cmd {
+            Command::SendText { flock, body } => {
+                if let Some(h) = flocks.get(&flock) {
                     let msg = ChatMessage {
                         id: uuid::Uuid::new_v4().to_string(),
                         author: name.clone(),
-                        body: text,
+                        body,
                         ts: chrono::Utc::now().timestamp_millis(),
                     };
-                    broadcast_payload(&sender, &crypto, &GossipPayload::Chat(msg.clone())).await?;
-                    history.lock().unwrap().push(msg);
-                }
-
-                #[cfg(feature = "audio")]
-                Command::StartCall(addr) => {
-                    let (mic_tx, mic_rx) = mpsc::unbounded_channel();
-                    _mic_stream = Some(crate::voice::start_capture(
-                        mic_tx, muted.clone(), input_device.as_deref(),
-                    )?);
-                    let ep = endpoint.clone();
-                    tokio::spawn(async move {
-                        let _ = crate::call::place_call(ep, addr, mic_rx).await;
-                    });
-                    broadcast_payload(&sender, &crypto, &GossipPayload::Status {
-                        id: my_node_id, status: BirdStatus::InCall,
-                    }).await?;
-                }
-
-                #[cfg(feature = "audio")]
-                Command::HangUp => {
-                    _mic_stream = None;
-                    broadcast_payload(&sender, &crypto, &GossipPayload::Status {
-                        id: my_node_id, status: BirdStatus::Online,
-                    }).await?;
-                }
-
-                #[cfg(feature = "video")]
-                Command::StartVideo(addr) => {
-                    let (cam_tx, cam_rx) = mpsc::unbounded_channel();
-                    _cam_thread = Some(crate::video::start_camera(cam_tx)?);
-                    let ep = endpoint.clone();
-                    tokio::spawn(async move {
-                        let _ = crate::call::place_video(ep, addr, cam_rx).await;
-                    });
-                }
-                #[cfg(feature = "video")]
-                Command::StopVideo => { _cam_thread = None; }
-
-                Command::Quit => break,
-            },
-
-            Some(event) = receiver.next() => {
-                match event {
-                    Ok(Event::Received(msg)) => {
-                        if let Some(plaintext) = crypto.decrypt(&msg.content) {
-                            match postcard::from_bytes::<GossipPayload>(&plaintext) {
-                                Ok(GossipPayload::Chat(m)) => {
-                                    history.lock().unwrap().push(m.clone());
-                                    let _ = evt_tx.send(AppEvent::Message(m));
-                                }
-                                Ok(GossipPayload::Profile { id, name }) => {
-                                    let _ = evt_tx.send(AppEvent::PeerNamed(id, name));
-                                }
-                                Ok(GossipPayload::Status { id, status }) => {
-                                    let _ = evt_tx.send(AppEvent::PeerStatus(id, status));
-                                }
-                                Err(e) => {
-                                    crate::logger::error(&format!("gossip deserialize error: {e}"));
-                                }
-                            }
-                        }
-                    }
-                    Ok(Event::NeighborUp(id)) => {
-                        crate::logger::warn(&format!("neighbor up: {}", id));
-                        let _ = evt_tx.send(AppEvent::PeerConnected(id));
-                        // Announce our profile to the new peer.
-                        let payload = GossipPayload::Profile {
-                            id: my_node_id,
-                            name: name.clone(),
-                        };
-                        if let Err(e) = broadcast_payload(&sender, &crypto, &payload).await {
-                            crate::logger::error(&format!("profile broadcast failed: {e}"));
-                        }
-                    }
-                    Ok(Event::NeighborDown(id)) => {
-                        crate::logger::warn(&format!("neighbor down: {}", id));
-                        let _ = evt_tx.send(AppEvent::PeerDisconnected(id));
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        crate::logger::error(&format!("gossip stream error: {e}"));
-                    }
+                    let plaintext = postcard::to_stdvec(&GossipPayload::Chat(msg.clone()))?;
+                    h.sender
+                        .broadcast(h.crypto.encrypt(&plaintext).into())
+                        .await?;
+                    let _ = evt_tx.send(AppEvent::Message { flock, msg });
                 }
             }
+
+            Command::JoinFlock { code } => {
+                if let Some(opener) = decode_node_id(&code) {
+                    let room = encode_node_id(&opener);
+                    let _ =
+                        join_flock(&gossip, room, vec![opener], &mut flocks, evt_tx.clone()).await;
+                }
+            }
+
+            #[cfg(feature = "audio")]
+            Command::StartCall(addr) => {
+                let (mic_tx, mic_rx) = mpsc::unbounded_channel();
+                _mic_stream = Some(crate::voice::start_capture(
+                    mic_tx,
+                    muted.clone(),
+                    input_device.as_deref(),
+                )?);
+                let ep = endpoint.clone();
+                tokio::spawn(async move {
+                    let _ = crate::call::place_call(ep, addr, mic_rx).await;
+                });
+            }
+            #[cfg(not(feature = "audio"))]
+            Command::StartCall(_) => {
+                crate::logger::warn("voice call not supported (audio feature disabled)");
+            }
+
+            #[cfg(feature = "audio")]
+            Command::HangUp => {
+                _mic_stream = None;
+            }
+            #[cfg(not(feature = "audio"))]
+            Command::HangUp => {}
+
+            #[cfg(feature = "video")]
+            Command::StartVideo(addr) => {
+                let (cam_tx, cam_rx) = mpsc::unbounded_channel();
+                _cam_thread = Some(crate::video::start_camera(cam_tx)?);
+                let ep = endpoint.clone();
+                tokio::spawn(async move {
+                    let _ = crate::call::place_video(ep, addr, cam_rx).await;
+                });
+            }
+            #[cfg(not(feature = "video"))]
+            Command::StartVideo(_) => {
+                crate::logger::warn("video not supported (video feature disabled)");
+            }
+            #[cfg(feature = "video")]
+            Command::StopVideo => {
+                _cam_thread = None;
+            }
+            #[cfg(not(feature = "video"))]
+            Command::StopVideo => {}
+
+            Command::Quit => break,
         }
     }
 
@@ -270,6 +270,7 @@ struct VoiceProto {
     evt_tx: mpsc::UnboundedSender<AppEvent>,
 }
 
+#[cfg(feature = "audio")]
 impl iroh::protocol::ProtocolHandler for VoiceProto {
     async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
         let _ = crate::call::handle_incoming(conn, self.evt_tx.clone()).await;
@@ -284,9 +285,60 @@ struct VideoProto {
     evt_tx: mpsc::UnboundedSender<AppEvent>,
 }
 
+#[cfg(feature = "video")]
 impl iroh::protocol::ProtocolHandler for VideoProto {
     async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
         let _ = crate::call::recv_video(conn, self.evt_tx.clone()).await;
         Ok(())
     }
+}
+
+async fn join_flock(
+    gossip: &Gossip,
+    code: String,
+    boot: Vec<EndpointId>,
+    flocks: &mut HashMap<String, FlockHandle>,
+    evt_tx: mpsc::UnboundedSender<AppEvent>,
+) -> anyhow::Result<()> {
+    if flocks.contains_key(&code) {
+        return Ok(());
+    }
+
+    let topic = topic_for(&format!("starling/flock/{code}"));
+    let crypto = FlockCrypto::from_room_code(&code);
+    let (sender, mut receiver) = gossip.subscribe(topic, boot).await?.split();
+
+    let (rx_crypto, rx_code, rx_tx) = (
+        FlockCrypto::from_room_code(&code),
+        code.clone(),
+        evt_tx.clone(),
+    );
+    tokio::spawn(async move {
+        while let Some(event) = receiver.next().await {
+            match event {
+                Ok(Event::Received(msg)) => {
+                    if let Some(plain) = rx_crypto.decrypt(&msg.content) {
+                        if let Ok(GossipPayload::Chat(m)) = postcard::from_bytes(&plain) {
+                            let _ = rx_tx.send(AppEvent::Message {
+                                flock: rx_code.clone(),
+                                msg: m,
+                            });
+                        }
+                    }
+                }
+
+                Ok(Event::NeighborUp(id)) => {
+                    let _ = rx_tx.send(AppEvent::PeerConnected(id));
+                }
+                Ok(Event::NeighborDown(id)) => {
+                    let _ = rx_tx.send(AppEvent::PeerDisconnected(id));
+                }
+                _ => {}
+            }
+        }
+    });
+
+    flocks.insert(code.clone(), FlockHandle { sender, crypto });
+    let _ = evt_tx.send(AppEvent::JoinedFlock { code });
+    Ok(())
 }

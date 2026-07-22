@@ -1,13 +1,19 @@
 //! Shared types that cross the UI ↔ network boundary.
 
-use iroh::EndpointAddr;
-use iroh::EndpointId;
+use iroh::{EndpointAddr, EndpointId};
 use serde::{Deserialize, Serialize};
 
 /// UI → Network: things the user does.
+#[allow(dead_code)]
 pub enum Command {
-    /// Send a chat text message to the flock.
-    SendText(String),
+    /// Send a chat text message to a specific flock.
+    SendText {
+        flock: String,
+        body: String,
+    },
+    JoinFlock {
+        code: String,
+    },
     /// Start a voice call with a peer.
     StartCall(EndpointAddr),
     /// End the current call.
@@ -19,10 +25,13 @@ pub enum Command {
 }
 
 /// Network → UI: things that happen.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum AppEvent {
-    /// A chat message was received (or echoed back).
-    Message(ChatMessage),
+    /// A chat message was received (or echoed back) in a flock.
+    Message { flock: String, msg: ChatMessage },
+    /// Successfully joined a flock.
+    JoinedFlock { code: String },
     /// A gossip neighbor came online.
     PeerConnected(EndpointId),
     /// A gossip neighbor went offline.

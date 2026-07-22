@@ -9,12 +9,22 @@ use ratatui::{
 };
 use std::collections::HashMap;
 
+/// A single flock (room) with its message list.
+#[derive(Default)]
+pub struct FlockView {
+    pub code: String,
+    pub messages: Vec<ChatMessage>,
+    pub unread: usize,
+}
+
 #[derive(Default)]
 pub struct App {
     /// Display name shown to other peers.
     pub name: String,
-    /// Chat messages received from peers.
-    pub messages: Vec<ChatMessage>,
+    /// All joined flocks.
+    pub flocks: Vec<FlockView>,
+    /// Index into `flocks` of the currently selected flock.
+    pub current_flock: usize,
     /// Text currently being typed in the message box.
     pub input: String,
     /// Connected remote peers, by EndpointId.
@@ -45,6 +55,11 @@ pub struct App {
 }
 
 impl App {
+    /// Return a mutable reference to the currently active flock view.
+    pub fn active(&mut self) -> Option<&mut FlockView> {
+        self.flocks.get_mut(self.current_flock)
+    }
+
     /// Total birds in the room: the local user plus connected peers.
     pub fn bird_count(&self) -> usize {
         self.peers.len() + 1
@@ -58,6 +73,7 @@ impl App {
     }
 
     /// Address of the currently selected peer, if any.
+    #[allow(dead_code)]
     pub fn selected_peer_addr(&self) -> Option<EndpointAddr> {
         self.peers
             .get(self.selected_peer)
@@ -100,11 +116,44 @@ pub fn draw(f: &mut Frame, app: &App) {
         header[1],
     );
 
-    // ── Messages + Birds panel ────────────────────────────────────────
-    let middle = Layout::horizontal([Constraint::Min(1), Constraint::Length(24)]).split(chunks[1]);
+    // ── Flock rail + Messages + Birds panel ────────────────────────────
+    let middle = Layout::horizontal([
+        Constraint::Length(14),
+        Constraint::Min(1),
+        Constraint::Length(24),
+    ])
+    .split(chunks[1]);
 
-    let items: Vec<ListItem> = app
-        .messages
+    // ── Flock rail (left) ────────────────────────────────────────────
+    let rail_items: Vec<ListItem> = app
+        .flocks
+        .iter()
+        .enumerate()
+        .map(|(i, fv)| {
+            let mark = if i == app.current_flock { "> " } else { "  " };
+            let unread = if fv.unread > 0 {
+                format!(" ({})", fv.unread)
+            } else {
+                String::new()
+            };
+            let label = &fv.code[..10.min(fv.code.len())];
+            ListItem::new(format!("{mark}{label}{unread}"))
+        })
+        .collect();
+
+    f.render_widget(
+        List::new(rail_items).block(Block::default().borders(Borders::ALL).title(" flocks ")),
+        middle[0],
+    );
+
+    // ── Messages (centre) ────────────────────────────────────────────
+    let active_msgs: &[ChatMessage] = app
+        .flocks
+        .get(app.current_flock)
+        .map(|fv| fv.messages.as_slice())
+        .unwrap_or(&[]);
+
+    let items: Vec<ListItem> = active_msgs
         .iter()
         .map(|m| {
             ListItem::new(Line::from(vec![
@@ -117,12 +166,18 @@ pub fn draw(f: &mut Frame, app: &App) {
         })
         .collect();
 
+    let flock_label = app
+        .flocks
+        .get(app.current_flock)
+        .map(|fv| fv.code.as_str())
+        .unwrap_or("");
+
     // When video is showing, split the message area into messages (60%)
     // and video (40%). Otherwise the messages take the full width.
     #[cfg(feature = "video")]
     let msg_area = if app.show_video {
         let panes = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(middle[0]);
+            .split(middle[1]);
         if let Some(img) = &app.video_frame {
             let inner = panes[1].inner(Margin {
                 vertical: 1,
@@ -137,21 +192,21 @@ pub fn draw(f: &mut Frame, app: &App) {
         }
         panes[0]
     } else {
-        middle[0]
+        middle[1]
     };
     #[cfg(not(feature = "video"))]
-    let msg_area = middle[0];
+    let msg_area = middle[1];
 
     f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" #global . {} birds ", app.bird_count())),
-        ),
+        List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
+            " {} . {} birds ",
+            flock_label,
+            app.bird_count()
+        ))),
         msg_area,
     );
 
-    // Birds panel — local user first, then remote peers with names.
+    // ── Birds panel (right) ──────────────────────────────────────────
     let mut peer_items: Vec<ListItem> = Vec::new();
     peer_items.push(ListItem::new(Line::from(vec![
         Span::raw("  "),
@@ -174,7 +229,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     f.render_widget(
         List::new(peer_items).block(Block::default().borders(Borders::ALL).title(" birds ")),
-        middle[1],
+        middle[2],
     );
 
     // ── Status ────────────────────────────────────────────────────────

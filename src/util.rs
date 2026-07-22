@@ -8,6 +8,7 @@
 /// native code (e.g. ALSA's "cannot find card '0'") are discarded.
 ///
 /// On non-Unix platforms this is a no-op.
+#[allow(dead_code)]
 #[cfg(unix)]
 pub fn suppress_stderr<F, R>(f: F) -> R
 where
@@ -41,6 +42,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 #[cfg(not(unix))]
 pub fn suppress_stderr<F, R>(f: F) -> R
 where

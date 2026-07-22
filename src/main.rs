@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use ui::App;
+use ui::{App, FlockView};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -126,7 +126,25 @@ async fn main() -> anyhow::Result<()> {
 
         while let Ok(ev) = evt_rx.try_recv() {
             match ev {
-                AppEvent::Message(m) => app.messages.push(m),
+                AppEvent::Message { flock, msg } => {
+                    let is_current = app
+                        .flocks
+                        .get(app.current_flock)
+                        .is_some_and(|fv| fv.code == flock);
+                    if let Some(fv) = app.flocks.iter_mut().find(|fv| fv.code == flock) {
+                        fv.messages.push(msg);
+                        if !is_current {
+                            fv.unread += 1;
+                        }
+                    }
+                }
+                AppEvent::JoinedFlock { code } => {
+                    app.flocks.push(FlockView {
+                        code,
+                        messages: vec![],
+                        unread: 0,
+                    });
+                }
                 AppEvent::PeerConnected(id) => {
                     if !app.peers.contains(&id) {
                         app.peers.push(id);
@@ -161,20 +179,26 @@ async fn main() -> anyhow::Result<()> {
                         p.push_opus(&bytes);
                     }
                 }
+                #[cfg(not(feature = "audio"))]
+                AppEvent::VoiceFrame(_) => {}
                 #[cfg(feature = "video")]
                 AppEvent::VideoFrame(jpeg) => {
                     if let Ok(img) = image::load_from_memory(&jpeg) {
                         app.video_frame = Some(img.to_rgb8());
                     }
                 }
+                #[cfg(not(feature = "video"))]
+                AppEvent::VideoFrame(_) => {}
                 AppEvent::HistoryChunk(old) => {
-                    // Prepend, skipping anything we already have (dedup by id).
-                    let known: std::collections::HashSet<_> =
-                        app.messages.iter().map(|m| m.id.clone()).collect();
-                    let mut fresh: Vec<_> =
-                        old.into_iter().filter(|m| !known.contains(&m.id)).collect();
-                    fresh.extend(std::mem::take(&mut app.messages));
-                    app.messages = fresh;
+                    // Prepend into the first flock, dedup by id.
+                    if let Some(fv) = app.flocks.first_mut() {
+                        let known: std::collections::HashSet<_> =
+                            fv.messages.iter().map(|m| m.id.clone()).collect();
+                        let mut fresh: Vec<_> =
+                            old.into_iter().filter(|m| !known.contains(&m.id)).collect();
+                        fresh.extend(std::mem::take(&mut fv.messages));
+                        fv.messages = fresh;
+                    }
                 }
             }
         }
@@ -198,7 +222,24 @@ async fn main() -> anyhow::Result<()> {
                 match k.code {
                     KeyCode::Enter if !app.input.is_empty() => {
                         let text = std::mem::take(&mut app.input);
-                        let _ = cmd_tx.send(Command::SendText(text));
+                        if let Some(code) = text.strip_prefix("/join ") {
+                            let _ = cmd_tx.send(Command::JoinFlock {
+                                code: code.trim().into(),
+                            });
+                        } else if let Some(fv) = app.active() {
+                            let _ = cmd_tx.send(Command::SendText {
+                                flock: fv.code.clone(),
+                                body: text,
+                            });
+                        }
+                    }
+
+                    KeyCode::Up if k.modifiers.contains(KeyModifiers::ALT) => {
+                        app.current_flock = app.current_flock.saturating_sub(1);
+                    }
+                    KeyCode::Down if k.modifiers.contains(KeyModifiers::ALT) => {
+                        app.current_flock =
+                            (app.current_flock + 1).min(app.flocks.len().saturating_sub(1));
                     }
 
                     KeyCode::Char('i') => {
