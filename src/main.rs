@@ -14,7 +14,7 @@ mod util;
 mod voice;
 
 use crossterm::{
-    event::{self as ct_event, Event, KeyCode, KeyModifiers},
+    event::{self as ct_event, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::*,
 };
@@ -63,9 +63,6 @@ async fn main() -> anyhow::Result<()> {
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
 
-    // For "join": set both the room code AND the full color code from
-    // the opener's node ID immediately (so the joiner sees the same
-    // colors and code as the opener).
     if let Some(node_id) = bootstrap.first() {
         app.invite = Some(net::room_code_from_node_id(node_id));
         app.node_id = Some(net::encode_node_id(node_id));
@@ -141,9 +138,6 @@ async fn main() -> anyhow::Result<()> {
                     app.peer_names.insert(id, name);
                 }
                 AppEvent::Ticket(node_id_str) => {
-                    // For "open": derive room code and color code from our
-                    // own node ID. For "join": already set from the opener's
-                    // node ID, so skip.
                     if app.invite.is_none() {
                         if let Some(node_id) = net::decode_node_id(&node_id_str) {
                             app.invite = Some(net::room_code_from_node_id(&node_id));
@@ -161,6 +155,12 @@ async fn main() -> anyhow::Result<()> {
 
         if ct_event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(k) = ct_event::read()? {
+                // On Windows, crossterm emits Press, Release, and Repeat
+                // events. Only handle Press to avoid doubled characters.
+                if k.kind != KeyEventKind::Press {
+                    continue;
+                }
+
                 if app.show_invite {
                     match k.code {
                         KeyCode::Char('i') | KeyCode::Esc => {

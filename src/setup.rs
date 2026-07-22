@@ -14,7 +14,7 @@
 use crate::config::Profile;
 use crate::util::suppress_stderr;
 use cpal::traits::HostTrait;
-use crossterm::event::{self as ct_event, Event, KeyCode};
+use crossterm::event::{self as ct_event, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::{
@@ -225,6 +225,9 @@ pub fn run_setup(
             continue;
         }
         if let Event::Key(k) = ct_event::read()? {
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
             match app.phase {
                 Phase::DependencyCheck => match k.code {
                     KeyCode::Enter => {
