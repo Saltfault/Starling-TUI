@@ -6,7 +6,7 @@
 //! boundaries unsafely.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use opus::{Application, Encoder, EncoderConfig};
+use opus::{Application, Channels, Encoder};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
@@ -14,13 +14,6 @@ use tokio::sync::mpsc;
 const SAMPLE_RATE: u32 = 48_000;
 const FRAME: usize = 960;
 
-/// Start microphone capture.
-///
-/// * `net_tx` — receives encoded Opus frames.
-/// * `muted` — checked on every frame. When `true`, frames are discarded.
-/// * `device_name` — preferred input device. `None` = system default.
-///
-/// Returns a [`cpal::Stream`] that must be kept alive for the call duration.
 pub fn start_capture(
     net_tx: mpsc::UnboundedSender<Vec<u8>>,
     muted: Arc<AtomicBool>,
@@ -60,12 +53,7 @@ fn start_capture_inner(
         buffer_size: cpal::BufferSize::Default,
     };
 
-    let config = EncoderConfig {
-        application: Some(Application::Voip),
-        ..EncoderConfig::new(SAMPLE_RATE, 1)
-    };
-    let mut enc = Encoder::new(config)?;
-
+    let mut enc = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip)?;
     let mut acc: Vec<f32> = Vec::with_capacity(FRAME);
 
     let stream = device.build_input_stream(
@@ -77,8 +65,10 @@ fn start_capture_inner(
                 if muted.load(Ordering::Relaxed) {
                     continue;
                 }
-                if let Ok(encoded) = enc.encode_f32(&frame) {
-                    let _ = net_tx.send(encoded);
+                let mut out = vec![0u8; 400];
+                if let Ok(n) = enc.encode_float(&frame, &mut out) {
+                    out.truncate(n);
+                    let _ = net_tx.send(out);
                 }
             }
         },

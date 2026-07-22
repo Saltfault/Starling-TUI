@@ -7,7 +7,6 @@
 #   just build              # check deps, then build
 #   just join BIRD00CCFF    # join an existing flock
 
-# Install all system dependencies needed to build and run starling.
 install-deps:
     @if command -v apt-get >/dev/null 2>&1; then \
         echo "Detected Debian/Ubuntu/WSL — installing..."; \
@@ -33,7 +32,6 @@ install-deps:
         exit 1; \
     fi
 
-# Configure ALSA to route through PulseAudio. WSL2 only.
 setup-wsl-audio:
     #!/usr/bin/env bash
     if [ ! -d /mnt/wslg ]; then
@@ -53,7 +51,6 @@ setup-wsl-audio:
     echo "Done! Voice calls should now work."
     echo "Verify with: pactl info  (may need: sudo apt install pulseaudio-utils)"
 
-# Check that all build prerequisites are present before running cargo.
 check-deps:
     #!/usr/bin/env bash
     missing=0
@@ -87,34 +84,14 @@ check-deps:
     fi
     echo "✓ All build dependencies present"
 
-# Build the project (checks deps first).
 build: check-deps
-    #!/usr/bin/env bash
-    if [ "$(uname -s)" = "Linux" ] && [ -z "$OPUS_TARGET" ]; then
-        export OPUS_TARGET=ubuntu-24.04_x86_64
-    fi
     cargo build
 
-# Run the app — starts a new flock with a random room code.
 run: check-deps
-    #!/usr/bin/env bash
-    if [ "$(uname -s)" = "Linux" ] && [ -z "$OPUS_TARGET" ]; then
-        export OPUS_TARGET=ubuntu-24.04_x86_64
-    fi
     cargo run -- open
 
-# Join an existing flock with a room code.
 join code: check-deps
-    #!/usr/bin/env bash
-    if [ "$(uname -s)" = "Linux" ] && [ -z "$OPUS_TARGET" ]; then
-        export OPUS_TARGET=ubuntu-24.04_x86_64
-    fi
     cargo run -- join {{code}}
 
-# Run cargo check (fast, no binary output).
 check: check-deps
-    #!/usr/bin/env bash
-    if [ "$(uname -s)" = "Linux" ] && [ -z "$OPUS_TARGET" ]; then
-        export OPUS_TARGET=ubuntu-24.04_x86_64
-    fi
     cargo check

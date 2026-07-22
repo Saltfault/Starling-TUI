@@ -6,16 +6,16 @@
 //! played.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use opus::{Decoder, DecoderConfig};
+use opus::{Channels, Decoder};
 use ringbuf::{CachingCons, CachingProd, SharedRb, storage::Heap, traits::*};
 
 const SAMPLE_RATE: u32 = 48_000;
+const FRAME: usize = 960;
 const BUFFER_CAPACITY: usize = SAMPLE_RATE as usize * 2;
 
 type Prod = CachingProd<std::sync::Arc<SharedRb<Heap<f32>>>>;
 type Cons = CachingCons<std::sync::Arc<SharedRb<Heap<f32>>>>;
 
-/// Audio playback engine.
 pub struct Playback {
     decoder: Decoder,
     producer: Prod,
@@ -23,9 +23,6 @@ pub struct Playback {
 }
 
 impl Playback {
-    /// Set up the output stream and ring buffer.
-    ///
-    /// * `device_name` — preferred output device. `None` = system default.
     pub fn new(device_name: Option<&str>) -> anyhow::Result<Self> {
         crate::util::suppress_stderr(|| Self::new_inner(device_name))
     }
@@ -73,7 +70,7 @@ impl Playback {
         )?;
 
         stream.play()?;
-        let decoder = Decoder::new(DecoderConfig::new(SAMPLE_RATE, 1))?;
+        let decoder = Decoder::new(SAMPLE_RATE, Channels::Mono)?;
 
         Ok(Self {
             decoder,
@@ -83,9 +80,10 @@ impl Playback {
     }
 
     pub fn push_opus(&mut self, bytes: &[u8]) {
-        match self.decoder.decode_f32(bytes) {
-            Ok(pcm) => {
-                self.producer.push_slice(&pcm);
+        let mut pcm = [0f32; FRAME];
+        match self.decoder.decode_float(bytes, &mut pcm, false) {
+            Ok(n) => {
+                self.producer.push_slice(&pcm[..n]);
             }
             Err(e) => crate::logger::error(&format!("opus decode error: {e}")),
         }
