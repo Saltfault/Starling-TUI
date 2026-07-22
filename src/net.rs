@@ -103,7 +103,11 @@ pub async fn run(
     name: String,
     input_device: Option<String>,
 ) -> anyhow::Result<()> {
-    let endpoint = Endpoint::bind(presets::N0).await?;
+    let secret = crate::config::Profile::load_or_create_secret();
+    let endpoint = Endpoint::builder(presets::N0)
+        .secret_key(secret)
+        .bind()
+        .await?;
     endpoint.online().await;
 
     let my_node_id = endpoint.addr().id;

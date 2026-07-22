@@ -83,4 +83,19 @@ impl Profile {
             output_device: None,
         })
     }
+
+    /// Load the persistent identity key, creating one on the first run.
+    pub fn load_or_create_secret() -> iroh::SecretKey {
+        let path = Self::config_dir().join("identity.key");
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                return iroh::SecretKey::from_bytes(&arr);
+            }
+        }
+
+        let key = iroh::SecretKey::generate();
+        let _ = std::fs::create_dir_all(Self::config_dir());
+        let _ = std::fs::write(&path, key.to_bytes());
+        key
+    }
 }
