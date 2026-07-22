@@ -15,6 +15,7 @@ mod crypto;
 mod event;
 mod logger;
 mod net;
+mod opus_ffi;
 mod playback;
 mod setup;
 mod ui;

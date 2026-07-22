@@ -1,12 +1,8 @@
 //! Microphone capture: reads from the selected input device, encodes 20 ms
 //! frames with Opus, and sends the compressed bytes over an mpsc channel.
-//!
-//! The capture stream runs on the audio thread. Mute state is shared via an
-//! `Arc<AtomicBool>` so the UI can toggle it without crossing thread
-//! boundaries unsafely.
 
+use crate::opus_ffi::{Application, Channels, Encoder};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use opus::{Application, Channels, Encoder};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;

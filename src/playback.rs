@@ -1,12 +1,8 @@
 //! Audio playback: decodes incoming Opus frames and plays them through a cpal
 //! output stream.
-//!
-//! A lock-free ring buffer bridges the decode thread (producer) and the audio
-//! output thread (consumer). If the buffer is empty (underrun), silence is
-//! played.
 
+use crate::opus_ffi::{Channels, Decoder};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use opus::{Channels, Decoder};
 use ringbuf::{CachingCons, CachingProd, SharedRb, storage::Heap, traits::*};
 
 const SAMPLE_RATE: u32 = 48_000;
