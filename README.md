@@ -90,17 +90,22 @@ In the installer, select **"Desktop development with C++"**.
 
 **2. Install Rust:**
 
-```powershell
-winget install Rustlang.Rustup
-```
+Download and run [rustup-init.exe](https://win.rustup.rs/x86_64) from the
+Rust website. This installs `rustc`, `cargo`, and everything needed to
+build Rust projects.
 
-Or download and run [rustup-init.exe](https://win.rustup.rs/x86_64).
+> `winget install Rustlang.Rustup` is not recommended — it does not
+> install `cargo` correctly on all systems.
 
 **3. Install Starling:**
 
 ```powershell
 cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling-TUI.git
 ```
+
+> **Pre-built binaries** (no Rust or compiler required) are planned —
+> see the [releases page](https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/releases)
+> for available downloads.
 
 **4. Run:**
 

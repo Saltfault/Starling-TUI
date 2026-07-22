@@ -117,6 +117,7 @@ fn command_exists(cmd: &str) -> bool {
 }
 
 /// Check whether a pkg-config library is installed.
+#[allow(dead_code)]
 fn pkg_config_exists(lib: &str) -> bool {
     std::process::Command::new("pkg-config")
         .args(["--exists", lib])
@@ -127,83 +128,81 @@ fn pkg_config_exists(lib: &str) -> bool {
 
 /// Return the list of system dependencies missing on the current platform.
 fn check_dependencies() -> Vec<String> {
-    let mut missing = Vec::new();
+    // Windows has no external system dependencies — WASAPI and Media
+    // Foundation are built into the OS. The C compiler was already needed
+    // to build Starling, so no need to check for it here.
+    #[cfg(target_os = "windows")]
+    return Vec::new();
 
-    // Check for a C compiler — platform-specific names.
-    let has_c_compiler = if cfg!(target_os = "windows") {
-        command_exists("cl.exe") || command_exists("gcc.exe") || command_exists("cc.exe")
-    } else {
-        command_exists("cc") || command_exists("gcc")
-    };
-    if !has_c_compiler {
-        #[cfg(target_os = "windows")]
-        missing.push("C compiler (Visual Studio Build Tools or MinGW)".into());
-        #[cfg(not(target_os = "windows"))]
-        missing.push("C compiler (gcc/cc)".into());
-    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut missing = Vec::new();
 
-    if cfg!(target_os = "linux") {
-        if !command_exists("pkg-config") {
-            missing.push("pkg-config".into());
+        if !command_exists("cc") && !command_exists("gcc") {
+            missing.push("C compiler (gcc/cc)".into());
         }
-        if !pkg_config_exists("alsa") {
-            missing.push("libasound2-dev (ALSA headers)".into());
-        }
-        if !pkg_config_exists("libpulse") {
-            missing.push("libpulse-dev (PulseAudio headers)".into());
-        }
-        // nokhwa's V4L2 backend needs libclang for bindgen at build time.
-        // Check multiple common locations (versioned LLVM paths, etc.).
-        let has_libclang = command_exists("libclang")
-            || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libclang.so").exists()
-            || std::path::Path::new("/usr/lib/aarch64-linux-gnu/libclang.so").exists()
-            || std::fs::read_dir("/usr/lib/llvm-")
-                .map(|mut d| {
-                    d.any(|e| {
-                        e.ok()
-                            .map_or(false, |f| f.path().join("lib/libclang.so").exists())
-                    })
-                })
-                .unwrap_or(false)
-            || std::fs::read_dir("/usr/lib")
-                .map(|mut d| {
-                    d.any(|e| {
-                        e.ok().map_or(false, |f| {
-                            f.file_name().to_string_lossy().starts_with("libclang.so")
+
+        #[cfg(target_os = "linux")]
+        {
+            if !command_exists("pkg-config") {
+                missing.push("pkg-config".into());
+            }
+            if !pkg_config_exists("alsa") {
+                missing.push("libasound2-dev (ALSA headers)".into());
+            }
+            if !pkg_config_exists("libpulse") {
+                missing.push("libpulse-dev (PulseAudio headers)".into());
+            }
+            let has_libclang = command_exists("libclang")
+                || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libclang.so").exists()
+                || std::path::Path::new("/usr/lib/aarch64-linux-gnu/libclang.so").exists()
+                || std::fs::read_dir("/usr/lib/llvm-")
+                    .map(|mut d| {
+                        d.any(|e| {
+                            e.ok()
+                                .map_or(false, |f| f.path().join("lib/libclang.so").exists())
                         })
                     })
-                })
-                .unwrap_or(false);
-        if !has_libclang {
-            missing.push("libclang-dev (needed by nokhwa/V4L2 bindgen)".into());
-        }
-        // nokhwa also needs libv4l for the V4L2 userspace library.
-        if !pkg_config_exists("libv4l2") && !pkg_config_exists("v4l-utils") {
-            missing.push("libv4l-dev (needed by nokhwa/V4L2)".into());
-        }
-        // WSL2 needs the ALSA->PulseAudio bridge for audio to work
-        if std::path::Path::new("/mnt/wslg").exists()
-            && !std::path::Path::new("/etc/asound.conf").exists()
-        {
-            missing.push("libasound2-plugins + /etc/asound.conf (WSL2 audio bridge)".into());
-        }
-        // WSL2 doesn't expose webcams by default — check for /dev/video*
-        if std::path::Path::new("/mnt/wslg").exists()
-            && !std::fs::read_dir("/dev")
-                .map(|mut d| {
-                    d.any(|e| {
-                        e.ok().map_or(false, |f| {
-                            f.file_name().to_string_lossy().starts_with("video")
+                    .unwrap_or(false)
+                || std::fs::read_dir("/usr/lib")
+                    .map(|mut d| {
+                        d.any(|e| {
+                            e.ok().map_or(false, |f| {
+                                f.file_name().to_string_lossy().starts_with("libclang.so")
+                            })
                         })
                     })
-                })
-                .unwrap_or(false)
-        {
-            missing.push("webcam (WSL2): install usbipd-win on Windows, then attach camera".into());
+                    .unwrap_or(false);
+            if !has_libclang {
+                missing.push("libclang-dev (needed by nokhwa/V4L2 bindgen)".into());
+            }
+            if !pkg_config_exists("libv4l2") && !pkg_config_exists("v4l-utils") {
+                missing.push("libv4l-dev (needed by nokhwa/V4L2)".into());
+            }
+            if std::path::Path::new("/mnt/wslg").exists()
+                && !std::path::Path::new("/etc/asound.conf").exists()
+            {
+                missing.push("libasound2-plugins + /etc/asound.conf (WSL2 audio bridge)".into());
+            }
+            if std::path::Path::new("/mnt/wslg").exists()
+                && !std::fs::read_dir("/dev")
+                    .map(|mut d| {
+                        d.any(|e| {
+                            e.ok().map_or(false, |f| {
+                                f.file_name().to_string_lossy().starts_with("video")
+                            })
+                        })
+                    })
+                    .unwrap_or(false)
+            {
+                missing.push(
+                    "webcam (WSL2): install usbipd-win on Windows, then attach camera".into(),
+                );
+            }
         }
-    }
 
-    missing
+        missing
+    }
 }
 
 /// Build the install command for the detected package manager, if any.
