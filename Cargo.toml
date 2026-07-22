@@ -3,6 +3,10 @@ name = "Starling-TUI"
 version = "0.4.1"
 edition = "2024"
 
+[[bin]]
+name = "starling"
+path = "src/main.rs"
+
 [features]
 default = []
 audio = ["dep:cpal", "dep:ringbuf"]
