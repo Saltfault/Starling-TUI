@@ -31,11 +31,17 @@ pub struct App {
     pub peers: Vec<EndpointId>,
     /// Index into `peers` of the currently highlighted peer.
     pub selected_peer: usize,
-    /// The room code / invite: the flock opener's full encoded node ID.
-    /// This is both displayed in the header and what peers join with.
+    /// Our own persistent invite code (set by Ticket). Used when the user
+    /// creates a room so others can join them.
     pub node_id: Option<String>,
     /// Whether the invite popup is currently displayed.
     pub show_invite: bool,
+    /// Whether the create-room confirmation popup is shown.
+    pub show_create_room: bool,
+    /// Whether the join-room popup is shown.
+    pub show_join_room: bool,
+    /// Text input for the join-room code.
+    pub join_input: String,
     /// Whether an active voice call is in progress.
     #[allow(dead_code)]
     pub in_call: bool,
@@ -98,19 +104,25 @@ pub fn draw(f: &mut Frame, app: &App) {
     ])
     .split(f.area());
 
-    // ── Header: color swatches + full node code ───────────────────────
+    // ── Header: current flock's room code with color swatches ───────
     let header = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(chunks[0]);
 
-    let full_code = app.node_id.as_deref().unwrap_or("");
-    let swatch_spans = color_swatches(full_code);
+    let flock_code = app
+        .flocks
+        .get(app.current_flock)
+        .map(|fv| fv.code.as_str())
+        .unwrap_or("");
+    let swatch_spans = color_swatches(flock_code);
     if !swatch_spans.is_empty() {
         f.render_widget(Line::from(swatch_spans), header[0]);
     }
 
-    f.render_widget(
-        Paragraph::new(format!(" {}", full_code)).style(Style::new().fg(Color::DarkGray)),
-        header[1],
-    );
+    if !flock_code.is_empty() {
+        f.render_widget(
+            Paragraph::new(format!(" {}", flock_code)).style(Style::new().fg(Color::DarkGray)),
+            header[1],
+        );
+    }
 
     // ── Flock rail + Messages + Birds panel ────────────────────────────
     let middle = Layout::horizontal([
@@ -234,28 +246,37 @@ pub fn draw(f: &mut Frame, app: &App) {
     );
 
     // ── Status ────────────────────────────────────────────────────────
-    let flock_info = if app.flocks.len() > 1 {
-        format!(
-            " flock {}/{} . Alt+Up/Down to switch",
-            app.current_flock + 1,
-            app.flocks.len()
-        )
-    } else {
-        String::new()
-    };
-    let status = if app.in_call {
+    let status = if app.flocks.is_empty() {
+        " Ctrl+N to create a room . Ctrl+J to join a room".into()
+    } else if app.in_call {
+        let flock_info = if app.flocks.len() > 1 {
+            format!(
+                " . Alt+Up/Down to switch ({}/{})",
+                app.current_flock + 1,
+                app.flocks.len()
+            )
+        } else {
+            String::new()
+        };
         format!(
             " in call . {} . Ctrl+K to hang up{}",
             if app.muted { "muted" } else { "live" },
             flock_info
         )
-    } else if !flock_info.is_empty() {
+    } else {
+        let flock_info = if app.flocks.len() > 1 {
+            format!(
+                " . Alt+Up/Down to switch ({}/{})",
+                app.current_flock + 1,
+                app.flocks.len()
+            )
+        } else {
+            String::new()
+        };
         format!(
-            " idle . Ctrl+K to call . Tab to cycle . Ctrl+M to mute . i = invite{}",
+            " Ctrl+K to call . Tab to cycle . Ctrl+M to mute . i = invite{}",
             flock_info
         )
-    } else {
-        " idle . Ctrl+K to call . Tab to cycle . Ctrl+M to mute . i = invite".into()
     };
     f.render_widget(
         Paragraph::new(status).style(Style::new().fg(Color::Rgb(111, 174, 157))),
@@ -269,9 +290,13 @@ pub fn draw(f: &mut Frame, app: &App) {
         chunks[3],
     );
 
-    // ── Invite popup ──────────────────────────────────────────────────
+    // ── Popups ───────────────────────────────────────────────────────
     if app.show_invite {
         draw_invite_popup(f, app);
+    } else if app.show_create_room {
+        draw_create_room_popup(f, app);
+    } else if app.show_join_room {
+        draw_join_room_popup(f, app);
     }
 }
 
@@ -279,7 +304,11 @@ fn draw_invite_popup(f: &mut Frame, app: &App) {
     let area = f.area();
     f.render_widget(Clear, area);
 
-    let code = app.node_id.as_deref().unwrap_or("connecting...");
+    let code = app
+        .flocks
+        .get(app.current_flock)
+        .map(|fv| fv.code.as_str())
+        .unwrap_or("");
     let swatch_spans = color_swatches(code);
 
     let swatch_line_len = swatch_spans.len();
@@ -337,6 +366,84 @@ fn draw_invite_popup(f: &mut Frame, app: &App) {
     f.render_widget(
         Paragraph::new("  Press i or Esc to close").style(Style::new().fg(Color::DarkGray)),
         chunks[9],
+    );
+}
+
+fn draw_create_room_popup(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let width = 50.min(area.width);
+    let height = 8.min(area.height);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Create Room "),
+        popup,
+    );
+
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+
+    let invite = app.node_id.as_deref().unwrap_or("waiting for endpoint...");
+    f.render_widget(
+        Paragraph::new(format!(
+            "Your invite code: {}\n\nPress Enter to create, Esc to cancel.",
+            invite
+        ))
+        .style(Style::new().fg(Color::White)),
+        chunks[0],
+    );
+}
+
+fn draw_join_room_popup(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let width = 60.min(area.width);
+    let height = 8.min(area.height);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default().borders(Borders::ALL).title(" Join Room "),
+        popup,
+    );
+
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+
+    f.render_widget(
+        Paragraph::new("Enter the room code:").style(Style::new().fg(Color::White)),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(format!(" {}_", app.join_input)).style(Style::new().fg(Color::Yellow)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new(" Enter = join . Esc = cancel").style(Style::new().fg(Color::DarkGray)),
+        chunks[2],
     );
 }
 

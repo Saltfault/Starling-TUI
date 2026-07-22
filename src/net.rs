@@ -116,9 +116,6 @@ pub async fn run(
         .bind()
         .await?;
     endpoint.online().await;
-    let opener_id = bootstrap.first().copied().unwrap_or(my_node_id);
-
-    let room_code = encode_node_id(&opener_id);
 
     let my_code = encode_node_id(&my_node_id);
     crate::logger::warn(&format!("endpoint bound: room_code={my_code}"));
@@ -156,25 +153,29 @@ pub async fn run(
         )
         .spawn();
 
-    // Build the flock map and join the initial flock.
+    // Build the flock map. No initial flock — the user creates or joins
+    // a room via Ctrl+N or Ctrl+J.
     let mut flocks: HashMap<String, FlockHandle> = HashMap::new();
-    join_flock(
-        &gossip,
-        room_code.clone(),
-        bootstrap,
-        &mut flocks,
-        evt_tx.clone(),
-        my_node_id,
-        name.clone(),
-    )
-    .await?;
 
-    // Joiners ask the opener for messages they missed.
-    if opener_id != my_node_id {
-        let (ep, tx) = (endpoint.clone(), evt_tx.clone());
-        tokio::spawn(async move {
-            let _ = crate::sync::backfill(ep, opener_id, 0, tx).await;
-        });
+    // If bootstrapping from CLI (starling join BIRD-...), join immediately.
+    if let Some(&opener) = bootstrap.first() {
+        let room = encode_node_id(&opener);
+        join_flock(
+            &gossip,
+            room,
+            bootstrap,
+            &mut flocks,
+            evt_tx.clone(),
+            my_node_id,
+            name.clone(),
+        )
+        .await?;
+        if opener != my_node_id {
+            let (ep, tx) = (endpoint.clone(), evt_tx.clone());
+            tokio::spawn(async move {
+                let _ = crate::sync::backfill(ep, opener, 0, tx).await;
+            });
+        }
     }
 
     #[cfg(feature = "audio")]

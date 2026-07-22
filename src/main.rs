@@ -72,23 +72,14 @@ async fn main() -> anyhow::Result<()> {
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
 
-    // Derive our own node ID from the persistent secret key, so the
-    // header shows our room code immediately (no async wait for Ticket).
+    // Derive our own node ID from the persistent secret key.
+    // We pass it to net::run for profile announcements; the Ticket
+    // event will set app.node_id once the endpoint is bound.
     let secret = config::Profile::load_or_create_secret();
     let my_node_id: iroh::EndpointId = secret.public().into();
-    let my_code = net::encode_node_id(&my_node_id);
-    app.node_id = Some(my_code.clone());
 
-    // For a joiner, the opener's node ID is the initial flock they join.
-    let flock_code = match bootstrap.first() {
-        Some(id) => net::encode_node_id(id),
-        None => my_code,
-    };
-    app.flocks.push(FlockView {
-        code: flock_code,
-        messages: vec![],
-        unread: 0,
-    });
+    // No room is open by default — the user creates one with Ctrl+N
+    // or joins one with Ctrl+J (or starling join from the CLI).
 
     // Load the profile from disk, or run the setup wizard to create one.
     let profile = match profile {
@@ -180,11 +171,9 @@ async fn main() -> anyhow::Result<()> {
                     app.peer_status.insert(id, s);
                 }
                 AppEvent::Ticket(code) => {
-                    // Our own room code (openers only; joiners already have
-                    // the opener's code set above).
-                    if app.node_id.is_none() {
-                        app.node_id = Some(code);
-                    }
+                    // Our own persistent invite code — stored for use when
+                    // the user creates a room (Ctrl+N).
+                    app.node_id = Some(code);
                 }
                 #[cfg(feature = "audio")]
                 AppEvent::VoiceFrame(bytes) => {
@@ -232,6 +221,43 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
+                if app.show_create_room {
+                    match k.code {
+                        KeyCode::Enter => {
+                            if let Some(code) = &app.node_id {
+                                let _ = cmd_tx.send(Command::JoinFlock { code: code.clone() });
+                            }
+                            app.show_create_room = false;
+                        }
+                        KeyCode::Esc => {
+                            app.show_create_room = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                if app.show_join_room {
+                    match k.code {
+                        KeyCode::Enter if !app.join_input.is_empty() => {
+                            let code = std::mem::take(&mut app.join_input);
+                            let _ = cmd_tx.send(Command::JoinFlock {
+                                code: code.trim().into(),
+                            });
+                            app.show_join_room = false;
+                        }
+                        KeyCode::Char(c) => app.join_input.push(c),
+                        KeyCode::Backspace => {
+                            app.join_input.pop();
+                        }
+                        KeyCode::Esc => {
+                            app.show_join_room = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 match k.code {
                     KeyCode::Enter if !app.input.is_empty() => {
                         let text = std::mem::take(&mut app.input);
@@ -248,15 +274,24 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     KeyCode::Up if k.modifiers.contains(KeyModifiers::ALT) => {
-                        app.current_flock = app.current_flock.saturating_sub(1);
+                        let max = app.flocks.len().saturating_sub(1);
+                        app.current_flock = app.current_flock.saturating_sub(1).min(max);
                     }
                     KeyCode::Down if k.modifiers.contains(KeyModifiers::ALT) => {
                         app.current_flock =
                             (app.current_flock + 1).min(app.flocks.len().saturating_sub(1));
                     }
 
+                    KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.show_create_room = true;
+                    }
+                    KeyCode::Char('j') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.join_input.clear();
+                        app.show_join_room = true;
+                    }
+
                     KeyCode::Char('i') => {
-                        app.show_invite = true;
+                        app.show_invite = app.flocks.get(app.current_flock).is_some();
                     }
 
                     #[cfg(feature = "audio")]
