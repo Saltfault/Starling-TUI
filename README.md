@@ -14,12 +14,12 @@ server required. A room code is all a new bird needs to join a flock.
 | Feature | Windows | macOS | Linux | WSL2 |
 |---------|:-------:|:-----:|:-----:|:----:|
 | Text chat | ✓ | ✓ | ✓ | ✓ |
-| Voice calls (mic + playback) | ✓ | ✓ | ✓ | text only* |
+| Voice calls (mic + playback) | ✓ | ✓ | ✓ | ✓† |
 | Room codes | ✓ | ✓ | ✓ | ✓ |
 
-\* WSL2's audio may not work because the pure-Rust PulseAudio crate can't
-authenticate with WSLg's server. Text chat works fully. For voice, use a
-native Windows build instead.
+† WSL2 voice requires a one-time setup step (`just setup-wsl-audio`)
+that installs the ALSA→PulseAudio bridge. See
+[WSL2 setup](#wsl2-windows-subsystem-for-linux) below.
 
 ---
 
@@ -190,7 +190,7 @@ Linux desktops.
 
 ### WSL2 (Windows Subsystem for Linux)
 
-WSL2 setup is identical to Linux, but audio may not work.
+WSL2 setup is identical to Linux, with one extra step for audio.
 
 **1. Install WSL2** (if not already installed, from PowerShell):
 
@@ -218,7 +218,21 @@ source "$HOME/.cargo/env"
 cargo install just
 ```
 
-**4. Run:**
+**4. Enable voice calls (one-time setup):**
+
+WSLg provides a PulseAudio server, but the pure-Rust PulseAudio crate that
+cpal uses can't authenticate with it. The fix is to install the ALSA→PulseAudio
+bridge, which uses the C library (`libpulse`) that handles WSLg auth correctly:
+
+```bash
+just setup-wsl-audio
+```
+
+This installs `libasound2-plugins` and writes `/etc/asound.conf` to route
+ALSA through PulseAudio. After this, voice calls work — cpal falls back to
+the ALSA backend, which routes through PulseAudio via the C library.
+
+**5. Run:**
 
 ```bash
 just run
@@ -226,13 +240,10 @@ just run
 cargo run -- open
 ```
 
-**Audio note:** WSLg (Windows 11) provides a PulseAudio server at
-`/mnt/wslg/PulseServer`, but the pure-Rust `pulseaudio` crate that cpal uses
-may fail to authenticate with it. Text chat works fully; voice calls may not.
-For voice, use a [native Windows build](#windows) instead.
+If you skip step 4, text chat works but voice calls won't.
 
-If you're on an older Windows 10 build without WSLg, audio definitely won't
-work in WSL2 — use a native Windows build.
+If you're on an older Windows 10 build without WSLg, audio won't work in
+WSL2 — use a [native Windows build](#windows) instead.
 
 ---
 
@@ -359,16 +370,25 @@ sudo pacman -S alsa-lib           # Arch
 
 ### No microphone / no audio output (WSL2)
 
-This is a known limitation. WSLg's PulseAudio server uses an auth mechanism
-that the pure-Rust `pulseaudio` crate doesn't support. Text chat works; for
-voice calls, use a [native Windows build](#windows) instead.
+Run the one-time audio setup:
 
-To verify PulseAudio is running (for debugging):
+```bash
+just setup-wsl-audio
+```
+
+This installs `libasound2-plugins` and writes `/etc/asound.conf` to route
+ALSA through PulseAudio. See [WSL2 setup](#wsl2-windows-subsystem-for-linux)
+for details.
+
+If it still doesn't work, verify PulseAudio is running:
 
 ```bash
 ls /mnt/wslg/PulseServer   # should exist
 echo $PULSE_SERVER          # should show unix:/mnt/wslg/PulseServer
 ```
+
+If you don't have WSLg (older Windows 10), audio won't work in WSL2 —
+use a [native Windows build](#windows) instead.
 
 ### `link.exe not found` (Windows)
 

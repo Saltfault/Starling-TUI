@@ -1,10 +1,11 @@
 # Starling — build & run helpers
 #
 # Usage:
-#   just install-deps   # one-time: install all system packages
-#   just run            # check deps, then run the app
-#   just build          # check deps, then build
-#   just join BIRD123   # join an existing flock
+#   just install-deps       # one-time: install all system packages
+#   just setup-wsl-audio    # one-time: WSL2 only — enables voice calls
+#   just run                # check deps, then run the app
+#   just build              # check deps, then build
+#   just join BIRD123456    # join an existing flock
 
 # Install all system dependencies needed to build and run starling.
 # Detects the OS/distro and uses the appropriate package manager.
@@ -32,6 +33,31 @@ install-deps:
         echo "  Windows: Visual Studio Build Tools + CMake (see README)"; \
         exit 1; \
     fi
+
+# Configure ALSA to route through PulseAudio. WSL2 only.
+# This is required for voice calls to work on WSL2 — the pure-Rust
+# PulseAudio crate that cpal uses can't authenticate with WSLg's server,
+# but the C library (libpulse) that ALSA's pulse plugin uses can.
+setup-wsl-audio:
+    #!/usr/bin/env bash
+    if [ ! -d /mnt/wslg ]; then
+        echo "This command is for WSL2 only (no /mnt/wslg found)."
+        echo "On native Linux, PulseAudio works without this step."
+        exit 1
+    fi
+
+    echo "Installing libasound2-plugins (ALSA -> PulseAudio bridge)..."
+    sudo apt-get update && sudo apt-get install -y libasound2-plugins
+
+    echo "Writing /etc/asound.conf..."
+    sudo tee /etc/asound.conf > /dev/null << 'ASOUNDCONF'
+pcm.!default pulse
+ctl.!default pulse
+ASOUNDCONF
+
+    echo ""
+    echo "Done! Voice calls should now work."
+    echo "Verify with: pactl info  (may need: sudo apt install pulseaudio-utils)"
 
 # Check that all build prerequisites are present before running cargo.
 # Prints clear messages for anything missing.
