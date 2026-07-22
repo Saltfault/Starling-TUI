@@ -102,14 +102,10 @@ pub fn draw(f: &mut Frame, app: &App) {
     let header = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(chunks[0]);
 
     let full_code = app.node_id.as_deref().unwrap_or("");
-    let mut swatch_spans = color_swatches(full_code);
-    if swatch_spans.is_empty() {
-        swatch_spans.push(Span::styled(
-            " waiting for endpoint...",
-            Style::new().fg(Color::DarkGray),
-        ));
+    let swatch_spans = color_swatches(full_code);
+    if !swatch_spans.is_empty() {
+        f.render_widget(Line::from(swatch_spans), header[0]);
     }
-    f.render_widget(Line::from(swatch_spans), header[0]);
 
     f.render_widget(
         Paragraph::new(format!(" {}", full_code)).style(Style::new().fg(Color::DarkGray)),
@@ -141,8 +137,13 @@ pub fn draw(f: &mut Frame, app: &App) {
         })
         .collect();
 
+    let flock_count = app.flocks.len();
     f.render_widget(
-        List::new(rail_items).block(Block::default().borders(Borders::ALL).title(" flocks ")),
+        List::new(rail_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" flocks ({flock_count}) ")),
+        ),
         middle[0],
     );
 
@@ -233,10 +234,25 @@ pub fn draw(f: &mut Frame, app: &App) {
     );
 
     // ── Status ────────────────────────────────────────────────────────
+    let flock_info = if app.flocks.len() > 1 {
+        format!(
+            " flock {}/{} . Alt+Up/Down to switch",
+            app.current_flock + 1,
+            app.flocks.len()
+        )
+    } else {
+        String::new()
+    };
     let status = if app.in_call {
         format!(
-            " in call . {} . Ctrl+K to hang up",
-            if app.muted { "muted" } else { "live" }
+            " in call . {} . Ctrl+K to hang up{}",
+            if app.muted { "muted" } else { "live" },
+            flock_info
+        )
+    } else if !flock_info.is_empty() {
+        format!(
+            " idle . Ctrl+K to call . Tab to cycle . Ctrl+M to mute . i = invite{}",
+            flock_info
         )
     } else {
         " idle . Ctrl+K to call . Tab to cycle . Ctrl+M to mute . i = invite".into()
@@ -263,7 +279,7 @@ fn draw_invite_popup(f: &mut Frame, app: &App) {
     let area = f.area();
     f.render_widget(Clear, area);
 
-    let code = app.node_id.as_deref().unwrap_or("waiting for endpoint...");
+    let code = app.node_id.as_deref().unwrap_or("connecting...");
     let swatch_spans = color_swatches(code);
 
     let swatch_line_len = swatch_spans.len();

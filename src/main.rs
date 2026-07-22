@@ -72,11 +72,23 @@ async fn main() -> anyhow::Result<()> {
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
 
-    // For a joiner, the room code is the opener's node ID (from the join
-    // code), shown immediately. For an opener it arrives via AppEvent::Ticket.
-    if let Some(node_id) = bootstrap.first() {
-        app.node_id = Some(net::encode_node_id(node_id));
-    }
+    // Derive our own node ID from the persistent secret key, so the
+    // header shows our room code immediately (no async wait for Ticket).
+    let secret = config::Profile::load_or_create_secret();
+    let my_node_id: iroh::EndpointId = secret.public().into();
+    let my_code = net::encode_node_id(&my_node_id);
+    app.node_id = Some(my_code.clone());
+
+    // For a joiner, the opener's node ID is the initial flock they join.
+    let flock_code = match bootstrap.first() {
+        Some(id) => net::encode_node_id(id),
+        None => my_code,
+    };
+    app.flocks.push(FlockView {
+        code: flock_code,
+        messages: vec![],
+        unread: 0,
+    });
 
     // Load the profile from disk, or run the setup wizard to create one.
     let profile = match profile {
@@ -108,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
         cmd_rx,
         evt_tx,
         muted_flag.clone(),
+        my_node_id,
         name,
         input_device,
     ));

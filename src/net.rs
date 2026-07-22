@@ -97,6 +97,7 @@ async fn broadcast_payload(
 /// * `cmd_rx` - commands from the UI.
 /// * `evt_tx` - events back to the UI.
 /// * `muted` - shared flag toggled by the UI to mute the mic.
+/// * `my_node_id` - our own node identity (from the persistent secret key).
 /// * `name` - our display name, announced to peers and used as chat author.
 /// * `input_device` - optional CPAL input device name for the mic.
 pub async fn run(
@@ -104,6 +105,7 @@ pub async fn run(
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     muted: Arc<AtomicBool>,
+    my_node_id: EndpointId,
     name: String,
     input_device: Option<String>,
 ) -> anyhow::Result<()> {
@@ -114,8 +116,6 @@ pub async fn run(
         .bind()
         .await?;
     endpoint.online().await;
-
-    let my_node_id = endpoint.addr().id;
     let opener_id = bootstrap.first().copied().unwrap_or(my_node_id);
 
     let room_code = encode_node_id(&opener_id);
@@ -164,6 +164,8 @@ pub async fn run(
         bootstrap,
         &mut flocks,
         evt_tx.clone(),
+        my_node_id,
+        name.clone(),
     )
     .await?;
 
@@ -206,8 +208,16 @@ pub async fn run(
             Command::JoinFlock { code } => {
                 if let Some(opener) = decode_node_id(&code) {
                     let room = encode_node_id(&opener);
-                    let _ =
-                        join_flock(&gossip, room, vec![opener], &mut flocks, evt_tx.clone()).await;
+                    let _ = join_flock(
+                        &gossip,
+                        room,
+                        vec![opener],
+                        &mut flocks,
+                        evt_tx.clone(),
+                        my_node_id,
+                        name.clone(),
+                    )
+                    .await;
                 }
             }
 
@@ -299,6 +309,8 @@ async fn join_flock(
     boot: Vec<EndpointId>,
     flocks: &mut HashMap<String, FlockHandle>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
+    my_id: EndpointId,
+    name: String,
 ) -> anyhow::Result<()> {
     if flocks.contains_key(&code) {
         return Ok(());
@@ -308,27 +320,49 @@ async fn join_flock(
     let crypto = FlockCrypto::from_room_code(&code);
     let (sender, mut receiver) = gossip.subscribe(topic, boot).await?.split();
 
-    let (rx_crypto, rx_code, rx_tx) = (
+    let (rx_crypto, rx_code, rx_tx, rx_sender, rx_my_id, rx_name) = (
         FlockCrypto::from_room_code(&code),
         code.clone(),
         evt_tx.clone(),
+        sender.clone(),
+        my_id,
+        name,
     );
     tokio::spawn(async move {
         while let Some(event) = receiver.next().await {
             match event {
                 Ok(Event::Received(msg)) => {
                     if let Some(plain) = rx_crypto.decrypt(&msg.content) {
-                        if let Ok(GossipPayload::Chat(m)) = postcard::from_bytes(&plain) {
-                            let _ = rx_tx.send(AppEvent::Message {
-                                flock: rx_code.clone(),
-                                msg: m,
-                            });
+                        match postcard::from_bytes::<GossipPayload>(&plain) {
+                            Ok(GossipPayload::Chat(m)) => {
+                                let _ = rx_tx.send(AppEvent::Message {
+                                    flock: rx_code.clone(),
+                                    msg: m,
+                                });
+                            }
+                            Ok(GossipPayload::Profile { id, name }) => {
+                                let _ = rx_tx.send(AppEvent::PeerNamed(id, name));
+                            }
+                            Ok(GossipPayload::Status { id, status }) => {
+                                let _ = rx_tx.send(AppEvent::PeerStatus(id, status));
+                            }
+                            Err(e) => {
+                                crate::logger::error(&format!("gossip deserialize error: {e}"));
+                            }
                         }
                     }
                 }
 
                 Ok(Event::NeighborUp(id)) => {
                     let _ = rx_tx.send(AppEvent::PeerConnected(id));
+                    // Announce our profile so the new peer sees our name.
+                    let payload = GossipPayload::Profile {
+                        id: rx_my_id,
+                        name: rx_name.clone(),
+                    };
+                    if let Ok(plain) = postcard::to_stdvec(&payload) {
+                        let _ = rx_sender.broadcast(rx_crypto.encrypt(&plain).into()).await;
+                    }
                 }
                 Ok(Event::NeighborDown(id)) => {
                     let _ = rx_tx.send(AppEvent::PeerDisconnected(id));
