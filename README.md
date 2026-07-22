@@ -94,9 +94,6 @@ Download and run [rustup-init.exe](https://win.rustup.rs/x86_64) from the
 Rust website. This installs `rustc`, `cargo`, and everything needed to
 build Rust projects.
 
-> `winget install Rustlang.Rustup` is not recommended — it does not
-> install `cargo` correctly on all systems.
-
 **3. Install Starling:**
 
 ```powershell
