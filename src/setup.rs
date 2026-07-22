@@ -107,10 +107,10 @@ impl SetupApp {
     }
 }
 
-/// Check whether a command is available on PATH.
+/// Check whether a command is available on PATH (cross-platform).
 fn command_exists(cmd: &str) -> bool {
-    std::process::Command::new("sh")
-        .args(["-c", &format!("command -v {cmd}")])
+    std::process::Command::new(cmd)
+        .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -129,7 +129,16 @@ fn pkg_config_exists(lib: &str) -> bool {
 fn check_dependencies() -> Vec<String> {
     let mut missing = Vec::new();
 
-    if !command_exists("cc") {
+    // Check for a C compiler — platform-specific names.
+    let has_c_compiler = if cfg!(target_os = "windows") {
+        command_exists("cl.exe") || command_exists("gcc.exe") || command_exists("cc.exe")
+    } else {
+        command_exists("cc") || command_exists("gcc")
+    };
+    if !has_c_compiler {
+        #[cfg(target_os = "windows")]
+        missing.push("C compiler (Visual Studio Build Tools or MinGW)".into());
+        #[cfg(not(target_os = "windows"))]
         missing.push("C compiler (gcc/cc)".into());
     }
 
@@ -199,6 +208,19 @@ fn check_dependencies() -> Vec<String> {
 
 /// Build the install command for the detected package manager, if any.
 fn install_command() -> Option<String> {
+    // Windows package managers
+    #[cfg(target_os = "windows")]
+    {
+        if command_exists("winget") {
+            return Some(
+                "winget install Microsoft.VisualStudio.2022.BuildTools --includeRecommended".into(),
+            );
+        }
+        if command_exists("choco") {
+            return Some("choco install visualstudio2022buildtools".into());
+        }
+    }
+
     // Check if we're on WSL2 and need the audio bridge
     let needs_wsl_audio = std::path::Path::new("/mnt/wslg").exists()
         && !std::path::Path::new("/etc/asound.conf").exists();
