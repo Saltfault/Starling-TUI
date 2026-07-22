@@ -23,17 +23,17 @@ impl FlockCrypto {
     /// derive the same key.
     pub fn from_room_code(code: &str) -> Self {
         let key = Sha256::digest(format!("starling/flock/{code}").as_bytes());
-        let cipher = ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(&key));
+        let cipher = ChaCha20Poly1305::new(&key);
         Self { cipher }
     }
 
     /// Encrypt plaintext. Returns `[nonce | ciphertext]`.
     pub fn encrypt(&self, plaintext: &[u8]) -> Vec<u8> {
         let uuid = uuid::Uuid::new_v4();
-        let nonce_bytes = &uuid.as_bytes()[..12];
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce_bytes: [u8; 12] = uuid.as_bytes()[..12].try_into().unwrap();
+        let nonce = Nonce::from(nonce_bytes);
 
-        let ciphertext = self.cipher.encrypt(nonce, plaintext).unwrap_or_default();
+        let ciphertext = self.cipher.encrypt(&nonce, plaintext).unwrap_or_default();
 
         let mut output = nonce_bytes.to_vec();
         output.extend(ciphertext);
@@ -45,7 +45,8 @@ impl FlockCrypto {
         if data.len() < 12 {
             return None;
         }
-        let nonce = Nonce::from_slice(&data[..12]);
-        self.cipher.decrypt(nonce, &data[12..]).ok()
+        let nonce_bytes: [u8; 12] = data[..12].try_into().ok()?;
+        let nonce = Nonce::from(nonce_bytes);
+        self.cipher.decrypt(&nonce, &data[12..]).ok()
     }
 }
