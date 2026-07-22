@@ -1,10 +1,14 @@
-# Starling
+# Starling TUI
+
+> This is the **terminal (TUI) client** for Starling — a federated
+> peer-to-peer communications platform. For the main project, see the
+> [Starling repository](https://forgejo.hearthhome.lol/Saltfault/Starling).
 
 A federated peer-to-peer communications platform where peers — known as
 **birds** — can communicate from anywhere in the world thanks to a
 peer-to-peer network called **the murmuration**.
 
-Starling runs in the terminal and provides text chat, voice calls, and
+Starling TUI runs in the terminal and provides text chat, voice calls, and
 video calls — all end-to-end encrypted. Birds discover each other through
 the murmuration using iroh's relay and discovery infrastructure — no central
 server required. A room code is all a new bird needs to join a flock.
