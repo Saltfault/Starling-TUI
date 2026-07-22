@@ -27,16 +27,20 @@ pub struct App {
     /// Whether the invite popup is currently displayed.
     pub show_invite: bool,
     /// Whether an active voice call is in progress.
+    #[allow(dead_code)]
     pub in_call: bool,
     /// Whether the local microphone is muted.
+    #[allow(dead_code)]
     pub muted: bool,
     /// Maps peer EndpointId → display name (from profile announcements).
     pub peer_names: HashMap<EndpointId, String>,
     /// Maps peer EndpointId → current presence status.
     pub peer_status: HashMap<EndpointId, BirdStatus>,
     /// Latest decoded video frame (JPEG → RgbImage).
+    #[allow(dead_code)]
     pub video_frame: Option<RgbImage>,
     /// Whether the video pane is currently shown.
+    #[allow(dead_code)]
     pub show_video: bool,
 }
 
@@ -115,6 +119,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // When video is showing, split the message area into messages (60%)
     // and video (40%). Otherwise the messages take the full width.
+    #[cfg(feature = "video")]
     let msg_area = if app.show_video {
         let panes = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
             .split(middle[0]);
@@ -134,6 +139,8 @@ pub fn draw(f: &mut Frame, app: &App) {
     } else {
         middle[0]
     };
+    #[cfg(not(feature = "video"))]
+    let msg_area = middle[0];
 
     f.render_widget(
         List::new(items).block(

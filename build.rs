@@ -13,6 +13,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    // Only download opus when the audio feature is enabled.
+    if env::var("CARGO_FEATURE_AUDIO").is_err() {
+        return;
+    }
+
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
     let lib_dir = out_dir.join("opus_lib");
     let bindings_path = out_dir.join("opus_bindings.rs");

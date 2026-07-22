@@ -13,6 +13,7 @@
 
 use crate::config::Profile;
 use crate::util::suppress_stderr;
+#[cfg(feature = "audio")]
 use cpal::traits::HostTrait;
 use crossterm::event::{self as ct_event, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
@@ -21,7 +22,6 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
-use std::time::{Duration, Instant};
 
 /// Which step of the setup wizard we're on.
 enum Phase {
@@ -67,8 +67,14 @@ struct SetupApp {
 
 impl SetupApp {
     fn new() -> Self {
+        #[cfg(feature = "audio")]
         let input_devices = suppress_stderr(|| list_devices(true));
+        #[cfg(not(feature = "audio"))]
+        let input_devices = vec!["System Default".to_string()];
+        #[cfg(feature = "audio")]
         let output_devices = suppress_stderr(|| list_devices(false));
+        #[cfg(not(feature = "audio"))]
+        let output_devices = vec!["System Default".to_string()];
         let profile = Profile::load().unwrap_or_default();
 
         let missing_deps = check_dependencies();
@@ -136,11 +142,34 @@ fn check_dependencies() -> Vec<String> {
         if !pkg_config_exists("libpulse") {
             missing.push("libpulse-dev (PulseAudio headers)".into());
         }
-        // nokhwa's V4L2 backend needs libclang for bindgen at build time
-        if !command_exists("libclang")
-            && !std::path::Path::new("/usr/lib/x86_64-linux-gnu/libclang.so").exists()
-        {
+        // nokhwa's V4L2 backend needs libclang for bindgen at build time.
+        // Check multiple common locations (versioned LLVM paths, etc.).
+        let has_libclang = command_exists("libclang")
+            || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libclang.so").exists()
+            || std::path::Path::new("/usr/lib/aarch64-linux-gnu/libclang.so").exists()
+            || std::fs::read_dir("/usr/lib/llvm-")
+                .map(|mut d| {
+                    d.any(|e| {
+                        e.ok()
+                            .map_or(false, |f| f.path().join("lib/libclang.so").exists())
+                    })
+                })
+                .unwrap_or(false)
+            || std::fs::read_dir("/usr/lib")
+                .map(|mut d| {
+                    d.any(|e| {
+                        e.ok().map_or(false, |f| {
+                            f.file_name().to_string_lossy().starts_with("libclang.so")
+                        })
+                    })
+                })
+                .unwrap_or(false);
+        if !has_libclang {
             missing.push("libclang-dev (needed by nokhwa/V4L2 bindgen)".into());
+        }
+        // nokhwa also needs libv4l for the V4L2 userspace library.
+        if !pkg_config_exists("libv4l2") && !pkg_config_exists("v4l-utils") {
+            missing.push("libv4l-dev (needed by nokhwa/V4L2)".into());
         }
         // WSL2 needs the ALSA->PulseAudio bridge for audio to work
         if std::path::Path::new("/mnt/wslg").exists()
@@ -181,7 +210,7 @@ fn install_command() -> Option<String> {
 
     if command_exists("apt-get") {
         Some(format!(
-            "sudo apt-get update && sudo apt-get install -y build-essential pkg-config libasound2-dev libpulse-dev libclang-dev{}",
+            "sudo apt-get update && sudo apt-get install -y build-essential pkg-config libasound2-dev libpulse-dev libclang-dev libv4l-dev{}",
             wsl_audio_suffix
         ))
     } else if command_exists("dnf") {
@@ -227,7 +256,40 @@ fn run_shell_command(
     success
 }
 
+/// Build the `cargo install` command to rebuild with all features.
+fn rebuild_command() -> String {
+    // Detect if we were installed from a git source.
+    let git_dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+        .join(".cargo/git/db");
+
+    if let Ok(entries) = std::fs::read_dir(&git_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("starling") {
+                // Extract the git URL from the bare repo.
+                let output = std::process::Command::new("git")
+                    .args(["config", "--get", "remote.origin.url"])
+                    .current_dir(entry.path())
+                    .output();
+                if let Ok(out) = output {
+                    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !url.is_empty() {
+                        return format!(
+                            "cargo install --git {} --features audio,video --force",
+                            url
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: try crates.io
+    "cargo install Starling-TUI --features audio,video --force".into()
+}
+
 /// Enumerate audio devices (input or output), prefixed with "System Default".
+#[cfg(feature = "audio")]
 fn list_devices(is_input: bool) -> Vec<String> {
     let host = cpal::default_host();
     // Collect into a Vec so the input and output iterator types unify.
@@ -255,7 +317,6 @@ pub fn run_setup(
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<Option<Profile>> {
     let mut app = SetupApp::new();
-    let mut last_key: Option<(KeyCode, Instant)> = None;
 
     loop {
         term.draw(|f| draw(f, &app))?;
@@ -267,12 +328,6 @@ pub fn run_setup(
             if k.kind != KeyEventKind::Press {
                 continue;
             }
-            if let Some((p, t)) = last_key {
-                if p == k.code && t.elapsed() < Duration::from_millis(30) {
-                    continue;
-                }
-            }
-            last_key = Some((k.code, Instant::now()));
             match app.phase {
                 Phase::DependencyCheck => match k.code {
                     KeyCode::Enter => {
@@ -280,7 +335,18 @@ pub fn run_setup(
                             let success = run_shell_command(term, cmd);
                             if success {
                                 app.missing_deps.clear();
-                                app.install_status = "Dependencies installed successfully.".into();
+                                app.install_status = "Dependencies installed. Rebuilding...".into();
+                                term.draw(|f| draw(f, &app))?;
+
+                                // Rebuild with all features enabled.
+                                let rebuild = run_shell_command(term, &rebuild_command());
+                                if rebuild {
+                                    app.install_status =
+                                        "Installed! Restart starling to use audio/video.".into();
+                                } else {
+                                    app.install_status =
+                                        "Deps installed but rebuild failed. Run: cargo install Starling-TUI --features audio,video --force".into();
+                                }
                             } else {
                                 app.install_status =
                                     "Installation failed. See output above.".into();

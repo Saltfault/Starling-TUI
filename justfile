@@ -11,7 +11,7 @@ install-deps:
     @if command -v apt-get >/dev/null 2>&1; then \
         echo "Detected Debian/Ubuntu/WSL — installing..."; \
         sudo apt-get update && sudo apt-get install -y \
-            build-essential pkg-config libasound2-dev libpulse-dev libclang-dev; \
+            build-essential pkg-config libasound2-dev libpulse-dev libclang-dev libv4l-dev; \
         if [ -d /mnt/wslg ] && [ ! -f /etc/asound.conf ]; then \
             echo "Setting up WSL2 audio bridge..."; \
             sudo apt-get install -y libasound2-plugins; \
@@ -62,9 +62,15 @@ check-deps:
             echo "✗ pkg-config not found"
             missing=1
         fi
-        if ! ls /usr/lib/x86_64-linux-gnu/libclang.so* >/dev/null 2>&1 && ! ls /usr/lib/llvm-*/lib/libclang.so* >/dev/null 2>&1; then
+        if ! ls /usr/lib/x86_64-linux-gnu/libclang.so* >/dev/null 2>&1 && ! ls /usr/lib/llvm-*/lib/libclang.so* >/dev/null 2>&1 && ! ls /usr/lib/aarch64-linux-gnu/libclang.so* >/dev/null 2>&1; then
             echo "✗ libclang not found (install libclang-dev for nokhwa/V4L2)"
             missing=1
+        fi
+        if command -v pkg-config >/dev/null 2>&1; then
+            if ! pkg-config --exists libv4l2 2>/dev/null && ! pkg-config --exists v4l-utils 2>/dev/null; then
+                echo "✗ libv4l not found (install libv4l-dev for nokhwa/V4L2)"
+                missing=1
+            fi
         fi
         # WSL2 audio bridge check
         if [ -d /mnt/wslg ] && [ ! -f /etc/asound.conf ]; then
@@ -84,7 +90,8 @@ check-deps:
 build: check-deps
     cargo build
 
-setup:
+setup: install-deps
+    cargo build
     cargo run -- setup
 
 run: check-deps

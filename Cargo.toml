@@ -3,12 +3,17 @@ name = "Starling-TUI"
 version = "0.3.15"
 edition = "2024"
 
+[features]
+default = []
+audio = ["dep:cpal", "dep:ringbuf"]
+video = ["dep:nokhwa"]
+
 [dependencies]
 anyhow = "1.0.104"
 bytes = "1.12.1"
 chacha20poly1305 = "0.11"
 chrono = { version = "0.4.45", features = ["serde"] }
-cpal = "0.18.1"
+cpal = { version = "0.18.1", optional = true }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 data-encoding = "2.11.0"
 flate2 = "1.1"
@@ -19,7 +24,7 @@ iroh-gossip = "0.101.0"
 n0-future = "0.3.2"
 postcard = { version = "1.1.3", features = ["use-std"] }
 ratatui = "0.30.2"
-ringbuf = "0.5.1"
+ringbuf = { version = "0.5.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.0"
 tokio = { version = "1.53.1", features = ["full"] }
@@ -27,17 +32,17 @@ uuid = { version = "1.24.0", features = ["v4", "serde"] }
 
 # Linux: cpal PulseAudio backend, libc, nokhwa (V4L2 — needs libclang-dev)
 [target.'cfg(target_os = "linux")'.dependencies]
-cpal = { version = "0.18.1", features = ["pulseaudio"] }
+cpal = { version = "0.18.1", features = ["pulseaudio"], optional = true }
 libc = "0.2"
-nokhwa = { version = "0.10.11", features = ["input-native"] }
+nokhwa = { version = "0.10.11", features = ["input-native"], optional = true }
 
 # Windows: nokhwa (Media Foundation — no extra deps needed)
 [target.'cfg(target_os = "windows")'.dependencies]
-nokhwa = { version = "0.10.11", features = ["input-native"] }
+nokhwa = { version = "0.10.11", features = ["input-native"], optional = true }
 
 # macOS: nokhwa (AVFoundation — no extra deps needed)
 [target.'cfg(target_os = "macos")'.dependencies]
-nokhwa = { version = "0.10.11", features = ["input-native"] }
+nokhwa = { version = "0.10.11", features = ["input-native"], optional = true }
 
 # Other Unix (BSDs): libc for stderr suppression
 [target.'cfg(all(unix, not(target_os = "linux"), not(target_os = "macos")))'.dependencies]

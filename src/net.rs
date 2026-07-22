@@ -123,12 +123,14 @@ pub async fn run(
 
     let _router = Router::builder(endpoint.clone())
         .accept(GOSSIP_ALPN, gossip.clone())
+        #[cfg(feature = "audio")]
         .accept(
             crate::call::VOICE_ALPN,
             VoiceProto {
                 evt_tx: evt_tx.clone(),
             },
         )
+        #[cfg(feature = "video")]
         .accept(
             crate::call::VIDEO_ALPN,
             VideoProto {
@@ -153,7 +155,11 @@ pub async fn run(
         });
     }
 
+    #[cfg(feature = "audio")]
+    #[allow(unused)]
     let mut _mic_stream: Option<cpal::Stream> = None;
+    #[cfg(feature = "video")]
+    #[allow(unused)]
     let mut _cam_thread: Option<std::thread::JoinHandle<()>> = None;
 
     loop {
@@ -167,10 +173,10 @@ pub async fn run(
                         ts: chrono::Utc::now().timestamp_millis(),
                     };
                     broadcast_payload(&sender, &crypto, &GossipPayload::Chat(msg.clone())).await?;
-                    let _ = evt_tx.send(AppEvent::Message(msg.clone()));
                     history.lock().unwrap().push(msg);
                 }
 
+                #[cfg(feature = "audio")]
                 Command::StartCall(addr) => {
                     let (mic_tx, mic_rx) = mpsc::unbounded_channel();
                     _mic_stream = Some(crate::voice::start_capture(
@@ -185,6 +191,7 @@ pub async fn run(
                     }).await?;
                 }
 
+                #[cfg(feature = "audio")]
                 Command::HangUp => {
                     _mic_stream = None;
                     broadcast_payload(&sender, &crypto, &GossipPayload::Status {
@@ -192,6 +199,7 @@ pub async fn run(
                     }).await?;
                 }
 
+                #[cfg(feature = "video")]
                 Command::StartVideo(addr) => {
                     let (cam_tx, cam_rx) = mpsc::unbounded_channel();
                     _cam_thread = Some(crate::video::start_camera(cam_tx)?);
@@ -200,6 +208,7 @@ pub async fn run(
                         let _ = crate::call::place_video(ep, addr, cam_rx).await;
                     });
                 }
+                #[cfg(feature = "video")]
                 Command::StopVideo => { _cam_thread = None; }
 
                 Command::Quit => break,
@@ -255,6 +264,7 @@ pub async fn run(
 }
 
 /// Protocol handler for incoming voice call connections.
+#[cfg(feature = "audio")]
 #[derive(Debug)]
 struct VoiceProto {
     evt_tx: mpsc::UnboundedSender<AppEvent>,
@@ -268,6 +278,7 @@ impl iroh::protocol::ProtocolHandler for VoiceProto {
 }
 
 /// Protocol handler for incoming video call connections.
+#[cfg(feature = "video")]
 #[derive(Debug)]
 struct VideoProto {
     evt_tx: mpsc::UnboundedSender<AppEvent>,

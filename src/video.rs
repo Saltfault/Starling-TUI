@@ -1,12 +1,14 @@
 //! Webcam capture and half-block terminal rendering.
 
 use image::{DynamicImage, ImageFormat, RgbImage, imageops::FilterType};
+#[cfg(feature = "video")]
 use nokhwa::{
     Camera,
     pixel_format::RgbFormat,
     utils::{CameraIndex, RequestedFormat, RequestedFormatType},
 };
 use ratatui::prelude::*;
+#[cfg(feature = "video")]
 use tokio::sync::mpsc;
 
 /// Convert an RGB image to terminal lines using half-block characters:
@@ -36,6 +38,7 @@ pub fn frame_to_lines(img: &RgbImage, cols: u16, rows: u16) -> Vec<Line<'static>
 /// Start the webcam on a background thread, sending JPEG frames to `tx`.
 /// Returns the thread handle so the caller can stop it by dropping the
 /// channel (which causes `tx.send` to fail and the thread to exit).
+#[cfg(feature = "video")]
 pub fn start_camera(
     tx: mpsc::UnboundedSender<Vec<u8>>,
 ) -> anyhow::Result<std::thread::JoinHandle<()>> {

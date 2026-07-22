@@ -6,24 +6,30 @@ mod crypto;
 mod event;
 mod logger;
 mod net;
+#[cfg(feature = "audio")]
 mod opus_ffi;
+#[cfg(feature = "audio")]
 mod playback;
 mod setup;
 mod sync;
 mod ui;
 mod util;
 mod video;
+#[cfg(feature = "audio")]
 mod voice;
 
+#[allow(unused_imports)]
 use crossterm::{
     event::{self as ct_event, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::*,
 };
 use event::{AppEvent, Command};
+#[allow(unused_imports)]
 use std::sync::Arc;
+#[allow(unused_imports)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use ui::App;
 
@@ -86,12 +92,15 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let name = profile.name;
+    #[allow(unused)]
     let input_device = profile.input_device;
+    #[allow(unused)]
     let output_device = profile.output_device;
     app.name = name.clone();
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel::<AppEvent>();
+    #[allow(unused)]
     let muted_flag = Arc::new(AtomicBool::new(false));
 
     tokio::spawn(net::run(
@@ -103,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
         input_device,
     ));
 
+    #[cfg(feature = "audio")]
     let mut playback = match playback::Playback::new(output_device.as_deref()) {
         Ok(p) => Some(p),
         Err(e) => {
@@ -110,10 +120,6 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-
-    // Track the last key event to deduplicate on Windows (where crossterm
-    // can emit two Press events for a single key: key-down + character).
-    let mut last_key: Option<(KeyCode, Instant)> = None;
 
     loop {
         term.draw(|f| ui::draw(f, &app))?;
@@ -149,11 +155,13 @@ async fn main() -> anyhow::Result<()> {
                         app.node_id = Some(code);
                     }
                 }
+                #[cfg(feature = "audio")]
                 AppEvent::VoiceFrame(bytes) => {
                     if let Some(p) = &mut playback {
                         p.push_opus(&bytes);
                     }
                 }
+                #[cfg(feature = "video")]
                 AppEvent::VideoFrame(jpeg) => {
                     if let Ok(img) = image::load_from_memory(&jpeg) {
                         app.video_frame = Some(img.to_rgb8());
@@ -177,15 +185,6 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
-                // Deduplicate: skip if the same key code arrives within
-                // 30ms (Windows can emit two Press events per key press).
-                if let Some((prev_code, prev_time)) = &last_key {
-                    if *prev_code == k.code && prev_time.elapsed() < Duration::from_millis(30) {
-                        continue;
-                    }
-                }
-                last_key = Some((k.code, Instant::now()));
-
                 if app.show_invite {
                     match k.code {
                         KeyCode::Char('i') | KeyCode::Esc => {
@@ -206,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
                         app.show_invite = true;
                     }
 
+                    #[cfg(feature = "audio")]
                     KeyCode::Char('k') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         if app.in_call {
                             let _ = cmd_tx.send(Command::HangUp);
@@ -216,11 +216,13 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
 
+                    #[cfg(feature = "audio")]
                     KeyCode::Char('m') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.muted = !app.muted;
                         muted_flag.store(app.muted, Ordering::Relaxed);
                     }
 
+                    #[cfg(feature = "video")]
                     KeyCode::Char('v') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.show_video = !app.show_video;
                         match (app.show_video, app.selected_peer_addr()) {

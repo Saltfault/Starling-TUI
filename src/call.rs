@@ -11,13 +11,16 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 /// ALPN string for the voice protocol.
+#[cfg(feature = "audio")]
 pub const VOICE_ALPN: &[u8] = b"starling/voice/0";
 
 /// ALPN string for the video protocol.
+#[cfg(feature = "video")]
 pub const VIDEO_ALPN: &[u8] = b"starling/video/0";
 
 /// Place an outgoing voice call: connect to `peer` and stream mic frames as
 /// QUIC datagrams until the mic channel closes (hang-up).
+#[cfg(feature = "audio")]
 pub async fn place_call(
     endpoint: Endpoint,
     peer: EndpointAddr,
@@ -31,6 +34,7 @@ pub async fn place_call(
 }
 
 /// Handle an incoming voice call: forward datagrams to the UI.
+#[cfg(feature = "audio")]
 pub async fn handle_incoming(
     conn: Connection,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
@@ -44,6 +48,7 @@ pub async fn handle_incoming(
 /// Place an outgoing video call: connect to `peer` and stream JPEG frames
 /// over a unidirectional QUIC stream. Each frame is prefixed with a u32
 /// length (big-endian).
+#[cfg(feature = "video")]
 pub async fn place_video(
     endpoint: Endpoint,
     peer: EndpointAddr,
@@ -60,6 +65,7 @@ pub async fn place_video(
 
 /// Handle an incoming video call: read JPEG frames from a unidirectional
 /// QUIC stream and forward them to the UI.
+#[cfg(feature = "video")]
 pub async fn recv_video(
     conn: Connection,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
