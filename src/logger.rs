@@ -79,6 +79,7 @@ fn log(level: &str, msg: &str) {
 }
 
 /// Log an error message with a timestamp.
+#[allow(dead_code)]
 pub fn error(msg: &str) {
     log("ERROR: ", msg);
 }
