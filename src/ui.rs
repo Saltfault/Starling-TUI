@@ -23,8 +23,8 @@ pub struct App {
     pub selected_peer: usize,
     /// Room code shown in the header (e.g. "BIRD00CCFF").
     pub invite: Option<String>,
-    /// Full node ID — the invite ticket for joining. Shown in a popup
-    /// when the user presses `i`.
+    /// Full node ID — the invite ticket. Shown in a popup when the user
+    /// presses `i`.
     pub node_id: Option<String>,
     /// Whether the invite popup is currently shown.
     pub show_invite: bool,
@@ -35,8 +35,9 @@ pub struct App {
 }
 
 impl App {
-    pub fn peer_count(&self) -> usize {
-        self.peers.len()
+    /// Total bird count including ourselves.
+    pub fn bird_count(&self) -> usize {
+        self.peers.len() + 1
     }
 
     pub fn select_next_peer(&mut self) {
@@ -103,29 +104,33 @@ pub fn draw(f: &mut Frame, app: &App) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" #global . {} birds ", app.peer_count())),
+                .title(format!(" #global . {} birds ", app.bird_count())),
         ),
         middle[0],
     );
 
-    // Birds panel
-    let peer_items: Vec<ListItem> = app
-        .peers
-        .iter()
-        .enumerate()
-        .map(|(i, id)| {
-            let prefix = if i == app.selected_peer { "> " } else { "  " };
-            ListItem::new(format!("{prefix}{}", id.fmt_short()))
-        })
-        .collect();
+    // Birds panel — shows the local user first, then remote peers.
+    let mut peer_items: Vec<ListItem> = Vec::new();
 
-    let peer_list = if peer_items.is_empty() {
-        List::new(vec![ListItem::new("  no birds yet")])
-            .block(Block::default().borders(Borders::ALL).title(" birds "))
-    } else {
-        List::new(peer_items).block(Block::default().borders(Borders::ALL).title(" birds "))
-    };
-    f.render_widget(peer_list, middle[1]);
+    // Local user (always first, highlighted differently).
+    peer_items.push(ListItem::new(Line::from(vec![
+        Span::styled("  ", Style::new()),
+        Span::styled(
+            format!("{} (you)", app.name),
+            Style::new().fg(Color::Yellow).bold(),
+        ),
+    ])));
+
+    // Remote peers.
+    for (i, id) in app.peers.iter().enumerate() {
+        let prefix = if i == app.selected_peer { "> " } else { "  " };
+        peer_items.push(ListItem::new(format!("{prefix}{}", id.fmt_short())));
+    }
+
+    f.render_widget(
+        List::new(peer_items).block(Block::default().borders(Borders::ALL).title(" birds ")),
+        middle[1],
+    );
 
     // ── Status ────────────────────────────────────────────────────────
     let status = if app.in_call {
@@ -182,7 +187,6 @@ fn draw_invite_popup(f: &mut Frame, app: &App) {
 
     let node_id = app.node_id.as_deref().unwrap_or("waiting for endpoint...");
 
-    // Split the 64-char node ID into two lines for readability.
     let (line1, line2) = if node_id.len() > 32 {
         (&node_id[..32], &node_id[32..])
     } else {

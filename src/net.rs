@@ -38,15 +38,6 @@ pub fn room_code_from_node_id(node_id: &EndpointId) -> String {
 }
 
 /// The main network loop. Spawned once by `main`.
-///
-/// * `bootstrap` — opener's node ID for joiners (empty for the opener).
-///   The room code, gossip topic, and E2E key are all derived from the
-///   opener's node ID. For the opener, that's our own node ID (after binding).
-/// * `cmd_rx` — receives commands from the UI.
-/// * `evt_tx` — sends events to the UI.
-/// * `muted` — shared mute flag, passed through to the mic capture callback.
-/// * `name` — the bird's display name, used as the author on chat messages.
-/// * `input_device` — preferred microphone device name (from profile).
 pub async fn run(
     bootstrap: Vec<EndpointId>,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
@@ -55,19 +46,21 @@ pub async fn run(
     name: String,
     input_device: Option<String>,
 ) -> anyhow::Result<()> {
+    crate::logger::warn("binding endpoint...");
+
     let endpoint = Endpoint::bind(presets::N0).await?;
     endpoint.online().await;
 
     let my_node_id = endpoint.addr().id;
-
-    // The "opener" is whoever opened the flock. For joiners, that's
-    // bootstrap[0]. For openers, that's ourselves.
     let opener_id = bootstrap.first().copied().unwrap_or(my_node_id);
-
-    // Derive room code, topic, and E2E key from the opener's node ID.
     let room_code = room_code_from_node_id(&opener_id);
     let topic = topic_for(&format!("starling/flock/{room_code}"));
     let crypto = FlockCrypto::from_room_code(&room_code);
+
+    crate::logger::warn(&format!(
+        "endpoint bound: node_id={} room_code={}",
+        my_node_id, room_code
+    ));
 
     // Send our node ID to the UI (this is the invite ticket for openers).
     let _ = evt_tx.send(AppEvent::Ticket(my_node_id.to_string()));
@@ -88,6 +81,8 @@ pub async fn run(
     // so it returns immediately. Bootstrap peers are connected in the
     // background; NeighborUp events fire when connections establish.
     let (sender, mut receiver) = gossip.subscribe(topic, bootstrap).await?.split();
+
+    crate::logger::warn("subscribed to gossip topic");
 
     let mut _mic_stream: Option<cpal::Stream> = None;
 
@@ -133,9 +128,11 @@ pub async fn run(
                         }
                     }
                     Ok(Event::NeighborUp(id)) => {
+                        crate::logger::warn(&format!("neighbor up: {}", id));
                         let _ = evt_tx.send(AppEvent::PeerConnected(id));
                     }
                     Ok(Event::NeighborDown(id)) => {
+                        crate::logger::warn(&format!("neighbor down: {}", id));
                         let _ = evt_tx.send(AppEvent::PeerDisconnected(id));
                     }
                     Ok(_) => {}
