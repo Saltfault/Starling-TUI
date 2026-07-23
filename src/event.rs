@@ -14,6 +14,9 @@ pub enum Command {
     JoinFlock {
         code: String,
     },
+    JoinRoost {
+        code: String,
+    },
     /// Start a voice call with a peer.
     StartCall(EndpointAddr),
     /// End the current call.
@@ -32,6 +35,8 @@ pub enum AppEvent {
     Message { flock: String, msg: ChatMessage },
     /// Successfully joined a flock.
     JoinedFlock { code: String },
+    /// Successfully joined a roost.
+    JoinedRoost { code: String, channels: Vec<String> },
     /// A gossip neighbor came online.
     PeerConnected(EndpointId),
     /// A gossip neighbor went offline.

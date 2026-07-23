@@ -9,6 +9,7 @@ use crate::crypto::FlockCrypto;
 #[cfg(feature = "audio")]
 use crate::event::BirdStatus;
 use crate::event::{AppEvent, ChatMessage, Command, GossipPayload};
+use crate::roost::RoostState;
 #[cfg(any(feature = "audio", feature = "video"))]
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointId, endpoint::presets, protocol::Router};
@@ -228,6 +229,17 @@ pub async fn run(
                 }
             }
 
+            Command::JoinRoost { code } => {
+                if let Some(opener) = decode_node_id(&code) {
+                    let _ = join_roost(
+                        &gossip,
+                        opener,
+                        evt_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+
             #[cfg(feature = "audio")]
             Command::StartCall(addr) => {
                 let (mic_tx, mic_rx) = mpsc::unbounded_channel();
@@ -381,5 +393,39 @@ async fn join_flock(
 
     flocks.insert(code.clone(), FlockHandle { sender, crypto });
     let _ = evt_tx.send(AppEvent::JoinedFlock { code });
+    Ok(())
+}
+
+async fn join_roost(
+    gossip: &Gossip,
+    opener: EndpointId,
+    evt_tx: mpsc::UnboundedSender<AppEvent>,
+) -> anyhow::Result<()> {
+    let code = encode_node_id(&opener);
+    let topic = topic_for(&format!("starling/roost/{code}"));
+    let (_sender, mut receiver) = gossip.subscribe(topic, vec![opener]).await?.split();
+
+    let tx = evt_tx.clone();
+    let rx_code = code.clone();
+    tokio::spawn(async move {
+        while let Some(event) = receiver.next().await {
+            match event {
+                Ok(Event::Received(msg)) => {
+                    if let Ok(state) = postcard::from_bytes::<RoostState>(&msg.content) {
+                        let _ = tx.send(AppEvent::JoinedRoost {
+                            code: rx_code.clone(),
+                            channels: state.channels,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let _ = evt_tx.send(AppEvent::JoinedRoost {
+        code,
+        channels: vec![],
+    });
     Ok(())
 }

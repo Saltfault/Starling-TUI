@@ -17,14 +17,24 @@ pub struct FlockView {
     pub unread: usize,
 }
 
+/// A roost (server) with multiple channels.
+#[derive(Default)]
+pub struct RoostView {
+    pub code: String,
+    pub channels: Vec<FlockView>,
+    pub unread: usize,
+}
+
 #[derive(Default)]
 pub struct App {
     /// Display name shown to other peers.
     pub name: String,
     /// All joined flocks.
     pub flocks: Vec<FlockView>,
-    /// Index into `flocks` of the currently selected flock.
-    pub current_flock: usize,
+    /// All joined roosts.
+    pub roosts: Vec<RoostView>,
+    /// Flat index into the combined list (flocks first, then roosts).
+    pub current_item: usize,
     /// Text currently being typed in the message box.
     pub input: String,
     /// Connected remote peers, by EndpointId.
@@ -38,10 +48,14 @@ pub struct App {
     pub show_invite: bool,
     /// Whether the create-room confirmation popup is shown.
     pub show_create_room: bool,
-    /// Whether the join-room popup is shown.
+    /// Whether the join-flock popup is shown.
     pub show_join_room: bool,
-    /// Text input for the join-room code.
+    /// Text input for the join-flock code.
     pub join_input: String,
+    /// Whether the join-roost popup is shown.
+    pub show_join_roost: bool,
+    /// Text input for the join-roost code.
+    pub join_roost_input: String,
     /// Whether an active voice call is in progress.
     #[allow(dead_code)]
     pub in_call: bool,
@@ -61,9 +75,43 @@ pub struct App {
 }
 
 impl App {
-    /// Return a mutable reference to the currently active flock view.
+    /// Total items in the combined rail (flocks + roosts).
+    pub fn rail_len(&self) -> usize {
+        self.flocks.len() + self.roosts.len()
+    }
+
+    /// Return a mutable reference to the currently active flock view,
+    /// or None if a roost is selected.
     pub fn active(&mut self) -> Option<&mut FlockView> {
-        self.flocks.get_mut(self.current_flock)
+        if self.current_item < self.flocks.len() {
+            self.flocks.get_mut(self.current_item)
+        } else {
+            None
+        }
+    }
+
+    /// Return the code of the currently selected item (flock or roost).
+    pub fn active_code(&self) -> Option<&str> {
+        let i = self.current_item;
+        if i < self.flocks.len() {
+            self.flocks.get(i).map(|fv| fv.code.as_str())
+        } else {
+            self.roosts
+                .get(i - self.flocks.len())
+                .map(|rv| rv.code.as_str())
+        }
+    }
+
+    /// Return the roost code if a roost is selected.
+    pub fn active_roost(&self) -> Option<&str> {
+        let i = self.current_item;
+        if i >= self.flocks.len() {
+            self.roosts
+                .get(i - self.flocks.len())
+                .map(|rv| rv.code.as_str())
+        } else {
+            None
+        }
     }
 
     /// Total birds in the room: the local user plus connected peers.
@@ -104,27 +152,28 @@ pub fn draw(f: &mut Frame, app: &App) {
     ])
     .split(f.area());
 
-    // ── Header: current flock's room code with color swatches ───────
+    // ── Header: current room code with color swatches ───────────────
     let header = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(chunks[0]);
 
-    let flock_code = app
-        .flocks
-        .get(app.current_flock)
-        .map(|fv| fv.code.as_str())
-        .unwrap_or("");
-    let swatch_spans = color_swatches(flock_code);
+    let active_code = app.active_code().unwrap_or("");
+    let swatch_spans = color_swatches(active_code);
     if !swatch_spans.is_empty() {
         f.render_widget(Line::from(swatch_spans), header[0]);
     }
 
-    if !flock_code.is_empty() {
+    if !active_code.is_empty() {
+        let prefix = if app.active_roost().is_some() {
+            " roost: "
+        } else {
+            " "
+        };
         f.render_widget(
-            Paragraph::new(format!(" {}", flock_code)).style(Style::new().fg(Color::DarkGray)),
+            Paragraph::new(format!("{prefix}{active_code}")).style(Style::new().fg(Color::DarkGray)),
             header[1],
         );
     }
 
-    // ── Flock rail + Messages + Birds panel ────────────────────────────
+    // ── Flock rail + Roost rail + Messages + Birds panel ──────────────
     let middle = Layout::horizontal([
         Constraint::Length(14),
         Constraint::Min(1),
@@ -132,13 +181,20 @@ pub fn draw(f: &mut Frame, app: &App) {
     ])
     .split(chunks[1]);
 
-    // ── Flock rail (left) ────────────────────────────────────────────
-    let rail_items: Vec<ListItem> = app
+    // ── Rail: split vertically into flocks (top) and roosts (bottom) ─
+    let rail_split = Layout::vertical([
+        Constraint::Ratio(1, 2),
+        Constraint::Ratio(1, 2),
+    ])
+    .split(middle[0]);
+
+    // ── Flocks (top half) ──────────────────────────────────────────
+    let flock_items: Vec<ListItem> = app
         .flocks
         .iter()
         .enumerate()
         .map(|(i, fv)| {
-            let mark = if i == app.current_flock { "> " } else { "  " };
+            let mark = if i == app.current_item { "> " } else { "  " };
             let unread = if fv.unread > 0 {
                 format!(" ({})", fv.unread)
             } else {
@@ -151,73 +207,122 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     let flock_count = app.flocks.len();
     f.render_widget(
-        List::new(rail_items).block(
+        List::new(flock_items).block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" flocks ({flock_count}) ")),
         ),
-        middle[0],
+        rail_split[0],
     );
 
-    // ── Messages (centre) ────────────────────────────────────────────
-    let active_msgs: &[ChatMessage] = app
-        .flocks
-        .get(app.current_flock)
-        .map(|fv| fv.messages.as_slice())
-        .unwrap_or(&[]);
-
-    let items: Vec<ListItem> = active_msgs
+    // ── Roosts (bottom half) ───────────────────────────────────────
+    let roost_items: Vec<ListItem> = app
+        .roosts
         .iter()
-        .map(|m| {
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("{}: ", m.author),
-                    Style::new().fg(Color::Rgb(244, 138, 82)).bold(),
-                ),
-                Span::raw(&m.body),
-            ]))
+        .enumerate()
+        .map(|(i, rv)| {
+            let idx = app.flocks.len() + i;
+            let mark = if idx == app.current_item { "> " } else { "  " };
+            let unread = if rv.unread > 0 {
+                format!(" ({})", rv.unread)
+            } else {
+                String::new()
+            };
+            let label = &rv.code[..10.min(rv.code.len())];
+            ListItem::new(format!("{mark}{label}{unread}"))
         })
         .collect();
 
-    let flock_label = app
-        .flocks
-        .get(app.current_flock)
-        .map(|fv| fv.code.as_str())
-        .unwrap_or("");
-
-    // When video is showing, split the message area into messages (60%)
-    // and video (40%). Otherwise the messages take the full width.
-    #[cfg(feature = "video")]
-    let msg_area = if app.show_video {
-        let panes = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(middle[1]);
-        if let Some(img) = &app.video_frame {
-            let inner = panes[1].inner(Margin {
-                vertical: 1,
-                horizontal: 1,
-            });
-            let lines = crate::video::frame_to_lines(img, inner.width, inner.height);
-            f.render_widget(
-                Block::default().borders(Borders::ALL).title(" video "),
-                panes[1],
-            );
-            f.render_widget(Paragraph::new(lines), inner);
-        }
-        panes[0]
-    } else {
-        middle[1]
-    };
-    #[cfg(not(feature = "video"))]
-    let msg_area = middle[1];
-
+    let roost_count = app.roosts.len();
     f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
-            " {} . {} birds ",
-            flock_label,
-            app.bird_count()
-        ))),
-        msg_area,
+        List::new(roost_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" roosts ({roost_count}) ")),
+        ),
+        rail_split[1],
     );
+
+    // ── Messages (centre) ────────────────────────────────────────────
+    let is_roost_selected = app.active_roost().is_some();
+    if is_roost_selected {
+        let roost = app.active_roost().unwrap_or("");
+        let lines = vec![
+            ListItem::new(Line::from(vec![
+                Span::styled("Roost: ", Style::new().fg(Color::Rgb(111, 174, 157))),
+                Span::raw(roost),
+            ])),
+            ListItem::new(Line::from(vec![
+                Span::styled("Channels: ", Style::new().fg(Color::Rgb(111, 174, 157))),
+                Span::raw("0"),
+            ])),
+        ];
+        f.render_widget(
+            List::new(lines).block(
+                Block::default().borders(Borders::ALL).title(format!(
+                    " {} . {} birds ",
+                    roost,
+                    app.bird_count()
+                )),
+            ),
+            middle[1],
+        );
+    } else {
+        let active_msgs: &[ChatMessage] = app
+            .flocks
+            .get(app.current_item)
+            .map(|fv| fv.messages.as_slice())
+            .unwrap_or(&[]);
+
+        let items: Vec<ListItem> = active_msgs
+            .iter()
+            .map(|m| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{}: ", m.author),
+                        Style::new().fg(Color::Rgb(244, 138, 82)).bold(),
+                    ),
+                    Span::raw(&m.body),
+                ]))
+            })
+            .collect();
+
+        let flock_label = app.active_code().unwrap_or("");
+
+        // When video is showing, split the message area into messages (60%)
+        // and video (40%). Otherwise the messages take the full width.
+        #[cfg(feature = "video")]
+        let msg_area = if app.show_video {
+            let panes = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(middle[1]);
+            if let Some(img) = &app.video_frame {
+                let inner = panes[1].inner(Margin {
+                    vertical: 1,
+                    horizontal: 1,
+                });
+                let lines = crate::video::frame_to_lines(img, inner.width, inner.height);
+                f.render_widget(
+                    Block::default().borders(Borders::ALL).title(" video "),
+                    panes[1],
+                );
+                f.render_widget(Paragraph::new(lines), inner);
+            }
+            panes[0]
+        } else {
+            middle[1]
+        };
+        #[cfg(not(feature = "video"))]
+        let msg_area = middle[1];
+
+        f.render_widget(
+            List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
+                " {} . {} birds ",
+                flock_label,
+                app.bird_count()
+            ))),
+            msg_area,
+        );
+    }
 
     // ── Birds panel (right) ──────────────────────────────────────────
     let mut peer_items: Vec<ListItem> = Vec::new();
@@ -246,14 +351,15 @@ pub fn draw(f: &mut Frame, app: &App) {
     );
 
     // ── Status ────────────────────────────────────────────────────────
-    let status = if app.flocks.is_empty() {
-        " Ctrl+N to create a room . Ctrl+J to join a room".into()
+    let total = app.rail_len();
+    let status = if total == 0 {
+        " Ctrl+N to create a room . Ctrl+J to join a flock . Ctrl+R to join a roost".into()
     } else if app.in_call {
-        let flock_info = if app.flocks.len() > 1 {
+        let nav = if total > 1 {
             format!(
-                " . Alt+Up/Down to switch ({}/{})",
-                app.current_flock + 1,
-                app.flocks.len()
+                " . Alt+Up/Down ({}/{})",
+                app.current_item + 1,
+                total
             )
         } else {
             String::new()
@@ -261,21 +367,21 @@ pub fn draw(f: &mut Frame, app: &App) {
         format!(
             " in call . {} . Ctrl+K to hang up{}",
             if app.muted { "muted" } else { "live" },
-            flock_info
+            nav
         )
     } else {
-        let flock_info = if app.flocks.len() > 1 {
+        let nav = if total > 1 {
             format!(
-                " . Alt+Up/Down to switch ({}/{})",
-                app.current_flock + 1,
-                app.flocks.len()
+                " . Alt+Up/Down ({}/{})",
+                app.current_item + 1,
+                total
             )
         } else {
             String::new()
         };
         format!(
             " Ctrl+K to call . Tab to cycle . Ctrl+M to mute . i = invite{}",
-            flock_info
+            nav
         )
     };
     f.render_widget(
@@ -297,6 +403,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_create_room_popup(f, app);
     } else if app.show_join_room {
         draw_join_room_popup(f, app);
+    } else if app.show_join_roost {
+        draw_join_roost_popup(f, app);
     }
 }
 
@@ -304,11 +412,7 @@ fn draw_invite_popup(f: &mut Frame, app: &App) {
     let area = f.area();
     f.render_widget(Clear, area);
 
-    let code = app
-        .flocks
-        .get(app.current_flock)
-        .map(|fv| fv.code.as_str())
-        .unwrap_or("");
+    let code = app.active_code().unwrap_or("");
     let swatch_spans = color_swatches(code);
 
     let swatch_line_len = swatch_spans.len();
@@ -439,6 +543,48 @@ fn draw_join_room_popup(f: &mut Frame, app: &App) {
     );
     f.render_widget(
         Paragraph::new(format!(" {}_", app.join_input)).style(Style::new().fg(Color::Yellow)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new(" Enter = join . Esc = cancel").style(Style::new().fg(Color::DarkGray)),
+        chunks[2],
+    );
+}
+
+fn draw_join_roost_popup(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let width = 60.min(area.width);
+    let height = 8.min(area.height);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default().borders(Borders::ALL).title(" Join Roost "),
+        popup,
+    );
+
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+
+    f.render_widget(
+        Paragraph::new("Enter the roost code:").style(Style::new().fg(Color::White)),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(format!(" {}_", app.join_roost_input)).style(Style::new().fg(Color::Yellow)),
         chunks[1],
     );
     f.render_widget(

@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use ui::{App, FlockView};
+use ui::{App, FlockView, RoostView};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -140,9 +140,8 @@ async fn main() -> anyhow::Result<()> {
             match ev {
                 AppEvent::Message { flock, msg } => {
                     let is_current = app
-                        .flocks
-                        .get(app.current_flock)
-                        .is_some_and(|fv| fv.code == flock);
+                        .active_code()
+                        .is_some_and(|code| code == flock);
                     if let Some(fv) = app.flocks.iter_mut().find(|fv| fv.code == flock) {
                         fv.messages.push(msg);
                         if !is_current {
@@ -154,6 +153,17 @@ async fn main() -> anyhow::Result<()> {
                     app.flocks.push(FlockView {
                         code,
                         messages: vec![],
+                        unread: 0,
+                    });
+                }
+                AppEvent::JoinedRoost { code, channels } => {
+                    app.roosts.push(RoostView {
+                        code,
+                        channels: channels.into_iter().map(|c| FlockView {
+                            code: c,
+                            messages: vec![],
+                            unread: 0,
+                        }).collect(),
                         unread: 0,
                     });
                 }
@@ -266,10 +276,35 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
+                if app.show_join_roost {
+                    match k.code {
+                        KeyCode::Enter if !app.join_roost_input.is_empty() => {
+                            let code = std::mem::take(&mut app.join_roost_input);
+                            let _ = cmd_tx.send(Command::JoinRoost {
+                                code: code.trim().into(),
+                            });
+                            app.show_join_roost = false;
+                        }
+                        KeyCode::Char(c) => app.join_roost_input.push(c),
+                        KeyCode::Backspace => {
+                            app.join_roost_input.pop();
+                        }
+                        KeyCode::Esc => {
+                            app.show_join_roost = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 match k.code {
                     KeyCode::Enter if !app.input.is_empty() => {
                         let text = std::mem::take(&mut app.input);
-                        if let Some(code) = text.strip_prefix("/join ") {
+                        if let Some(code) = text.strip_prefix("/join-roost ") {
+                            let _ = cmd_tx.send(Command::JoinRoost {
+                                code: code.trim().into(),
+                            });
+                        } else if let Some(code) = text.strip_prefix("/join ") {
                             let _ = cmd_tx.send(Command::JoinFlock {
                                 code: code.trim().into(),
                             });
@@ -282,12 +317,12 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     KeyCode::Up if k.modifiers.contains(KeyModifiers::ALT) => {
-                        let max = app.flocks.len().saturating_sub(1);
-                        app.current_flock = app.current_flock.saturating_sub(1).min(max);
+                        let max = app.rail_len().saturating_sub(1);
+                        app.current_item = app.current_item.saturating_sub(1).min(max);
                     }
                     KeyCode::Down if k.modifiers.contains(KeyModifiers::ALT) => {
-                        app.current_flock =
-                            (app.current_flock + 1).min(app.flocks.len().saturating_sub(1));
+                        app.current_item =
+                            (app.current_item + 1).min(app.rail_len().saturating_sub(1));
                     }
 
                     KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -297,9 +332,13 @@ async fn main() -> anyhow::Result<()> {
                         app.join_input.clear();
                         app.show_join_room = true;
                     }
+                    KeyCode::Char('r') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.join_roost_input.clear();
+                        app.show_join_roost = true;
+                    }
 
                     KeyCode::Char('i') => {
-                        app.show_invite = app.flocks.get(app.current_flock).is_some();
+                        app.show_invite = app.active_code().is_some();
                     }
 
                     #[cfg(feature = "audio")]
