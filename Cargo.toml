@@ -1,10 +1,10 @@
 [package]
 name = "Starling-TUI"
-version = "0.4.2"
-edition = "2024"
+version = "0.4.4"
+edition = "2026"
 
 [[bin]]
-name = "starling"
+name = "starling-tui"
 path = "src/main.rs"
 
 [features]
