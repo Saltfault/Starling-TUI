@@ -412,8 +412,9 @@ async fn join_roost(
             match event {
                 Ok(Event::Received(msg)) => {
                     if let Ok(state) = postcard::from_bytes::<RoostState>(&msg.content) {
-                        let _ = tx.send(AppEvent::JoinedRoost {
+                        let _ = tx.send(AppEvent::RoostUpdate {
                             code: rx_code.clone(),
+                            name: state.name,
                             channels: state.channels,
                         });
                     }
@@ -425,6 +426,7 @@ async fn join_roost(
 
     let _ = evt_tx.send(AppEvent::JoinedRoost {
         code,
+        name: String::new(),
         channels: vec![],
     });
     Ok(())

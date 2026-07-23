@@ -36,7 +36,9 @@ pub enum AppEvent {
     /// Successfully joined a flock.
     JoinedFlock { code: String },
     /// Successfully joined a roost.
-    JoinedRoost { code: String, channels: Vec<String> },
+    JoinedRoost { code: String, name: String, channels: Vec<String> },
+    /// Roost metadata updated (name, channels).
+    RoostUpdate { code: String, name: String, channels: Vec<String> },
     /// A gossip neighbor came online.
     PeerConnected(EndpointId),
     /// A gossip neighbor went offline.

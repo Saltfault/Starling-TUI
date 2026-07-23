@@ -21,6 +21,7 @@ pub struct FlockView {
 #[derive(Default)]
 pub struct RoostView {
     pub code: String,
+    pub name: String,
     pub channels: Vec<FlockView>,
     pub unread: usize,
 }
@@ -109,6 +110,22 @@ impl App {
             self.roosts
                 .get(i - self.flocks.len())
                 .map(|rv| rv.code.as_str())
+        } else {
+            None
+        }
+    }
+
+    /// Return the roost name if a roost is selected, or its code as fallback.
+    pub fn active_roost_name(&self) -> Option<String> {
+        let i = self.current_item;
+        if i >= self.flocks.len() {
+            self.roosts.get(i - self.flocks.len()).map(|rv| {
+                if rv.name.is_empty() {
+                    rv.code.clone()
+                } else {
+                    rv.name.clone()
+                }
+            })
         } else {
             None
         }
@@ -228,7 +245,11 @@ pub fn draw(f: &mut Frame, app: &App) {
             } else {
                 String::new()
             };
-            let label = &rv.code[..10.min(rv.code.len())];
+            let label = if rv.name.is_empty() {
+                &rv.code[..10.min(rv.code.len())]
+            } else {
+                &rv.name[..10.min(rv.name.len())]
+            };
             ListItem::new(format!("{mark}{label}{unread}"))
         })
         .collect();
@@ -246,11 +267,11 @@ pub fn draw(f: &mut Frame, app: &App) {
     // ── Messages (centre) ────────────────────────────────────────────
     let is_roost_selected = app.active_roost().is_some();
     if is_roost_selected {
-        let roost = app.active_roost().unwrap_or("");
+        let display = app.active_roost_name().unwrap_or_default();
         let lines = vec![
             ListItem::new(Line::from(vec![
                 Span::styled("Roost: ", Style::new().fg(Color::Rgb(111, 174, 157))),
-                Span::raw(roost),
+                Span::raw(&display),
             ])),
             ListItem::new(Line::from(vec![
                 Span::styled("Channels: ", Style::new().fg(Color::Rgb(111, 174, 157))),
@@ -261,7 +282,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             List::new(lines).block(
                 Block::default().borders(Borders::ALL).title(format!(
                     " {} . {} birds ",
-                    roost,
+                    display,
                     app.bird_count()
                 )),
             ),

@@ -21,7 +21,7 @@ mod voice;
 
 #[allow(unused_imports)]
 use crossterm::{
-    event::{self as ct_event, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self as ct_event, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind, MouseButton},
     execute,
     terminal::*,
 };
@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, ct_event::EnableMouseCapture)?;
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
 
@@ -156,9 +156,10 @@ async fn main() -> anyhow::Result<()> {
                         unread: 0,
                     });
                 }
-                AppEvent::JoinedRoost { code, channels } => {
+                AppEvent::JoinedRoost { code, name, channels } => {
                     app.roosts.push(RoostView {
                         code,
+                        name,
                         channels: channels.into_iter().map(|c| FlockView {
                             code: c,
                             messages: vec![],
@@ -166,6 +167,16 @@ async fn main() -> anyhow::Result<()> {
                         }).collect(),
                         unread: 0,
                     });
+                }
+                AppEvent::RoostUpdate { code, name, channels } => {
+                    if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
+                        rv.name = name;
+                        rv.channels = channels.into_iter().map(|c| FlockView {
+                            code: c,
+                            messages: vec![],
+                            unread: 0,
+                        }).collect();
+                    }
                 }
                 AppEvent::PeerConnected(id) => {
                     if !app.peers.contains(&id) {
@@ -264,7 +275,11 @@ async fn main() -> anyhow::Result<()> {
                             });
                             app.show_join_room = false;
                         }
-                        KeyCode::Char(c) => app.join_input.push(c),
+                        KeyCode::Char(c) => {
+                            if !c.is_control() {
+                                app.join_input.push(c);
+                            }
+                        }
                         KeyCode::Backspace => {
                             app.join_input.pop();
                         }
@@ -285,7 +300,11 @@ async fn main() -> anyhow::Result<()> {
                             });
                             app.show_join_roost = false;
                         }
-                        KeyCode::Char(c) => app.join_roost_input.push(c),
+                        KeyCode::Char(c) => {
+                            if !c.is_control() {
+                                app.join_roost_input.push(c);
+                            }
+                        }
                         KeyCode::Backspace => {
                             app.join_roost_input.pop();
                         }
@@ -375,7 +394,11 @@ async fn main() -> anyhow::Result<()> {
                         app.select_next_peer();
                     }
 
-                    KeyCode::Char(c) => app.input.push(c),
+                    KeyCode::Char(c) => {
+                        if !c.is_control() {
+                            app.input.push(c);
+                        }
+                    }
 
                     KeyCode::Backspace => {
                         app.input.pop();
@@ -383,19 +406,41 @@ async fn main() -> anyhow::Result<()> {
 
                     KeyCode::Esc => {
                         let _ = cmd_tx.send(Command::Quit);
-                        // Give the network task time to drain the Quit
-                        // command and shut down before the terminal exits.
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         break;
                     }
 
                     _ => {}
                 }
+            } else if let ct_event::Event::Mouse(m) = ct_event::read()? {
+                if m.kind == MouseEventKind::Down(MouseButton::Left) {
+                    let col = m.column;
+                    let row = m.row;
+                    if col < 14 {
+                        let (_, term_h) = crossterm::terminal::size()?;
+                        let middle_h = term_h.saturating_sub(6);
+                        let flocks_h = middle_h / 2;
+                        let flocks_top = 2u16;
+                        let roosts_top = flocks_top + flocks_h;
+
+                        if row >= flocks_top + 1 && row < roosts_top {
+                            let idx = (row - flocks_top - 1) as usize;
+                            if idx < app.flocks.len() {
+                                app.current_item = idx;
+                            }
+                        } else if row >= roosts_top + 1 && row < roosts_top + middle_h - flocks_h {
+                            let idx = (row - roosts_top - 1) as usize;
+                            if idx < app.roosts.len() {
+                                app.current_item = app.flocks.len() + idx;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
     disable_raw_mode()?;
-    execute!(term.backend_mut(), LeaveAlternateScreen)?;
+    execute!(term.backend_mut(), LeaveAlternateScreen, ct_event::DisableMouseCapture)?;
     Ok(())
 }
