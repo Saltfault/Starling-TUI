@@ -1,0 +1,93 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Extract version
+        id: version
+        run: echo "value=$(grep '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+      - name: Check version increased
+        id: check
+        run: |
+          latest_tag=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          current="v${{ steps.version.outputs.value }}"
+          if [ -z "$latest_tag" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$current" = "$latest_tag" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.skip == 'false'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Prepare binary
+        shell: bash
+        run: cp "target/${{ matrix.target }}/release/starling-tui" "starling-tui-${{ matrix.target }}"
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: starling-tui-${{ matrix.target }}
+          path: starling-tui-${{ matrix.target }}
+
+  release:
+    needs: [detect, build]
+    if: needs.detect.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.detect.outputs.version }}
+          files: artifacts/**/*
+          body: |
+            ## Which download?
+
+            - Windows (most PCs) ........... `starling-tui-x86_64-pc-windows-gnu.exe`
+            - Windows (older PCs) ......... `starling-tui-i686-pc-windows-gnu.exe`
+            - macOS (M1–M4) ............... `starling-tui-aarch64-apple-darwin`
+            - macOS (Intel) ............... `starling-tui-x86_64-apple-darwin`
+            - Linux (most) ............... `starling-tui-x86_64-unknown-linux-gnu`
+            - Linux (portable/Alpine) .... `starling-tui-x86_64-unknown-linux-musl`
+            - Linux (ARM64 / Pi 4+) ...... `starling-tui-aarch64-unknown-linux-gnu`
+            - Linux (ARMv7 / Pi 2–3) ..... `starling-tui-armv7-unknown-linux-gnueabihf`
+            - Linux (32-bit) ............. `starling-tui-i686-unknown-linux-gnu`

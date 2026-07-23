@@ -1,5 +1,3 @@
-//! UI state and rendering.
-
 use crate::event::{BirdStatus, ChatMessage};
 use image::RgbImage;
 use iroh::{EndpointAddr, EndpointId};
@@ -9,7 +7,6 @@ use ratatui::{
 };
 use std::collections::HashMap;
 
-/// A single flock (room) with its message list.
 #[derive(Default)]
 pub struct FlockView {
     pub code: String,
@@ -17,7 +14,6 @@ pub struct FlockView {
     pub unread: usize,
 }
 
-/// A roost (server) with multiple channels.
 #[derive(Default)]
 pub struct RoostView {
     pub code: String,
@@ -26,63 +22,55 @@ pub struct RoostView {
     pub unread: usize,
 }
 
+pub const MENU_ITEMS: &[&str] = &[
+    "Create Room",
+    "Join Flock",
+    "Join Roost",
+    "Create Roost",
+    "Invite",
+    "Toggle Mute",
+    "Toggle Video",
+    "Call / Hang Up",
+    "Profile",
+    "Quit",
+];
+
 #[derive(Default)]
 pub struct App {
-    /// Display name shown to other peers.
     pub name: String,
-    /// All joined flocks.
     pub flocks: Vec<FlockView>,
-    /// All joined roosts.
     pub roosts: Vec<RoostView>,
-    /// Flat index into the combined list (flocks first, then roosts).
     pub current_item: usize,
-    /// Text currently being typed in the message box.
     pub input: String,
-    /// Connected remote peers, by EndpointId.
     pub peers: Vec<EndpointId>,
-    /// Index into `peers` of the currently highlighted peer.
     pub selected_peer: usize,
-    /// Our own persistent invite code (set by Ticket). Used when the user
-    /// creates a room so others can join them.
     pub node_id: Option<String>,
-    /// Whether the invite popup is currently displayed.
     pub show_invite: bool,
-    /// Whether the create-room confirmation popup is shown.
     pub show_create_room: bool,
-    /// Whether the join-flock popup is shown.
     pub show_join_room: bool,
-    /// Text input for the join-flock code.
     pub join_input: String,
-    /// Whether the join-roost popup is shown.
     pub show_join_roost: bool,
-    /// Text input for the join-roost code.
     pub join_roost_input: String,
-    /// Whether an active voice call is in progress.
-    #[allow(dead_code)]
     pub in_call: bool,
-    /// Whether the local microphone is muted.
-    #[allow(dead_code)]
     pub muted: bool,
-    /// Maps peer EndpointId → display name (from profile announcements).
     pub peer_names: HashMap<EndpointId, String>,
-    /// Maps peer EndpointId → current presence status.
     pub peer_status: HashMap<EndpointId, BirdStatus>,
-    /// Latest decoded video frame (JPEG → RgbImage).
     #[allow(dead_code)]
     pub video_frame: Option<RgbImage>,
-    /// Whether the video pane is currently shown.
     #[allow(dead_code)]
     pub show_video: bool,
+    pub show_menu: bool,
+    pub menu_selection: usize,
+    pub show_create_roost: bool,
+    pub create_roost_input: String,
+    pub quit_requested: bool,
 }
 
 impl App {
-    /// Total items in the combined rail (flocks + roosts).
     pub fn rail_len(&self) -> usize {
         self.flocks.len() + self.roosts.len()
     }
 
-    /// Return a mutable reference to the currently active flock view,
-    /// or None if a roost is selected.
     pub fn active(&mut self) -> Option<&mut FlockView> {
         if self.current_item < self.flocks.len() {
             self.flocks.get_mut(self.current_item)
@@ -91,7 +79,6 @@ impl App {
         }
     }
 
-    /// Return the code of the currently selected item (flock or roost).
     pub fn active_code(&self) -> Option<&str> {
         let i = self.current_item;
         if i < self.flocks.len() {
@@ -103,7 +90,6 @@ impl App {
         }
     }
 
-    /// Return the roost code if a roost is selected.
     pub fn active_roost(&self) -> Option<&str> {
         let i = self.current_item;
         if i >= self.flocks.len() {
@@ -115,7 +101,6 @@ impl App {
         }
     }
 
-    /// Return the roost name if a roost is selected, or its code as fallback.
     pub fn active_roost_name(&self) -> Option<String> {
         let i = self.current_item;
         if i >= self.flocks.len() {
@@ -131,19 +116,16 @@ impl App {
         }
     }
 
-    /// Total birds in the room: the local user plus connected peers.
     pub fn bird_count(&self) -> usize {
         self.peers.len() + 1
     }
 
-    /// Cycle selection to the next peer, wrapping around.
     pub fn select_next_peer(&mut self) {
         if !self.peers.is_empty() {
             self.selected_peer = (self.selected_peer + 1) % self.peers.len();
         }
     }
 
-    /// Address of the currently selected peer, if any.
     #[allow(dead_code)]
     pub fn selected_peer_addr(&self) -> Option<EndpointAddr> {
         self.peers
@@ -151,13 +133,24 @@ impl App {
             .map(|id| EndpointAddr::from(*id))
     }
 
-    /// Get the display name for a peer, or fall back to the short node ID.
     pub fn peer_display_name(&self, id: &EndpointId) -> String {
         self.peer_names
             .get(id)
             .cloned()
             .unwrap_or_else(|| id.fmt_short().to_string())
     }
+}
+
+pub fn toolbar_buttons() -> Vec<(&'static str, u16, u16)> {
+    let labels = ["Create", "Join", "Menu", "Quit"];
+    let mut x = 0u16;
+    let mut result = Vec::new();
+    for label in labels {
+        let width = label.len() as u16 + 2;
+        result.push((label, x, width));
+        x += width + 1;
+    }
+    result
 }
 
 pub fn draw(f: &mut Frame, app: &App) {
@@ -169,7 +162,6 @@ pub fn draw(f: &mut Frame, app: &App) {
     ])
     .split(f.area());
 
-    // ── Header: current room code with color swatches ───────────────
     let header = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(chunks[0]);
 
     let active_code = app.active_code().unwrap_or("");
@@ -190,7 +182,6 @@ pub fn draw(f: &mut Frame, app: &App) {
         );
     }
 
-    // ── Flock rail + Roost rail + Messages + Birds panel ──────────────
     let middle = Layout::horizontal([
         Constraint::Length(14),
         Constraint::Min(1),
@@ -198,14 +189,12 @@ pub fn draw(f: &mut Frame, app: &App) {
     ])
     .split(chunks[1]);
 
-    // ── Rail: split vertically into flocks (top) and roosts (bottom) ─
     let rail_split = Layout::vertical([
         Constraint::Ratio(1, 2),
         Constraint::Ratio(1, 2),
     ])
     .split(middle[0]);
 
-    // ── Flocks (top half) ──────────────────────────────────────────
     let flock_items: Vec<ListItem> = app
         .flocks
         .iter()
@@ -232,7 +221,6 @@ pub fn draw(f: &mut Frame, app: &App) {
         rail_split[0],
     );
 
-    // ── Roosts (bottom half) ───────────────────────────────────────
     let roost_items: Vec<ListItem> = app
         .roosts
         .iter()
@@ -264,7 +252,6 @@ pub fn draw(f: &mut Frame, app: &App) {
         rail_split[1],
     );
 
-    // ── Messages (centre) ────────────────────────────────────────────
     let is_roost_selected = app.active_roost().is_some();
     if is_roost_selected {
         let display = app.active_roost_name().unwrap_or_default();
@@ -310,8 +297,6 @@ pub fn draw(f: &mut Frame, app: &App) {
 
         let flock_label = app.active_code().unwrap_or("");
 
-        // When video is showing, split the message area into messages (60%)
-        // and video (40%). Otherwise the messages take the full width.
         #[cfg(feature = "video")]
         let msg_area = if app.show_video {
             let panes = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
@@ -345,7 +330,6 @@ pub fn draw(f: &mut Frame, app: &App) {
         );
     }
 
-    // ── Birds panel (right) ──────────────────────────────────────────
     let mut peer_items: Vec<ListItem> = Vec::new();
     peer_items.push(ListItem::new(Line::from(vec![
         Span::raw("  "),
@@ -358,9 +342,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     for (i, id) in app.peers.iter().enumerate() {
         let prefix = if i == app.selected_peer { "> " } else { "  " };
         let glyph = match app.peer_status.get(id) {
-            Some(BirdStatus::InCall) => "🔊",
-            Some(BirdStatus::Idle) => "◌",
-            _ => "●",
+            Some(BirdStatus::InCall) => "~",
+            Some(BirdStatus::Idle) => "-",
+            _ => "o",
         };
         let display = app.peer_display_name(id);
         peer_items.push(ListItem::new(format!("{prefix}{glyph} {display}")));
@@ -371,53 +355,14 @@ pub fn draw(f: &mut Frame, app: &App) {
         middle[2],
     );
 
-    // ── Status ────────────────────────────────────────────────────────
-    let total = app.rail_len();
-    let status = if total == 0 {
-        " Ctrl+N to create a room . Ctrl+J to join a flock . Ctrl+R to join a roost".into()
-    } else if app.in_call {
-        let nav = if total > 1 {
-            format!(
-                " . Alt+Up/Down ({}/{})",
-                app.current_item + 1,
-                total
-            )
-        } else {
-            String::new()
-        };
-        format!(
-            " in call . {} . Ctrl+K to hang up{}",
-            if app.muted { "muted" } else { "live" },
-            nav
-        )
-    } else {
-        let nav = if total > 1 {
-            format!(
-                " . Alt+Up/Down ({}/{})",
-                app.current_item + 1,
-                total
-            )
-        } else {
-            String::new()
-        };
-        format!(
-            " Ctrl+K to call . Tab to cycle . Ctrl+M to mute . i = invite{}",
-            nav
-        )
-    };
-    f.render_widget(
-        Paragraph::new(status).style(Style::new().fg(Color::Rgb(111, 174, 157))),
-        chunks[2],
-    );
+    draw_button_bar(f, app, chunks[2]);
 
-    // ── Input ─────────────────────────────────────────────────────────
     f.render_widget(
         Paragraph::new(app.input.as_str())
             .block(Block::default().borders(Borders::ALL).title(" message ")),
         chunks[3],
     );
 
-    // ── Popups ───────────────────────────────────────────────────────
     if app.show_invite {
         draw_invite_popup(f, app);
     } else if app.show_create_room {
@@ -426,7 +371,132 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_join_room_popup(f, app);
     } else if app.show_join_roost {
         draw_join_roost_popup(f, app);
+    } else if app.show_menu {
+        draw_menu_popup(f, app);
+    } else if app.show_create_roost {
+        draw_create_roost_popup(f, app);
     }
+}
+
+fn status_text(app: &App) -> String {
+    let total = app.rail_len();
+    if total == 0 {
+        String::new()
+    } else if app.in_call {
+        let nav = if total > 1 {
+            format!(" . {}/{}", app.current_item + 1, total)
+        } else {
+            String::new()
+        };
+        format!("in call{}", if app.muted { " . muted" } else { " . live" }).to_string() + &nav
+    } else {
+        String::new()
+    }
+}
+
+fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
+    let btns = toolbar_buttons();
+    let mut spans = Vec::new();
+    for (label, _x, _w) in &btns {
+        let fg = Color::Rgb(111, 174, 157);
+        spans.push(Span::styled("[", Style::new().fg(fg)));
+        spans.push(Span::styled(*label, Style::new().fg(fg)));
+        spans.push(Span::styled("]", Style::new().fg(fg)));
+        spans.push(Span::raw(" "));
+    }
+
+    let status = status_text(app);
+    if !status.is_empty() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(status, Style::new().fg(Color::DarkGray)));
+    }
+
+    f.render_widget(Line::from(spans), area);
+}
+
+fn draw_menu_popup(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let width = 28u16.min(area.width);
+    let height = (MENU_ITEMS.len() as u16 + 2).min(area.height);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default().borders(Borders::ALL).title(" Menu "),
+        popup,
+    );
+
+    let inner = popup.inner(Margin {
+        vertical: 0,
+        horizontal: 2,
+    });
+
+    let mut items = Vec::new();
+    for (i, item) in MENU_ITEMS.iter().enumerate() {
+        let selected = i == app.menu_selection;
+        let style = if selected {
+            Style::new().fg(Color::Yellow).bold()
+        } else {
+            Style::new().fg(Color::White)
+        };
+        let prefix = if selected { "> " } else { "  " };
+        items.push(ListItem::new(Line::from(Span::styled(
+            format!("{prefix}{item}"),
+            style,
+        ))));
+    }
+
+    f.render_widget(
+        List::new(items),
+        inner,
+    );
+}
+
+fn draw_create_roost_popup(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let width = 50.min(area.width);
+    let height = 8.min(area.height);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default().borders(Borders::ALL).title(" Create Roost "),
+        popup,
+    );
+
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+
+    f.render_widget(
+        Paragraph::new("Enter the roost name:").style(Style::new().fg(Color::White)),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(format!(" {}_", app.create_roost_input)).style(Style::new().fg(Color::Yellow)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new(" Enter = create . Esc = cancel").style(Style::new().fg(Color::DarkGray)),
+        chunks[2],
+    );
 }
 
 fn draw_invite_popup(f: &mut Frame, app: &App) {
@@ -489,7 +559,7 @@ fn draw_invite_popup(f: &mut Frame, app: &App) {
         chunks[7],
     );
     f.render_widget(
-        Paragraph::new("  Press i or Esc to close").style(Style::new().fg(Color::DarkGray)),
+        Paragraph::new("  Esc to close").style(Style::new().fg(Color::DarkGray)),
         chunks[9],
     );
 }
@@ -614,13 +684,6 @@ fn draw_join_roost_popup(f: &mut Frame, app: &App) {
     );
 }
 
-/// Build the color-swatch line for a node ID: pairs of ▀▄ glyphs (each
-/// rendered full-bright over a dimmed copy) separated by spaces, one per
-/// 6-hex color group in the code. Returns an empty vec when no colors
-/// have been parsed yet.
-///
-/// All spans are built from string literals, so they carry a `'static`
-/// lifetime and don't borrow from `code`.
 fn color_swatches(code: &str) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     for (r, g, b) in parse_color_code(code) {
@@ -633,7 +696,6 @@ fn color_swatches(code: &str) -> Vec<Span<'static>> {
     spans
 }
 
-/// Parse the 6-hex color groups out of a node ID (e.g. "BIRD-aabbcc-...").
 fn parse_color_code(code: &str) -> Vec<(u8, u8, u8)> {
     let mut colors = Vec::new();
     for group in code.split('-') {

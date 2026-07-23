@@ -1,5 +1,3 @@
-//! Starling — a federated p2p communications platform.
-
 mod call;
 mod config;
 mod crypto;
@@ -32,14 +30,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use ui::{App, FlockView, RoostView};
+use ui::{App, FlockView, RoostView, MENU_ITEMS};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     logger::init();
 
     let args: Vec<String> = std::env::args().collect();
-
     let first = args.get(1).map(String::as_str);
 
     if first == Some("--version") {
@@ -80,16 +77,9 @@ async fn main() -> anyhow::Result<()> {
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
 
-    // Derive our own node ID from the persistent secret key.
-    // We pass it to net::run for profile announcements; the Ticket
-    // event will set app.node_id once the endpoint is bound.
     let secret = config::Profile::load_or_create_secret();
     let my_node_id: iroh::EndpointId = secret.public().into();
 
-    // No room is open by default — the user creates one with Ctrl+N
-    // or joins one with Ctrl+J (or starling join from the CLI).
-
-    // Load the profile from disk, or run the setup wizard to create one.
     let profile = match profile {
         Some(p) => p,
         None => match setup::run_setup(&mut term)? {
@@ -200,8 +190,6 @@ async fn main() -> anyhow::Result<()> {
                     app.peer_status.insert(id, s);
                 }
                 AppEvent::Ticket(code) => {
-                    // Our own persistent invite code — stored for use when
-                    // the user creates a room (Ctrl+N).
                     app.node_id = Some(code);
                 }
                 #[cfg(feature = "audio")]
@@ -221,7 +209,6 @@ async fn main() -> anyhow::Result<()> {
                 #[cfg(not(feature = "video"))]
                 AppEvent::VideoFrame(_) => {}
                 AppEvent::HistoryChunk(old) => {
-                    // Prepend into the first flock, dedup by id.
                     if let Some(fv) = app.flocks.first_mut() {
                         let known: std::collections::HashSet<_> =
                             fv.messages.iter().map(|m| m.id.clone()).collect();
@@ -235,16 +222,17 @@ async fn main() -> anyhow::Result<()> {
         }
 
         if ct_event::poll(std::time::Duration::from_millis(50))? {
-            if let Event::Key(k) = ct_event::read()? {
+            let event = ct_event::read()?;
+
+            if let Event::Key(k) = &event {
                 if k.kind != KeyEventKind::Press {
                     continue;
                 }
 
+                // ── Popup-specific key handling ─────────────────────────
                 if app.show_invite {
                     match k.code {
-                        KeyCode::Char('i') | KeyCode::Esc => {
-                            app.show_invite = false;
-                        }
+                        KeyCode::Esc => { app.show_invite = false; }
                         _ => {}
                     }
                     continue;
@@ -258,9 +246,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                             app.show_create_room = false;
                         }
-                        KeyCode::Esc => {
-                            app.show_create_room = false;
-                        }
+                        KeyCode::Esc => { app.show_create_room = false; }
                         _ => {}
                     }
                     continue;
@@ -275,17 +261,11 @@ async fn main() -> anyhow::Result<()> {
                             });
                             app.show_join_room = false;
                         }
-                        KeyCode::Char(c) => {
-                            if !c.is_control() {
-                                app.join_input.push(c);
-                            }
+                        KeyCode::Char(c) if !c.is_control() => {
+                            app.join_input.push(c);
                         }
-                        KeyCode::Backspace => {
-                            app.join_input.pop();
-                        }
-                        KeyCode::Esc => {
-                            app.show_join_room = false;
-                        }
+                        KeyCode::Backspace => { app.join_input.pop(); }
+                        KeyCode::Esc => { app.show_join_room = false; }
                         _ => {}
                     }
                     continue;
@@ -300,22 +280,54 @@ async fn main() -> anyhow::Result<()> {
                             });
                             app.show_join_roost = false;
                         }
-                        KeyCode::Char(c) => {
-                            if !c.is_control() {
-                                app.join_roost_input.push(c);
-                            }
+                        KeyCode::Char(c) if !c.is_control() => {
+                            app.join_roost_input.push(c);
                         }
-                        KeyCode::Backspace => {
-                            app.join_roost_input.pop();
-                        }
-                        KeyCode::Esc => {
-                            app.show_join_roost = false;
-                        }
+                        KeyCode::Backspace => { app.join_roost_input.pop(); }
+                        KeyCode::Esc => { app.show_join_roost = false; }
                         _ => {}
                     }
                     continue;
                 }
 
+                if app.show_menu {
+                    match k.code {
+                        KeyCode::Up => {
+                            app.menu_selection = app.menu_selection.saturating_sub(1);
+                        }
+                        KeyCode::Down => {
+                            app.menu_selection = (app.menu_selection + 1).min(MENU_ITEMS.len() - 1);
+                        }
+                        KeyCode::Enter => {
+                            activate_menu_item(&mut app, &cmd_tx, &muted_flag)?;
+                        }
+                        KeyCode::Esc => { app.show_menu = false; }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                if app.show_create_roost {
+                    match k.code {
+                        KeyCode::Enter if !app.create_roost_input.is_empty() => {
+                            let name = std::mem::take(&mut app.create_roost_input);
+                            let _ = std::process::Command::new("starling")
+                                .args(["roost", "create", &name])
+                                .spawn()
+                                .map(|mut child| { let _ = child.wait(); });
+                            app.show_create_roost = false;
+                        }
+                        KeyCode::Char(c) if !c.is_control() => {
+                            app.create_roost_input.push(c);
+                        }
+                        KeyCode::Backspace => { app.create_roost_input.pop(); }
+                        KeyCode::Esc => { app.show_create_roost = false; }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // ── Default key handling (no popup) ─────────────────────
                 match k.code {
                     KeyCode::Enter if !app.input.is_empty() => {
                         let text = std::mem::take(&mut app.input);
@@ -340,107 +352,187 @@ async fn main() -> anyhow::Result<()> {
                         app.current_item = app.current_item.saturating_sub(1).min(max);
                     }
                     KeyCode::Down if k.modifiers.contains(KeyModifiers::ALT) => {
-                        app.current_item =
-                            (app.current_item + 1).min(app.rail_len().saturating_sub(1));
+                        app.current_item = (app.current_item + 1).min(app.rail_len().saturating_sub(1));
                     }
 
-                    KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.show_create_room = true;
-                    }
-                    KeyCode::Char('j') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.join_input.clear();
-                        app.show_join_room = true;
-                    }
-                    KeyCode::Char('r') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.join_roost_input.clear();
-                        app.show_join_roost = true;
+                    KeyCode::Esc => {
+                        app.show_menu = true;
+                        app.menu_selection = 0;
                     }
 
-                    KeyCode::Char('i') => {
-                        app.show_invite = app.active_code().is_some();
-                    }
-
-                    #[cfg(feature = "audio")]
-                    KeyCode::Char('k') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if app.in_call {
-                            let _ = cmd_tx.send(Command::HangUp);
-                            app.in_call = false;
-                        } else if let Some(addr) = app.selected_peer_addr() {
-                            let _ = cmd_tx.send(Command::StartCall(addr));
-                            app.in_call = true;
-                        }
-                    }
-
-                    #[cfg(feature = "audio")]
-                    KeyCode::Char('m') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.muted = !app.muted;
-                        muted_flag.store(app.muted, Ordering::Relaxed);
-                    }
-
-                    #[cfg(feature = "video")]
-                    KeyCode::Char('v') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.show_video = !app.show_video;
-                        match (app.show_video, app.selected_peer_addr()) {
-                            (true, Some(addr)) => {
-                                let _ = cmd_tx.send(Command::StartVideo(addr));
-                            }
-                            _ => {
-                                let _ = cmd_tx.send(Command::StopVideo);
-                            }
-                        }
-                    }
-
-                    KeyCode::Tab => {
-                        app.select_next_peer();
-                    }
-
-                    KeyCode::Char(c) => {
-                        if !c.is_control() {
-                            app.input.push(c);
-                        }
+                    KeyCode::Char(c) if !c.is_control() => {
+                        app.input.push(c);
                     }
 
                     KeyCode::Backspace => {
                         app.input.pop();
                     }
 
-                    KeyCode::Esc => {
-                        let _ = cmd_tx.send(Command::Quit);
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                        break;
-                    }
-
                     _ => {}
                 }
-            } else if let ct_event::Event::Mouse(m) = ct_event::read()? {
+            } else if let Event::Mouse(m) = event {
                 if m.kind == MouseEventKind::Down(MouseButton::Left) {
                     let col = m.column;
                     let row = m.row;
-                    if col < 14 {
-                        let (_, term_h) = crossterm::terminal::size()?;
-                        let middle_h = term_h.saturating_sub(6);
-                        let flocks_h = middle_h / 2;
-                        let flocks_top = 2u16;
-                        let roosts_top = flocks_top + flocks_h;
-
-                        if row >= flocks_top + 1 && row < roosts_top {
-                            let idx = (row - flocks_top - 1) as usize;
-                            if idx < app.flocks.len() {
-                                app.current_item = idx;
-                            }
-                        } else if row >= roosts_top + 1 && row < roosts_top + middle_h - flocks_h {
-                            let idx = (row - roosts_top - 1) as usize;
-                            if idx < app.roosts.len() {
-                                app.current_item = app.flocks.len() + idx;
-                            }
-                        }
-                    }
+                    handle_mouse_click(&mut app, &cmd_tx, &muted_flag, &mut term, col, row)?;
                 }
             }
+        }
+
+        if app.quit_requested {
+            let _ = cmd_tx.send(Command::Quit);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            break;
         }
     }
 
     disable_raw_mode()?;
     execute!(term.backend_mut(), LeaveAlternateScreen, ct_event::DisableMouseCapture)?;
+    Ok(())
+}
+
+#[allow(unused_variables)]
+fn handle_mouse_click(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+    muted_flag: &Arc<AtomicBool>,
+    _term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    col: u16,
+    row: u16,
+) -> anyhow::Result<()> {
+    let (term_w, term_h) = crossterm::terminal::size()?;
+
+    // ── Menu popup clicks ──────────────────────────────────────────
+    if app.show_menu {
+        let popup_w = 28u16.min(term_w);
+        let popup_h = (MENU_ITEMS.len() as u16 + 2).min(term_h);
+        let popup_x = (term_w.saturating_sub(popup_w)) / 2;
+        let popup_y = (term_h.saturating_sub(popup_h)) / 2;
+
+        if col >= popup_x && col < popup_x + popup_w
+            && row >= popup_y && row < popup_y + popup_h
+        {
+            let inner_row = row - popup_y;
+            if inner_row >= 1 && inner_row < popup_h - 1 {
+                let idx = (inner_row - 1) as usize;
+                if idx < MENU_ITEMS.len() {
+                    app.menu_selection = idx;
+                    activate_menu_item(app, cmd_tx, muted_flag)?;
+                }
+            }
+        } else {
+            app.show_menu = false;
+        }
+        return Ok(());
+    }
+
+    // ── Button bar clicks ──────────────────────────────────────────
+    let button_bar_y = term_h.saturating_sub(4); // header(2) + middle + buttons(1) + input(3)
+    if row == button_bar_y {
+        let btns = ui::toolbar_buttons();
+        for (i, (_label, bx, bw)) in btns.iter().enumerate() {
+            if col >= *bx && col < bx + bw {
+                match i {
+                    0 => { app.show_create_room = true; }
+                    1 => { app.join_input.clear(); app.show_join_room = true; }
+                    2 => { app.show_menu = true; app.menu_selection = 0; }
+                    3 => {
+                        app.quit_requested = true;
+                    }
+                    _ => {}
+                }
+                return Ok(());
+            }
+        }
+        return Ok(());
+    }
+
+    // ── Rail clicks (flocks + roosts) ──────────────────────────────
+    if col < 14 {
+        let middle_h = term_h.saturating_sub(6);
+        let flocks_h = middle_h / 2;
+        let flocks_top = 2u16;
+        let roosts_top = flocks_top + flocks_h;
+
+        if row >= flocks_top + 1 && row < roosts_top {
+            let idx = (row - flocks_top - 1) as usize;
+            if idx < app.flocks.len() {
+                app.current_item = idx;
+            }
+        } else if row >= roosts_top + 1 && row < roosts_top + middle_h - flocks_h {
+            let idx = (row - roosts_top - 1) as usize;
+            if idx < app.roosts.len() {
+                app.current_item = app.flocks.len() + idx;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(unused_variables)]
+fn activate_menu_item(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+    muted_flag: &Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    let i = app.menu_selection;
+    if i >= MENU_ITEMS.len() {
+        return Ok(());
+    }
+
+    app.show_menu = false;
+
+    match i {
+        0 => { app.show_create_room = true; }
+        1 => { app.join_input.clear(); app.show_join_room = true; }
+        2 => { app.join_roost_input.clear(); app.show_join_roost = true; }
+        3 => { app.create_roost_input.clear(); app.show_create_roost = true; }
+        4 => { app.show_invite = app.active_code().is_some(); }
+        5 => {
+            app.select_next_peer();
+        }
+        6 => {
+            #[cfg(feature = "audio")]
+            {
+                app.muted = !app.muted;
+                muted_flag.store(app.muted, Ordering::Relaxed);
+            }
+        }
+        7 => {
+            #[cfg(feature = "video")]
+            {
+                app.show_video = !app.show_video;
+                match (app.show_video, app.selected_peer_addr()) {
+                    (true, Some(addr)) => {
+                        let _ = cmd_tx.send(Command::StartVideo(addr));
+                    }
+                    _ => {
+                        let _ = cmd_tx.send(Command::StopVideo);
+                    }
+                }
+            }
+        }
+        8 => {
+            #[cfg(feature = "audio")]
+            {
+                if app.in_call {
+                    let _ = cmd_tx.send(Command::HangUp);
+                    app.in_call = false;
+                } else if let Some(addr) = app.selected_peer_addr() {
+                    let _ = cmd_tx.send(Command::StartCall(addr));
+                    app.in_call = true;
+                }
+            }
+        }
+        9 => {
+            app.quit_requested = true;
+        }
+        10 => {
+            app.quit_requested = true;
+        }
+        _ => {}
+    }
+
     Ok(())
 }

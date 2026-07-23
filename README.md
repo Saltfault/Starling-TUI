@@ -27,7 +27,7 @@ server required. A room code is all a new bird needs to join a flock.
 | Room codes | ✓ | ✓ | ✓ | ✓ |
 | Persistent identity | ✓ | ✓ | ✓ | ✓ |
 
-† WSL2 voice requires a one-time setup step (`starling setup`)
+† WSL2 voice requires a one-time setup step (`starling profile`)
 that installs the ALSA→PulseAudio bridge. See
 [WSL2 setup](#wsl2-windows-subsystem-for-linux) below.
 
@@ -54,7 +54,7 @@ starling install tui
 **Configure your profile (one-time):**
 
 ```bash
-starling setup
+starling profile
 ```
 
 This opens a setup wizard where you enter your display name, select your
@@ -120,16 +120,16 @@ Everything runs through one command: `starling` (installed from the
 
 | Command | Status | Does |
 |---------|:------:|------|
-| `starling open` | ✅ | Launch the TUI. (Bare `starling` does the same) |
+| `starling open` | ✅ | Launch the TUI. (Bare `starling` prints help — use `starling open`) |
 | `starling join <code>` | ✅ | Launch and join a flock or roost by invite code |
-| `starling setup` | ✅ | Run the profile + audio + dependency wizard |
+| `starling profile` | ✅ | Run the profile + audio + dependency wizard |
 | `starling leave <code>` | ✅ | Print how to leave (in the TUI, just close with `Esc`) |
 | `starling list` | ✅ | List roosts stored on disk |
 | `starling doctor` | ✅ | Diagnose config, identity, profile, and dependencies |
 | `starling logs` | ✅ | Print the log file location |
 | `starling install tui` | ✅ | Install (or reinstall) the terminal client |
 | `starling update tui` | ✅ | Update the client to the latest version |
-| `starling uninstall tui` | ✅ | Uninstall the client and remove its config |
+| `starling tui uninstall` | ✅ | Uninstall the client and remove its config |
 | `starling help` | ✅ | Print usage |
 
 Inside the running app, joining more flocks, switching between them, calls,
@@ -140,7 +140,7 @@ and video are all keybindings — see [Keybindings](#keybindings) below.
 ## Platform setup
 
 Before installing Starling, you need Rust and a C compiler. Follow the
-section for your platform. Then run `starling setup` to configure your
+section for your platform. Then run `starling profile` to configure your
 profile, audio devices, and any platform-specific dependencies.
 
 ### Windows
@@ -290,13 +290,13 @@ cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling.git
 starling install tui
 ```
 
-**5. Run setup (configures the WSL2 audio bridge):**
+**5. Run profile (configures the WSL2 audio bridge):**
 
 ```bash
-starling setup
+starling profile
 ```
 
-`starling setup` installs `libasound2-plugins` and writes
+`starling profile` installs `libasound2-plugins` and writes
 `/etc/asound.conf` to route ALSA through PulseAudio. This is needed because
 the pure-Rust PulseAudio crate that cpal uses can't authenticate with WSLg's
 server, but the C library (`libpulse`) that ALSA's pulse plugin uses can.
@@ -358,18 +358,25 @@ starling join BIRD-00CCFF-00CCFF-...
 
 ### Join multiple flocks
 
-Once inside the app, you can join additional flocks at any time by typing
-`/join <code>` in the message input and pressing Enter. A flock rail appears
-on the left side of the screen showing all joined flocks. Use `Alt+↑` and
+Once inside the app, you can join additional flocks at any time by clicking
+the `[Join]` button or typing `/join <code>` in the message input and
+pressing Enter. Join a roost via `[Menu]` → Join Roost, or with
+`/join-roost <code>`. A rail appears on the left side of the screen showing
+all joined flocks and roosts. Use `Alt+↑` and
 `Alt+↓` to switch between them. Each flock has its own message list and
 end-to-end encryption key.
 
 ```
- flocks              ╔════════════════════════════════════╗
-╔════════╗           ║ BIRD-00CCFF-... . 3 birds          ║
-║> BIRD-…║           ║ Alice: hello!    ╔════════════════╗║
-║  BIRD-…║           ║ Bob: hi there   ║ birds           ║║
-╚════════╝           ╚═════════════════╩══════════════════╝
+ ── flocks ──        ╔════════════════════════════════════╗
+╔════════════╗       ║ BIRD-00CCFF-... . 3 birds          ║
+║> BIRD-…    ║       ║ Alice: hello!    ╔════════════════╗║
+║  BIRD-…    ║       ║ Bob: hi there   ║ birds           ║║
+╚════════════╝       ╚═════════════════╩══════════════════╝
+ ── roosts ──
+╔════════════╗
+║  my-chat   ║
+║  dev-room  ║
+╚════════════╝
 ```
 
 You start in your home flock automatically. Joining a new flock does not
@@ -379,8 +386,8 @@ leave the current one — you remain subscribed to all of them simultaneously.
 
 When you start Starling for the first time, a popup asks for your display
 name — the name other birds see next to your messages in the flock. Type it
-and press Enter to join the murmuration. You can change it later with
-`starling setup`.
+and press Enter to join the murmuration. You can change it later via the
+Menu button (`[Menu]` → Profile) or by running `starling profile`.
 
 ### Logs
 
@@ -390,20 +397,49 @@ working.
 
 ---
 
-## Keybindings
+## Interface
+
+Starling TUI is operated through on-screen **buttons** and the **Menu** popup.
+Buttons are clickable with the mouse. The bottom toolbar shows the main actions:
+
+| Button | Action |
+|--------|--------|
+| `[Create]` | Create a new room (flock) |
+| `[Join]` | Join a flock by invite code |
+| `[Menu]` | Open the action menu |
+| `[Quit]` | Exit Starling |
+
+### Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Send typed message (or `/join <code>` to join a flock) |
-| `Alt+↑` | Switch to previous flock |
-| `Alt+↓` | Switch to next flock |
-| `Ctrl+K` | Start call with selected peer / hang up |
-| `Ctrl+M` | Toggle mute |
-| `Ctrl+V` | Toggle video |
-| `Tab` | Cycle selected peer |
-| `i` | Show invite popup |
+| `Enter` | Send typed message (or `/join <code>` / `/join-roost <code>`) |
+| `Alt+↑` | Switch to previous flock/roost |
+| `Alt+↓` | Switch to next flock/roost |
+| `Esc` | Open the action menu |
 | `Backspace` | Delete last character |
-| `Esc` | Quit |
+
+### Menu actions
+
+Clicking `[Menu]` or pressing `Esc` opens the action menu with these options:
+
+| Menu Item | Action |
+|-----------|--------|
+| Create Room | Open a new flock |
+| Join Flock | Join an existing flock by code |
+| Join Roost | Join a roost by invite code |
+| Create Roost | Create a new roost (runs `starling roost create`) |
+| Invite | Show the current flock's invite code |
+| Next Peer | Cycle selection to the next bird |
+| Toggle Mute | Mute or unmute the microphone |
+| Toggle Video | Show or hide the webcam feed |
+| Call / Hang Up | Start a voice call or hang up |
+| Profile | Exit and run the profile wizard (`starling profile`) |
+| Quit | Exit Starling |
+
+Use arrow keys (`↑`/`↓`) to navigate the menu and `Enter` to activate.
+Click any item with the mouse to activate it directly. Click outside the
+menu to close it.
 
 ---
 
@@ -499,7 +535,7 @@ you needing to share a new one.
 Run the one-time audio setup:
 
 ```bash
-starling setup
+starling profile
 ```
 
 This installs `libasound2-plugins` and writes `/etc/asound.conf` to route
@@ -550,7 +586,7 @@ sudo update-usbids
 ls /dev/video*                   # should show your camera
 ```
 
-Then re-run `starling setup` to detect the camera.
+Then re-run `starling profile` to detect the camera.
 
 ### Build is slow on first compile
 

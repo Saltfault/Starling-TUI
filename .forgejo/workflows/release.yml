@@ -1,0 +1,157 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Extract version
+        id: version
+        run: echo "value=$(grep '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+      - name: Check version increased
+        id: check
+        run: |
+          latest_tag=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          current="v${{ steps.version.outputs.value }}"
+          if [ -z "$latest_tag" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$current" = "$latest_tag" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+      - name: Run tests
+        if: steps.check.outputs.skip == 'false'
+        run: cargo test --all-features
+
+  release:
+    needs: detect
+    if: needs.detect.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install tools
+        run: |
+          apt-get update && apt-get install -y jq
+
+      - name: Install cross-compilation packages
+        run: |
+          apt-get install -y \
+            gcc-i686-linux-gnu \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabihf \
+            gcc-mingw-w64-x86-64 \
+            gcc-mingw-w64-i686 \
+            musl-tools
+
+      - name: Build all targets
+        run: |
+          set -e
+          targets=(
+            "x86_64-unknown-linux-gnu"
+            "x86_64-unknown-linux-musl:musl-gcc"
+            "i686-unknown-linux-gnu:i686-linux-gnu-gcc"
+            "aarch64-unknown-linux-gnu:aarch64-linux-gnu-gcc"
+            "armv7-unknown-linux-gnueabihf:arm-linux-gnueabihf-gcc"
+            "x86_64-pc-windows-gnu:x86_64-w64-mingw32-gcc"
+            "i686-pc-windows-gnu:i686-w64-mingw32-gcc"
+          )
+          for entry in "${targets[@]}"; do
+            IFS=':' read -r target linker <<< "$entry"
+            echo "=== Building $target ==="
+            rustup target add "$target"
+            if [ -n "$linker" ]; then
+              target_upper=$(echo "$target" | tr '[:lower:]-' '[:upper:]_')
+              export "CARGO_TARGET_${target_upper}_LINKER=$linker"
+            fi
+            cargo build --release --target "$target"
+            ext=""
+            [[ "$target" == *-windows-* ]] && ext=".exe"
+            cp "target/$target/release/starling-tui$ext" "starling-tui-$target$ext"
+          done
+
+      - name: Download macOS from GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.ACTION_TOKEN_GITHUB }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "ACTION_TOKEN_GITHUB not set, skipping macOS download"
+            exit 0
+          fi
+          TAG="v${{ needs.detect.outputs.version }}"
+          for i in $(seq 1 60); do
+            assets=$(curl -s "https://api.github.com/repos/Saltfault/Starling-TUI/releases/tags/$TAG" \
+              -H "Authorization: Bearer $GH_TOKEN" | jq -r '.assets[]?.browser_download_url // empty')
+            if [ -n "$assets" ]; then break; fi
+            echo "GitHub release not ready yet, retry $i/60..."
+            sleep 30
+          done
+          if [ -z "$assets" ]; then
+            echo "macOS binaries not available on GitHub after retries"
+            exit 0
+          fi
+          echo "$assets" | while read url; do
+            [ -z "$url" ] && continue
+            file=$(basename "$url")
+            echo "Downloading $file"
+            curl -sSL -o "$file" "$url"
+          done
+
+      - name: Create Forgejo Release
+        env:
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.detect.outputs.version }}"
+          OWNER="${GITHUB_REPOSITORY_OWNER}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          API="https://${GITHUB_SERVER_URL#https://}/api/v1"
+
+          mkdir -p artifacts
+          mv starling-tui-* artifacts/ 2>/dev/null || true
+
+          curl -s -X DELETE "$API/repos/$OWNER/$REPO/releases/tags/$TAG" \
+            -H "Authorization: Bearer $FORGEJO_TOKEN" > /dev/null 2>&1
+
+          release_id=$(curl -s -X POST "$API/repos/$OWNER/$REPO/releases" \
+            -H "Authorization: Bearer $FORGEJO_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":false}" | jq -r '.id // empty')
+
+          if [ -z "$release_id" ]; then
+            echo "Failed to create Forgejo release"
+            exit 1
+          fi
+
+          for f in artifacts/*; do
+            [ ! -f "$f" ] && continue
+            echo "Uploading $(basename $f)"
+            curl -s -X POST "$API/repos/$OWNER/$REPO/releases/$release_id/assets" \
+              -H "Authorization: Bearer $FORGEJO_TOKEN" \
+              -F "attachment=@$f" > /dev/null 2>&1 || echo "Upload failed for $(basename $f)"
+          done
+
+          echo "Forgejo release $TAG created with $(ls -1 artifacts | wc -l) assets"
