@@ -78,6 +78,12 @@ fn log(level: &str, msg: &str) {
     }
 }
 
+/// Log an informational message with a timestamp.
+#[allow(dead_code)]
+pub fn info(msg: &str) {
+    log("INFO:  ", msg);
+}
+
 /// Log an error message with a timestamp.
 #[allow(dead_code)]
 pub fn error(msg: &str) {

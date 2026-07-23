@@ -23,8 +23,8 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Return the config directory for the current platform.
-    fn config_dir() -> PathBuf {
+    /// Return the platform-appropriate config directory.
+    pub fn config_dir() -> PathBuf {
         if let Ok(home) = std::env::var("HOME") {
             PathBuf::from(home).join(".config").join("starling")
         } else if let Ok(appdata) = std::env::var("APPDATA") {
@@ -32,6 +32,11 @@ impl Profile {
         } else {
             PathBuf::from(".starling")
         }
+    }
+
+    /// Return the directory where roost data directories live.
+    pub fn roosts_dir() -> PathBuf {
+        Self::config_dir().join("roosts")
     }
 
     /// Path to the profile file on disk.

@@ -64,6 +64,40 @@ half-block swatches. Share it with another bird — they join with:
 starling join BIRD-00CCFF-00CCFF-...
 ```
 
+### Roosts (headless servers)
+
+A **roost** is a persistent bird that stays online to keep a community's
+chat history and relay state to late-joiners — no TUI needed. Think of it
+as your own Discord server, except it runs on your own machine and uses
+the peer-to-peer murmuration instead of a central server.
+
+**Create a roost:**
+
+```bash
+starling roost create my-community
+```
+
+This generates a dedicated identity key and sled database. It prints the
+roost's invite code — share it so others can join.
+
+**Start the roost server:**
+
+```bash
+starling roost open my-community
+```
+
+The roost stays online until you press Ctrl+C. It persists every message
+to disk and serves history to birds that join later.
+
+**Join a roost** like any other flock:
+
+```bash
+starling join BIRD-...
+```
+
+Data lives under `~/.config/starling/roosts/<name>/`
+(on Unix) or `%APPDATA%/starling/roosts/<name>/` (on Windows).
+
 > **Developing?** You can also clone and run from source:
 > ```bash
 > git clone https://forgejo.hearthhome.lol/Saltfault/Starling-TUI.git
@@ -347,18 +381,18 @@ working.
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │ main.rs (UI loop)                                                │
-│   keyboard → Command ──┐                                         │
-│   AppEvent ←───────────┤──── mpsc channels ────┐                │
-│   playback ← VoiceFrame│                       │                │
-│   video_frame ← VideoFrame                     │                │
-└────────────────────────┊────────────────────────┊───────────────┘
-                         ▼                        ▼
+│   keyboard → Command ──┐                    roost ───────────┐  │
+│   AppEvent ←───────────┤──── mpsc channels ────┐             │  │
+│   playback ← VoiceFrame│                       │             │  │
+│   video_frame ← VideoFrame                     │             │  │
+└────────────────────────┊────────────────────────┊─────────────┊──┘
+                         ▼                        ▼             ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ net.rs (network task)                                            │
-│   gossip for chat · QUIC datagrams for voice                     │
-│   QUIC uni streams for video                                     │
-│   mic capture (voice.rs) → place_call (call.rs)                  │
-│   webcam capture (video.rs) → place_video (call.rs)              │
+│ net.rs (network task)              roost/ (headless server)      │
+│   gossip for chat · QUIC datagrams  ├── mod.rs — iroh-gossip     │
+│   QUIC uni streams for video        │            loop + RoostSync│
+│   mic capture (voice.rs) → call.rs  └── store.rs — sled-backed  │
+│   webcam capture (video.rs) → call.rs        message history    │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -380,6 +414,7 @@ working.
 | `crypto.rs` | E2E encryption (ChaCha20-Poly1305) for gossip messages |
 | `logger.rs` | File logger with gzipped log rotation |
 | `util.rs` | Platform utilities (stderr suppression on Unix) |
+| `roost/` | Headless server mode — durable message store (sled), history sync |
 | `build.rs` | Downloads pre-built Opus static libraries from shiguredo/opus-rs |
 
 ### How the murmuration works

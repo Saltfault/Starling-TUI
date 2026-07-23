@@ -53,6 +53,12 @@ pub fn encode_node_id(node_id: &EndpointId) -> String {
     format!("BIRD-{}", colors.join("-"))
 }
 
+/// Alias for `encode_node_id`. Used by the roost module for community codes.
+#[allow(dead_code)]
+pub fn room_code_from_node_id(node_id: &EndpointId) -> String {
+    encode_node_id(node_id)
+}
+
 /// Decode a ticket string back into a node ID, or `None` if malformed.
 pub fn decode_node_id(code: &str) -> Option<EndpointId> {
     let code = code
