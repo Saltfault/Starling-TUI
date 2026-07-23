@@ -16,3 +16,6 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarqube.hearthhome.lol
+        with:
+          args: >
+            -Dsonar.projectKey=Saltfault_Starling-TUI_30b33177-3e5a-4ec1-b3be-4b294f81048b
