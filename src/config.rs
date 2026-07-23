@@ -35,6 +35,7 @@ impl Profile {
     }
 
     /// Return the directory where roost data directories live.
+    #[allow(dead_code)]
     pub fn roosts_dir() -> PathBuf {
         Self::config_dir().join("roosts")
     }
