@@ -1,18 +1,13 @@
 mod call;
-mod config;
-mod crypto;
 mod event;
-mod logger;
 mod net;
 #[cfg(feature = "audio")]
 mod opus_ffi;
 #[cfg(feature = "audio")]
 mod playback;
-mod roost;
 mod setup;
 mod sync;
 mod ui;
-mod util;
 mod video;
 #[cfg(feature = "audio")]
 mod voice;
@@ -34,7 +29,7 @@ use ui::{App, FlockView, RoostView, MENU_ITEMS};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    logger::init();
+    starling::logger::init();
 
     let args: Vec<String> = std::env::args().collect();
     let first = args.get(1).map(String::as_str);
@@ -58,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
     let bootstrap = match first {
         Some("join") => {
             let code = &args[2];
-            match net::decode_node_id(code) {
+            match starling::net::decode_node_id(code) {
                 Some(node_id) => vec![node_id],
                 None => {
                     eprintln!("Invalid join code.");
@@ -69,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
         _ => vec![],
     };
 
-    let profile = config::Profile::load();
+    let profile = starling::config::Profile::load();
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -77,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
 
-    let secret = config::Profile::load_or_create_secret();
+    let secret = starling::config::Profile::load_or_create_secret();
     let my_node_id: iroh::EndpointId = secret.public().into();
 
     let profile = match profile {
@@ -115,10 +110,10 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     #[cfg(feature = "audio")]
-    let mut playback = match playback::Playback::new(output_device.as_deref()) {
+    let mut playback = match crate::playback::Playback::new(output_device.as_deref()) {
         Ok(p) => Some(p),
         Err(e) => {
-            logger::warn(&format!("audio playback unavailable: {e}"));
+            starling::logger::warn(&format!("audio playback unavailable: {e}"));
             None
         }
     };
@@ -229,7 +224,6 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
-                // ── Popup-specific key handling ─────────────────────────
                 if app.show_invite {
                     match k.code {
                         KeyCode::Esc => { app.show_invite = false; }
@@ -327,7 +321,6 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
-                // ── Default key handling (no popup) ─────────────────────
                 match k.code {
                     KeyCode::Enter if !app.input.is_empty() => {
                         let text = std::mem::take(&mut app.input);
@@ -402,7 +395,6 @@ fn handle_mouse_click(
 ) -> anyhow::Result<()> {
     let (term_w, term_h) = crossterm::terminal::size()?;
 
-    // ── Menu popup clicks ──────────────────────────────────────────
     if app.show_menu {
         let popup_w = 28u16.min(term_w);
         let popup_h = (MENU_ITEMS.len() as u16 + 2).min(term_h);
@@ -426,8 +418,7 @@ fn handle_mouse_click(
         return Ok(());
     }
 
-    // ── Button bar clicks ──────────────────────────────────────────
-    let button_bar_y = term_h.saturating_sub(4); // header(2) + middle + buttons(1) + input(3)
+    let button_bar_y = term_h.saturating_sub(4);
     if row == button_bar_y {
         let btns = ui::toolbar_buttons();
         for (i, (_label, bx, bw)) in btns.iter().enumerate() {
@@ -447,7 +438,6 @@ fn handle_mouse_click(
         return Ok(());
     }
 
-    // ── Rail clicks (flocks + roosts) ──────────────────────────────
     if col < 14 {
         let middle_h = term_h.saturating_sub(6);
         let flocks_h = middle_h / 2;

@@ -1,19 +1,6 @@
-//! Setup wizard — a separate TUI for configuring the user profile and
-//! installing system dependencies.
-//!
-//! Run with `starling setup`. Guides the user through:
-//!
-//! 1. System dependency check (installs missing packages)
-//! 2. WSL2 audio setup (if on WSL2 and not yet configured)
-//! 3. Optional: load a profile from a 32-digit code
-//! 4. Enter display name
-//! 5. Select input (microphone) device
-//! 6. Select output (speaker) device
-//! 7. Review summary, save, and show the profile code
-
-use crate::config::Profile;
+use starling::config::Profile;
 #[cfg(feature = "audio")]
-use crate::util::suppress_stderr;
+use starling::util::suppress_stderr;
 #[cfg(feature = "audio")]
 use cpal::traits::HostTrait;
 use crossterm::event::{self as ct_event, Event, KeyCode, KeyEventKind};
@@ -24,45 +11,26 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
-/// Which step of the setup wizard we're on.
 enum Phase {
-    /// Checking for and installing required system packages.
     DependencyCheck,
-    /// Optionally loading an existing profile from its 32-digit code.
     CodeEntry,
-    /// Entering the user's display name.
     NameEntry,
-    /// Choosing the microphone.
     InputDevice,
-    /// Choosing the speaker or headphones.
     OutputDevice,
-    /// Reviewing choices and saving the profile.
     Summary,
 }
 
-/// Setup wizard state.
 struct SetupApp {
-    /// Current wizard step.
     phase: Phase,
-    /// Profile being built (seeded from any saved profile).
     profile: Profile,
-    /// Text buffer for the display-name input.
     name_input: String,
-    /// Text buffer for the profile-code input.
     code_input: String,
-    /// Available microphone names.
     input_devices: Vec<String>,
-    /// Available speaker names.
     output_devices: Vec<String>,
-    /// Selected index into `input_devices`.
     selected_input: usize,
-    /// Selected index into `output_devices`.
     selected_output: usize,
-    /// List of missing system dependencies.
     missing_deps: Vec<String>,
-    /// Command to install missing dependencies.
     install_cmd: Option<String>,
-    /// Status message after running an install command.
     install_status: String,
 }
 
@@ -107,7 +75,6 @@ impl SetupApp {
     }
 }
 
-/// Check whether a command is available on PATH (cross-platform).
 fn command_exists(cmd: &str) -> bool {
     std::process::Command::new(cmd)
         .arg("--version")
@@ -116,7 +83,6 @@ fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Check whether a pkg-config library is installed.
 #[allow(dead_code)]
 fn pkg_config_exists(lib: &str) -> bool {
     std::process::Command::new("pkg-config")
@@ -126,11 +92,7 @@ fn pkg_config_exists(lib: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Return the list of system dependencies missing on the current platform.
 fn check_dependencies() -> Vec<String> {
-    // Windows has no external system dependencies — WASAPI and Media
-    // Foundation are built into the OS. The C compiler was already needed
-    // to build Starling, so no need to check for it here.
     #[cfg(target_os = "windows")]
     return Vec::new();
 
@@ -205,9 +167,7 @@ fn check_dependencies() -> Vec<String> {
     }
 }
 
-/// Build the install command for the detected package manager, if any.
 fn install_command() -> Option<String> {
-    // Windows package managers
     #[cfg(target_os = "windows")]
     {
         if command_exists("winget") {
@@ -220,7 +180,6 @@ fn install_command() -> Option<String> {
         }
     }
 
-    // Check if we're on WSL2 and need the audio bridge
     let needs_wsl_audio = std::path::Path::new("/mnt/wslg").exists()
         && !std::path::Path::new("/etc/asound.conf").exists();
 
@@ -249,8 +208,6 @@ fn install_command() -> Option<String> {
     }
 }
 
-/// Run a shell command, dropping out of the TUI so the user can see output
-/// and enter a sudo password. Returns true on success.
 fn run_shell_command(
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     cmd: &str,
@@ -278,9 +235,7 @@ fn run_shell_command(
     success
 }
 
-/// Build the `cargo install` command to rebuild with all features.
 fn rebuild_command() -> String {
-    // Detect if we were installed from a git source.
     let git_dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
         .join(".cargo/git/db");
 
@@ -288,7 +243,6 @@ fn rebuild_command() -> String {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("starling") {
-                // Extract the git URL from the bare repo.
                 let output = std::process::Command::new("git")
                     .args(["config", "--get", "remote.origin.url"])
                     .current_dir(entry.path())
@@ -306,15 +260,12 @@ fn rebuild_command() -> String {
         }
     }
 
-    // Fallback: try crates.io
     "cargo install Starling-TUI --features audio,video --force".into()
 }
 
-/// Enumerate audio devices (input or output), prefixed with "System Default".
 #[cfg(feature = "audio")]
 fn list_devices(is_input: bool) -> Vec<String> {
     let host = cpal::default_host();
-    // Collect into a Vec so the input and output iterator types unify.
     let devices = if is_input {
         host.input_devices().map(|i| i.collect::<Vec<_>>())
     } else {
@@ -333,8 +284,6 @@ fn list_devices(is_input: bool) -> Vec<String> {
     names
 }
 
-/// Run the interactive setup wizard, returning the saved profile or `None`
-/// if the user cancels.
 pub fn run_setup(
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<Option<Profile>> {
@@ -360,7 +309,6 @@ pub fn run_setup(
                                 app.install_status = "Dependencies installed. Rebuilding...".into();
                                 term.draw(|f| draw(f, &app))?;
 
-                                // Rebuild with all features enabled.
                                 let rebuild = run_shell_command(term, &rebuild_command());
                                 if rebuild {
                                     app.install_status =
@@ -472,7 +420,6 @@ pub fn run_setup(
     }
 }
 
-/// Render the current setup phase inside the centered popup.
 fn draw(f: &mut Frame, app: &SetupApp) {
     let area = f.area();
     f.render_widget(Clear, area);

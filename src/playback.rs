@@ -22,7 +22,7 @@ pub struct Playback {
 
 impl Playback {
     pub fn new(device_name: Option<&str>) -> anyhow::Result<Self> {
-        crate::util::suppress_stderr(|| Self::new_inner(device_name))
+        starling::util::suppress_stderr(|| Self::new_inner(device_name))
     }
 
     fn new_inner(device_name: Option<&str>) -> anyhow::Result<Self> {
@@ -52,7 +52,7 @@ impl Playback {
                     *sample = 0.0;
                 }
             },
-            |e| crate::logger::error(&format!("playback error: {e}")),
+            |e| starling::logger::error(&format!("playback error: {e}")),
             None,
         )?;
 
@@ -74,7 +74,7 @@ impl Playback {
                 let total = n * CHANNELS;
                 self.producer.push_slice(&pcm[..total]);
             }
-            Err(e) => crate::logger::error(&format!("opus decode error: {e}")),
+            Err(e) => starling::logger::error(&format!("opus decode error: {e}")),
         }
     }
 }

@@ -1,22 +1,15 @@
-//! Network layer: owns the iroh [`Endpoint`], the gossip subscription, and
-//! the voice protocol handler. Bridges the UI ↔ network channels.
-//!
-//! All gossip text messages are **end-to-end encrypted** with
-//! ChaCha20-Poly1305 using a key derived from the room code. Voice calls are
-//! E2E encrypted via iroh's QUIC TLS 1.3.
-
-use crate::crypto::FlockCrypto;
+use starling::crypto::FlockCrypto;
 #[cfg(feature = "audio")]
-use crate::event::BirdStatus;
-use crate::event::{AppEvent, ChatMessage, Command, GossipPayload};
-use crate::roost::RoostState;
+use starling::event::BirdStatus;
+use starling::event::{ChatMessage, GossipPayload};
+use crate::event::{AppEvent, Command};
+use starling::roost::RoostState;
 #[cfg(any(feature = "audio", feature = "video"))]
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointId, endpoint::presets, protocol::Router};
 use iroh_gossip::{
     api::Event,
     net::{GOSSIP_ALPN, Gossip},
-    proto::TopicId,
 };
 use n0_future::StreamExt;
 use std::collections::HashMap;
@@ -26,87 +19,11 @@ use tokio::sync::mpsc;
 
 use iroh_gossip::api::GossipSender;
 
-#[allow(dead_code)]
 struct FlockHandle {
     sender: GossipSender,
     crypto: FlockCrypto,
 }
 
-/// Derive a deterministic gossip [`TopicId`] from a name via SHA-256.
-pub fn topic_for(name: &str) -> TopicId {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(name.as_bytes());
-    TopicId::from_bytes(hash.into())
-}
-
-/// Encode a node ID as the full room code / invite (`BIRD-RRGGBB-...`).
-/// This single string is both what's displayed and what peers join with.
-pub fn encode_node_id(node_id: &EndpointId) -> String {
-    let bytes = node_id.as_bytes();
-    let mut padded = bytes.to_vec();
-    while padded.len() % 3 != 0 {
-        padded.push(0);
-    }
-    let colors: Vec<String> = padded
-        .chunks(3)
-        .map(|c| format!("{:02X}{:02X}{:02X}", c[0], c[1], c[2]))
-        .collect();
-    format!("BIRD-{}", colors.join("-"))
-}
-
-/// Alias for `encode_node_id`. Used by the roost module for community codes.
-#[allow(dead_code)]
-pub fn room_code_from_node_id(node_id: &EndpointId) -> String {
-    encode_node_id(node_id)
-}
-
-/// Decode a ticket string back into a node ID, or `None` if malformed.
-pub fn decode_node_id(code: &str) -> Option<EndpointId> {
-    let code = code
-        .strip_prefix("BIRD-")
-        .or_else(|| code.strip_prefix("BIRD"))?;
-    let mut bytes = Vec::new();
-    for group in code.split('-') {
-        if group.len() != 6 {
-            return None;
-        }
-        let r = u8::from_str_radix(&group[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&group[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&group[4..6], 16).ok()?;
-        bytes.push(r);
-        bytes.push(g);
-        bytes.push(b);
-    }
-    if bytes.len() < 32 {
-        return None;
-    }
-    let arr: [u8; 32] = bytes[..32].try_into().ok()?;
-    EndpointId::from_bytes(&arr).ok()
-}
-
-/// Encrypt, serialize, and broadcast a gossip payload.
-#[allow(dead_code)]
-async fn broadcast_payload(
-    sender: &iroh_gossip::api::GossipSender,
-    crypto: &FlockCrypto,
-    payload: &GossipPayload,
-) -> anyhow::Result<()> {
-    let plaintext = postcard::to_stdvec(payload)?;
-    let ciphertext = crypto.encrypt(&plaintext);
-    sender.broadcast(ciphertext.into()).await?;
-    Ok(())
-}
-
-/// Run the network loop: bind an endpoint, join the flock's gossip topic, and
-/// shuttle [`Command`]s and [`AppEvent`]s until [`Command::Quit`] arrives.
-///
-/// * `bootstrap` - known peers to dial when joining an existing flock.
-/// * `cmd_rx` - commands from the UI.
-/// * `evt_tx` - events back to the UI.
-/// * `muted` - shared flag toggled by the UI to mute the mic.
-/// * `my_node_id` - our own node identity (from the persistent secret key).
-/// * `name` - our display name, announced to peers and used as chat author.
-/// * `input_device` - optional CPAL input device name for the mic.
 pub async fn run(
     bootstrap: Vec<EndpointId>,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
@@ -117,19 +34,19 @@ pub async fn run(
     input_device: Option<String>,
 ) -> anyhow::Result<()> {
     let _ = (&muted, &input_device);
-    let secret = crate::config::Profile::load_or_create_secret();
+    let secret = starling::config::Profile::load_or_create_secret();
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
         .bind()
         .await?;
     endpoint.online().await;
 
-    let my_code = encode_node_id(&my_node_id);
-    crate::logger::warn(&format!("endpoint bound: room_code={my_code}"));
+    let my_code = starling::net::encode_node_id(&my_node_id);
+    starling::logger::warn(&format!("endpoint bound: room_code={my_code}"));
     let _ = evt_tx.send(AppEvent::Ticket(my_code));
 
     let gossip = Gossip::builder().spawn(endpoint.clone());
-    let history: crate::sync::History = Default::default();
+    let history: starling::sync::History = Default::default();
 
     #[allow(unused_mut)]
     let mut builder = Router::builder(endpoint.clone()).accept(GOSSIP_ALPN, gossip.clone());
@@ -153,20 +70,17 @@ pub async fn run(
     }
     let _router = builder
         .accept(
-            crate::sync::SYNC_ALPN,
-            crate::sync::SyncProto {
+            starling::sync::SYNC_ALPN,
+            starling::sync::SyncProto {
                 history: history.clone(),
             },
         )
         .spawn();
 
-    // Build the flock map. No initial flock — the user creates or joins
-    // a room via Ctrl+N or Ctrl+J.
     let mut flocks: HashMap<String, FlockHandle> = HashMap::new();
 
-    // If bootstrapping from CLI (starling join BIRD-...), join immediately.
     if let Some(&opener) = bootstrap.first() {
-        let room = encode_node_id(&opener);
+        let room = starling::net::encode_node_id(&opener);
         join_flock(
             &gossip,
             room,
@@ -214,8 +128,8 @@ pub async fn run(
             }
 
             Command::JoinFlock { code } => {
-                if let Some(opener) = decode_node_id(&code) {
-                    let room = encode_node_id(&opener);
+                if let Some(opener) = starling::net::decode_node_id(&code) {
+                    let room = starling::net::encode_node_id(&opener);
                     let _ = join_flock(
                         &gossip,
                         room,
@@ -230,13 +144,8 @@ pub async fn run(
             }
 
             Command::JoinRoost { code } => {
-                if let Some(opener) = decode_node_id(&code) {
-                    let _ = join_roost(
-                        &gossip,
-                        opener,
-                        evt_tx.clone(),
-                    )
-                    .await;
+                if let Some(opener) = starling::net::decode_node_id(&code) {
+                    let _ = join_roost(&gossip, opener, evt_tx.clone()).await;
                 }
             }
 
@@ -255,7 +164,7 @@ pub async fn run(
             }
             #[cfg(not(feature = "audio"))]
             Command::StartCall(_) => {
-                crate::logger::warn("voice call not supported (audio feature disabled)");
+                starling::logger::warn("voice call not supported (audio feature disabled)");
             }
 
             #[cfg(feature = "audio")]
@@ -276,7 +185,7 @@ pub async fn run(
             }
             #[cfg(not(feature = "video"))]
             Command::StartVideo(_) => {
-                crate::logger::warn("video not supported (video feature disabled)");
+                starling::logger::warn("video not supported (video feature disabled)");
             }
             #[cfg(feature = "video")]
             Command::StopVideo => {
@@ -292,7 +201,6 @@ pub async fn run(
     Ok(())
 }
 
-/// Protocol handler for incoming voice call connections.
 #[cfg(feature = "audio")]
 #[derive(Debug)]
 struct VoiceProto {
@@ -307,7 +215,6 @@ impl iroh::protocol::ProtocolHandler for VoiceProto {
     }
 }
 
-/// Protocol handler for incoming video call connections.
 #[cfg(feature = "video")]
 #[derive(Debug)]
 struct VideoProto {
@@ -335,7 +242,7 @@ async fn join_flock(
         return Ok(());
     }
 
-    let topic = topic_for(&format!("starling/flock/{code}"));
+    let topic = starling::net::topic_for(&format!("starling/flock/{code}"));
     let crypto = FlockCrypto::from_room_code(&code);
     let (sender, mut receiver) = gossip.subscribe(topic, boot).await?.split();
 
@@ -366,7 +273,7 @@ async fn join_flock(
                                 let _ = rx_tx.send(AppEvent::PeerStatus(id, status));
                             }
                             Err(e) => {
-                                crate::logger::error(&format!("gossip deserialize error: {e}"));
+                                starling::logger::error(&format!("gossip deserialize error: {e}"));
                             }
                         }
                     }
@@ -374,7 +281,6 @@ async fn join_flock(
 
                 Ok(Event::NeighborUp(id)) => {
                     let _ = rx_tx.send(AppEvent::PeerConnected(id));
-                    // Announce our profile so the new peer sees our name.
                     let payload = GossipPayload::Profile {
                         id: rx_my_id,
                         name: rx_name.clone(),
@@ -401,8 +307,8 @@ async fn join_roost(
     opener: EndpointId,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
 ) -> anyhow::Result<()> {
-    let code = encode_node_id(&opener);
-    let topic = topic_for(&format!("starling/roost/{code}"));
+    let code = starling::net::encode_node_id(&opener);
+    let topic = starling::net::topic_for(&format!("starling/roost/{code}"));
     let (_sender, mut receiver) = gossip.subscribe(topic, vec![opener]).await?.split();
 
     let tx = evt_tx.clone();

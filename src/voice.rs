@@ -20,7 +20,7 @@ pub fn start_capture(
     muted: Arc<AtomicBool>,
     device_name: Option<&str>,
 ) -> anyhow::Result<cpal::Stream> {
-    crate::util::suppress_stderr(|| start_capture_inner(net_tx, muted, device_name))
+    starling::util::suppress_stderr(|| start_capture_inner(net_tx, muted, device_name))
 }
 
 fn start_capture_inner(
@@ -62,7 +62,7 @@ fn start_capture_inner(
                 }
             }
         },
-        |e| crate::logger::error(&format!("mic error: {e}")),
+        |e| starling::logger::error(&format!("mic error: {e}")),
         None,
     )?;
 

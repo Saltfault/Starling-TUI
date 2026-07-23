@@ -54,12 +54,12 @@ pub fn start_camera(
         ) {
             Ok(c) => c,
             Err(e) => {
-                crate::logger::error(&format!("camera init failed: {e}"));
+                starling::logger::error(&format!("camera init failed: {e}"));
                 return;
             }
         };
         if let Err(e) = cam.open_stream() {
-            crate::logger::error(&format!("camera stream open failed: {e}"));
+            starling::logger::error(&format!("camera stream open failed: {e}"));
             return;
         }
 
