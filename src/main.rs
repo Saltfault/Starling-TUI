@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if first == Some("setup") {
+    if first == Some("profile") {
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
