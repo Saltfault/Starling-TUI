@@ -52,6 +52,11 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Checkout starling library
+        uses: actions/checkout@v6
+        with:
+          repository: Saltfault/starling
+          path: ../starling
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
       - name: Build release
