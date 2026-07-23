@@ -34,10 +34,13 @@ sha2 = "0.11.0"
 tokio = { version = "1.53.1", features = ["full"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
 
-# Linux: cpal PulseAudio backend, libc, nokhwa (V4L2 — needs libclang-dev)
+# Unix: libc for stderr suppression (util.rs)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Linux: cpal PulseAudio backend, nokhwa (V4L2 — needs libclang-dev)
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "0.18.1", features = ["pulseaudio"], optional = true }
-libc = "0.2"
 nokhwa = { version = "0.10.11", features = ["input-native"], optional = true }
 
 # Windows: nokhwa (Media Foundation — no extra deps needed)
@@ -48,6 +51,4 @@ nokhwa = { version = "0.10.11", features = ["input-native"], optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 nokhwa = { version = "0.10.11", features = ["input-native"], optional = true }
 
-# Other Unix (BSDs): libc for stderr suppression
-[target.'cfg(all(unix, not(target_os = "linux"), not(target_os = "macos")))'.dependencies]
-libc = "0.2"
+
