@@ -40,7 +40,14 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
 
-    if args.get(1).map(String::as_str) == Some("setup") {
+    let first = args.get(1).map(String::as_str);
+
+    if first == Some("--version") {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    if first == Some("setup") {
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
@@ -51,164 +58,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // ── TUI-only commands ────────────────────────────────────────────
-    // `starling leave <code>` — print leave instructions (no-op in TUI).
-    // The user can just close the app to "leave" a flock.
-    if args.get(1).map(String::as_str) == Some("leave") {
-        let _code = args.get(2).cloned().unwrap_or_default();
-        println!("To leave a flock, simply close the app (Esc).");
-        println!("A roost can be stopped with: starling-server roost close <name>");
-        return Ok(());
-    }
-
-    // `starling list` — list known roosts on disk.
-    if args.get(1).map(String::as_str) == Some("list") {
-        let roosts_dir = config::Profile::roosts_dir();
-        if !roosts_dir.exists() {
-            println!("No roosts found. Create one with: starling-server roost create <name>");
-            return Ok(());
-        }
-        let mut count = 0;
-        for entry in std::fs::read_dir(&roosts_dir).map_err(|e| {
-            eprintln!("Error reading roosts directory: {e}");
-            std::process::exit(1);
-        })? {
-            if let Ok(entry) = entry {
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    println!("  roost: {name}");
-                    count += 1;
-                }
-            }
-        }
-        if count == 0 {
-            println!("No roosts found. Create one with: starling-server roost create <name>");
-        }
-        return Ok(());
-    }
-
-    // `starling doctor` — diagnose setup.
-    if args.get(1).map(String::as_str) == Some("doctor") {
-        println!("Starling Doctor");
-        println!("---------------");
-
-        let config_dir = config::Profile::config_dir();
-        if config_dir.exists() {
-            println!("  ✓ config directory: {}", config_dir.display());
-        } else {
-            println!("  ✗ config directory missing — run `starling setup`");
-            return Ok(());
-        }
-
-        let identity = config_dir.join("identity.key");
-        if identity.exists() {
-            println!("  ✓ identity key: {}", identity.display());
-        } else {
-            println!("  ✗ identity key missing — will be created on first launch");
-        }
-
-        let profile = config_dir.join("profile.bin");
-        if profile.exists() {
-            println!("  ✓ profile: {}", profile.display());
-        } else {
-            println!("  ✗ profile not configured — run `starling setup`");
-        }
-
-        let roosts_dir = config::Profile::roosts_dir();
-        if roosts_dir.exists() {
-            let count = std::fs::read_dir(&roosts_dir)
-                .map(|d| {
-                    d.filter_map(|e| e.ok())
-                        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                        .count()
-                })
-                .unwrap_or(0);
-            println!("  ✓ roosts on disk: {count}");
-            println!("    ({})", roosts_dir.display());
-        } else {
-            println!("  ○ no roosts directory (none created yet)");
-        }
-
-        println!();
-        println!("System dependencies:");
-        if std::process::Command::new("cargo")
-            .arg("--version")
-            .output()
-            .is_ok()
-        {
-            println!("  ✓ cargo installed");
-        } else {
-            println!("  ✗ cargo not found — install Rust: https://rustup.rs");
-        }
-
-        return Ok(());
-    }
-
-    // `starling logs` — show the log file path.
-    if args.get(1).map(String::as_str) == Some("logs") {
-        println!("Starling TUI logs:");
-        println!("  logs/latest.log  (in the working directory)");
-        return Ok(());
-    }
-
-    // `starling tui version|update|uninstall` — TUI self-management.
-    if args.get(1).map(String::as_str) == Some("tui") {
-        match args.get(2).map(String::as_str) {
-            Some("version") => {
-                println!("Starling TUI v{}", env!("CARGO_PKG_VERSION"));
-                return Ok(());
-            }
-            Some("update") => {
-                println!("To update Starling TUI:");
-                println!(
-                    "  cargo install starling-tui --git https://forgejo.hearthhome.lol/Saltfault/Starling-TUI.git"
-                );
-                println!();
-                println!("Or if you cloned the repo: git pull && cargo build --release");
-                return Ok(());
-            }
-            Some("uninstall") => {
-                println!("To uninstall Starling TUI:");
-                println!("  1. Remove the binary: cargo uninstall starling-tui");
-                println!(
-                    "  2. Remove config: rm -rf {}",
-                    config::Profile::config_dir().display()
-                );
-                println!();
-                println!("If you installed from source, just delete the repository.");
-                return Ok(());
-            }
-            _ => {
-                eprintln!("Usage: starling tui <version|update|uninstall>");
-                std::process::exit(1);
-            }
-        }
-    }
-
-    // `starling help` — print usage.
-    if matches!(
-        args.get(1).map(String::as_str),
-        Some("help" | "--help" | "-h")
-    ) {
-        println!(
-            "Starling TUI v{} — federated p2p communications",
-            env!("CARGO_PKG_VERSION")
-        );
-        println!();
-        println!("Usage:");
-        println!("  starling join <code>                    join a flock or roost");
-        println!("  starling open                           open the TUI");
-        println!("  starling leave <code>                   leave a flock or roost");
-        println!("  starling list                           list flocks and roosts");
-        println!("  starling doctor                         diagnose setup");
-        println!("  starling logs                           show log file path");
-        println!("  starling tui version                    print version");
-        println!("  starling tui update                     print update instructions");
-        println!("  starling tui uninstall                  print uninstall instructions");
-        return Ok(());
-    }
-
-    let bootstrap = match args.get(1).map(String::as_str) {
+    let bootstrap = match first {
         Some("join") => {
             let code = &args[2];
             match net::decode_node_id(code) {

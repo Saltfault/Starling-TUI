@@ -4,6 +4,10 @@
 > peer-to-peer communications platform. For the main project, see the
 > [Starling repository](https://forgejo.hearthhome.lol/Saltfault/Starling).
 
+> ⚠️ **Early access — under active development.** This is the working
+> client, but it's young and changing fast. Expect rough edges and breaking
+> changes between versions. Bug reports and feedback are welcome.
+
 A federated peer-to-peer communications platform where peers — known as
 **birds** — can communicate from anywhere in the world thanks to a
 peer-to-peer network called **the murmuration**.
@@ -23,8 +27,8 @@ server required. A room code is all a new bird needs to join a flock.
 | Room codes | ✓ | ✓ | ✓ | ✓ |
 | Persistent identity | ✓ | ✓ | ✓ | ✓ |
 
-† WSL2 voice requires a one-time setup step (`starling setup` or
-`just setup`) that installs the ALSA→PulseAudio bridge. See
+† WSL2 voice requires a one-time setup step (`starling setup`)
+that installs the ALSA→PulseAudio bridge. See
 [WSL2 setup](#wsl2-windows-subsystem-for-linux) below.
 
 WSL2 does not expose webcams by default — use a native Windows build for
@@ -34,11 +38,18 @@ video calls.
 
 ## Getting started
 
-**Install Starling:**
+**Install the TUI via the Starling launcher.** You don't install this repo
+directly — you install [**Starling**](https://forgejo.hearthhome.lol/Saltfault/Starling)
+(the main repo), then use it to install the client:
 
 ```bash
-cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling-TUI.git
+# one-time: install the launcher
+cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling.git
+# then install the terminal client
+starling install tui
 ```
+
+> Building from source instead? See the from-source instructions further down.
 
 **Configure your profile (one-time):**
 
@@ -67,36 +78,30 @@ starling join BIRD-00CCFF-00CCFF-...
 ### Roosts (headless servers)
 
 A **roost** is a persistent bird that stays online to keep a community's
-chat history and relay state to late-joiners — no TUI needed. Think of it
-as your own Discord server, except it runs on your own machine and uses
-the peer-to-peer murmuration instead of a central server.
+chat history and channels for late-joiners — like your own Discord server,
+except it runs on your own machine over the peer-to-peer murmuration.
 
-**Create a roost:**
-
-```bash
-starling roost create my-community
-```
-
-This generates a dedicated identity key and sled database. It prints the
-roost's invite code — share it so others can join.
-
-**Start the roost server:**
+**Roost commands come from the server component**
+([`starling-server`](https://forgejo.hearthhome.lol/Saltfault/Starling-Server)),
+which you add with `starling install server`. You then run them through the
+same `starling` command:
 
 ```bash
-starling roost open my-community
+starling install server              # one-time, adds the roost commands
+starling roost create my-community   # mints identity + database, prints invite code
+starling roost open   my-community   # stays online until Ctrl+C
 ```
 
-The roost stays online until you press Ctrl+C. It persists every message
-to disk and serves history to birds that join later.
-
-**Join a roost** like any other flock:
+**From the TUI, you join a roost exactly like any other flock** — with its
+invite code:
 
 ```bash
 starling join BIRD-...
 ```
 
-Data lives under `~/.config/starling/roosts/<name>/`
-(on Unix) or `%APPDATA%/starling/roosts/<name>/` (on Windows).
+Once joined, the roost's channels appear in the flock rail. See the
+[Starling-Server README](https://forgejo.hearthhome.lol/Saltfault/Starling-Server)
+for the full roost command reference.
 
 > **Developing?** You can also clone and run from source:
 > ```bash
@@ -104,16 +109,39 @@ Data lives under `~/.config/starling/roosts/<name>/`
 > cd Starling-TUI
 > cargo run -- open
 > ```
-> The `justfile` provides `just install-deps`, `just setup`, `just run`,
-> and `just join <code>` as shortcuts.
+
+---
+
+## Command reference
+
+Everything runs through one command: `starling` (installed from the
+[main repo](https://forgejo.hearthhome.lol/Saltfault/Starling), then
+`starling install tui`). Roost commands require `starling install server`.
+
+| Command | Status | Does |
+|---------|:------:|------|
+| `starling open` | ✅ | Launch the TUI. (Bare `starling` does the same) |
+| `starling join <code>` | ✅ | Launch and join a flock or roost by invite code |
+| `starling setup` | ✅ | Run the profile + audio + dependency wizard |
+| `starling leave <code>` | ✅ | Print how to leave (in the TUI, just close with `Esc`) |
+| `starling list` | ✅ | List roosts stored on disk |
+| `starling doctor` | ✅ | Diagnose config, identity, profile, and dependencies |
+| `starling logs` | ✅ | Print the log file location |
+| `starling install tui` | ✅ | Install (or reinstall) the terminal client |
+| `starling update tui` | ✅ | Update the client to the latest version |
+| `starling uninstall tui` | ✅ | Uninstall the client and remove its config |
+| `starling help` | ✅ | Print usage |
+
+Inside the running app, joining more flocks, switching between them, calls,
+and video are all keybindings — see [Keybindings](#keybindings) below.
 
 ---
 
 ## Platform setup
 
 Before installing Starling, you need Rust and a C compiler. Follow the
-section for your platform. Then run `starling setup` (or `just setup`) to
-configure your profile, audio devices, and any platform-specific dependencies.
+section for your platform. Then run `starling setup` to configure your
+profile, audio devices, and any platform-specific dependencies.
 
 ### Windows
 
@@ -131,7 +159,8 @@ build Rust projects.
 **3. Install Starling:**
 
 ```powershell
-cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling-TUI.git
+cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling.git
+starling install tui
 ```
 
 > **Pre-built binaries** (no Rust or compiler required) are planned —
@@ -171,7 +200,8 @@ source "$HOME/.cargo/env"
 **4. Install Starling:**
 
 ```bash
-cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling-TUI.git
+cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling.git
+starling install tui
 ```
 
 **5. Run:**
@@ -208,7 +238,8 @@ source "$HOME/.cargo/env"
 **3. Install Starling:**
 
 ```bash
-cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling-TUI.git
+cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling.git
+starling install tui
 ```
 
 **4. Run:**
@@ -252,25 +283,25 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-**4. Install `just` and run setup:**
+**4. Install Starling:**
 
 ```bash
-cargo install just
-just setup
+cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling.git
+starling install tui
 ```
 
-`just setup` (or `starling setup`) installs `libasound2-plugins` and writes
+**5. Run setup (configures the WSL2 audio bridge):**
+
+```bash
+starling setup
+```
+
+`starling setup` installs `libasound2-plugins` and writes
 `/etc/asound.conf` to route ALSA through PulseAudio. This is needed because
 the pure-Rust PulseAudio crate that cpal uses can't authenticate with WSLg's
 server, but the C library (`libpulse`) that ALSA's pulse plugin uses can.
 
 If you skip this step, text chat works but voice calls won't.
-
-**5. Install Starling:**
-
-```bash
-cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling-TUI.git
-```
 
 **6. Run:**
 
@@ -381,20 +412,27 @@ working.
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │ main.rs (UI loop)                                                │
-│   keyboard → Command ──┐                    roost ───────────┐  │
-│   AppEvent ←───────────┤──── mpsc channels ────┐             │  │
-│   playback ← VoiceFrame│                       │             │  │
-│   video_frame ← VideoFrame                     │             │  │
-└────────────────────────┊────────────────────────┊─────────────┊──┘
-                         ▼                        ▼             ▼
+│   keyboard → Command ──┐                                         │
+│   AppEvent ←───────────┤──── mpsc channels ────┐                │
+│   playback ← VoiceFrame│                       │                │
+│   video_frame ← VideoFrame                     │                │
+└────────────────────────┊────────────────────────┊───────────────┘
+                         ▼                        ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ net.rs (network task)              roost/ (headless server)      │
-│   gossip for chat · QUIC datagrams  ├── mod.rs — iroh-gossip     │
-│   QUIC uni streams for video        │            loop + RoostSync│
-│   mic capture (voice.rs) → call.rs  └── store.rs — sled-backed  │
-│   webcam capture (video.rs) → call.rs        message history    │
+│ net.rs (network task)                                            │
+│   gossip for chat · QUIC datagrams for voice                     │
+│   QUIC uni streams for video · flock map (many flocks)           │
+│   mic capture (voice.rs) → call.rs                               │
+│   webcam capture (video.rs) → call.rs                            │
+│   sync.rs — history backfill for late joiners                    │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+The TUI is a **pure client** — it never runs a roost. The `roost/` module
+here holds only the protocol *types* (e.g. `RoostState`) the client reads
+off a roost's control channel to render the channel rail. The actual roost
+server lives in
+[`starling-server`](https://forgejo.hearthhome.lol/Saltfault/Starling-Server).
 
 ### Source layout
 
@@ -414,7 +452,8 @@ working.
 | `crypto.rs` | E2E encryption (ChaCha20-Poly1305) for gossip messages |
 | `logger.rs` | File logger with gzipped log rotation |
 | `util.rs` | Platform utilities (stderr suppression on Unix) |
-| `roost/` | Headless server mode — durable message store (sled), history sync |
+| `sync.rs` | History backfill: asks a peer for recent messages on join |
+| `roost/` | Roost protocol *types* the client reads to render the channel rail (the server itself lives in `starling-server`) |
 | `build.rs` | Downloads pre-built Opus static libraries from shiguredo/opus-rs |
 
 ### How the murmuration works
@@ -461,7 +500,6 @@ Run the one-time audio setup:
 
 ```bash
 starling setup
-# or: just setup
 ```
 
 This installs `libasound2-plugins` and writes `/etc/asound.conf` to route
