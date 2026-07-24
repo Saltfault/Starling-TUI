@@ -7,12 +7,41 @@ use ratatui::{
 use starling::event::{BirdStatus, ChatMessage};
 use std::collections::{HashMap, HashSet};
 
-const GREEN: Color = Color::Rgb(111, 174, 157);
-const ORANGE: Color = Color::Rgb(244, 138, 82);
-const YELLOW: Color = Color::Rgb(224, 210, 103);
-const DIM: Color = Color::Rgb(95, 104, 98);
-const CHAN: Color = Color::Rgb(154, 163, 157);
-const INVITE: Color = Color::Rgb(78, 201, 143);
+const DEFAULT_ACCENT: Color = Color::Rgb(111, 174, 157);
+const DEFAULT_AUTHOR: Color = Color::Rgb(244, 138, 82);
+const DEFAULT_SELECTION: Color = Color::Rgb(224, 210, 103);
+const DEFAULT_DIM: Color = Color::Rgb(95, 104, 98);
+const DEFAULT_CHANNEL: Color = Color::Rgb(154, 163, 157);
+const DEFAULT_INVITE: Color = Color::Rgb(78, 201, 143);
+
+pub struct Palette {
+    pub text: Color,
+    pub background: Option<Color>,
+    pub border: Color,
+    pub accent: Color,
+    pub author: Color,
+    pub selection: Color,
+    pub dim: Color,
+    pub channel: Color,
+    pub invite: Color,
+}
+
+impl Default for Palette {
+    fn default() -> Self {
+        Self {
+            text: Color::Rgb(207, 214, 210),
+            background: None,
+            border: Color::Rgb(51, 59, 55),
+            accent: DEFAULT_ACCENT,
+            author: DEFAULT_AUTHOR,
+            selection: DEFAULT_SELECTION,
+            dim: DEFAULT_DIM,
+            channel: DEFAULT_CHANNEL,
+            invite: DEFAULT_INVITE,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct FlockView {
     pub code: String,
@@ -92,9 +121,7 @@ pub struct App {
     pub menu_selection: usize,
     pub quit_requested: bool,
     pub error_message: Option<String>,
-    pub text_color: Color,
-    pub bg_color: Option<Color>,
-    pub border_color: Color,
+    pub palette: Palette,
 }
 
 impl Default for App {
@@ -125,9 +152,7 @@ impl Default for App {
             menu_selection: 0,
             quit_requested: false,
             error_message: None,
-            text_color: Color::Rgb(207, 214, 210),
-            bg_color: None,
-            border_color: Color::Rgb(51, 59, 55),
+            palette: Palette::default(),
         }
     }
 }
@@ -285,7 +310,7 @@ pub fn hex_to_color(hex: &str) -> Option<Color> {
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
 
-    if let Some(bg) = app.bg_color {
+    if let Some(bg) = app.palette.background {
         f.render_widget(
             Paragraph::new(Line::from(vec![Span::raw("")])).style(Style::new().bg(bg)),
             area,
@@ -343,7 +368,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     }
     if !code.is_empty() {
         f.render_widget(
-            Paragraph::new(format!(" {code}")).style(Style::new().fg(DIM)),
+            Paragraph::new(format!(" {code}")).style(Style::new().fg(app.palette.dim)),
             header[1],
         );
     }
@@ -362,16 +387,20 @@ fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 String::new()
             };
-            let dot = flock_dot(&fv.code);
+            let dot = flock_dot(&fv.code, app.palette.accent);
             let label = &fv.code[..12.min(fv.code.len())];
             ListItem::new(Line::from(vec![
-                Span::styled(mark, Style::new().fg(YELLOW)),
+                Span::styled(mark, Style::new().fg(app.palette.selection)),
                 Span::styled("\u{25AE} ", Style::new().fg(dot)),
                 Span::styled(
                     label.to_string(),
-                    Style::new().fg(if sel { YELLOW } else { app.text_color }),
+                    Style::new().fg(if sel {
+                        app.palette.selection
+                    } else {
+                        app.palette.text
+                    }),
                 ),
-                Span::styled(unread, Style::new().fg(YELLOW)),
+                Span::styled(unread, Style::new().fg(app.palette.selection)),
             ]))
         })
         .collect();
@@ -380,10 +409,10 @@ fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.border_color))
+                .border_style(Style::new().fg(app.palette.border))
                 .title(Span::styled(
                     format!(" flocks ({}) ", app.flocks.len()),
-                    Style::new().fg(GREEN),
+                    Style::new().fg(app.palette.accent),
                 )),
         ),
         area,
@@ -401,22 +430,26 @@ fn draw_roosts(f: &mut Frame, app: &App, area: Rect) {
         } else {
             String::new()
         };
-        let dot = flock_dot(&rv.code);
+        let dot = flock_dot(&rv.code, app.palette.accent);
         let name = if rv.name.is_empty() {
             &rv.code[..12.min(rv.code.len())]
         } else {
             &rv.name[..]
         };
         items.push(ListItem::new(Line::from(vec![
-            Span::styled(caret, Style::new().fg(DIM)),
+            Span::styled(caret, Style::new().fg(app.palette.dim)),
             Span::styled("\u{25AE} ", Style::new().fg(dot)),
             Span::styled(
                 name.to_string(),
                 Style::new()
-                    .fg(if head_sel { YELLOW } else { app.text_color })
+                    .fg(if head_sel {
+                        app.palette.selection
+                    } else {
+                        app.palette.text
+                    })
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(unread, Style::new().fg(YELLOW)),
+            Span::styled(unread, Style::new().fg(app.palette.selection)),
         ])));
 
         if expanded {
@@ -429,12 +462,23 @@ fn draw_roosts(f: &mut Frame, app: &App, area: Rect) {
                 };
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw("    "),
-                    Span::styled("#", Style::new().fg(if sel { YELLOW } else { DIM })),
+                    Span::styled(
+                        "#",
+                        Style::new().fg(if sel {
+                            app.palette.selection
+                        } else {
+                            app.palette.dim
+                        }),
+                    ),
                     Span::styled(
                         format!(" {}", ch.name),
-                        Style::new().fg(if sel { YELLOW } else { CHAN }),
+                        Style::new().fg(if sel {
+                            app.palette.selection
+                        } else {
+                            app.palette.channel
+                        }),
                     ),
-                    Span::styled(cu, Style::new().fg(YELLOW)),
+                    Span::styled(cu, Style::new().fg(app.palette.selection)),
                 ])));
             }
         }
@@ -444,10 +488,10 @@ fn draw_roosts(f: &mut Frame, app: &App, area: Rect) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.border_color))
+                .border_style(Style::new().fg(app.palette.border))
                 .title(Span::styled(
                     format!(" roosts ({}) ", app.roosts.len()),
-                    Style::new().fg(GREEN),
+                    Style::new().fg(app.palette.accent),
                 )),
         ),
         area,
@@ -483,9 +527,11 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{}: ", m.author),
-                    Style::new().fg(ORANGE).add_modifier(Modifier::BOLD),
+                    Style::new()
+                        .fg(app.palette.author)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(m.body.clone(), Style::new().fg(app.text_color)),
+                Span::styled(m.body.clone(), Style::new().fg(app.palette.text)),
             ]))
         })
         .collect();
@@ -495,8 +541,8 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.border_color))
-                .title(Span::styled(title, Style::new().fg(app.text_color))),
+                .border_style(Style::new().fg(app.palette.border))
+                .title(Span::styled(title, Style::new().fg(app.palette.text))),
         ),
         area,
     );
@@ -508,7 +554,9 @@ fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
         Span::raw("  "),
         Span::styled(
             format!("{} (you)", app.name),
-            Style::new().fg(YELLOW).add_modifier(Modifier::BOLD),
+            Style::new()
+                .fg(app.palette.selection)
+                .add_modifier(Modifier::BOLD),
         ),
     ])));
 
@@ -516,16 +564,20 @@ fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
         let sel = i == app.selected_peer;
         let mark = if sel { "> " } else { "  " };
         let (glyph, gc) = match app.peer_status.get(id) {
-            Some(BirdStatus::InCall) => ("~", ORANGE),
-            Some(BirdStatus::Idle) => ("-", DIM),
-            _ => ("o", GREEN),
+            Some(BirdStatus::InCall) => ("~", app.palette.author),
+            Some(BirdStatus::Idle) => ("-", app.palette.dim),
+            _ => ("o", app.palette.accent),
         };
         items.push(ListItem::new(Line::from(vec![
-            Span::styled(mark, Style::new().fg(YELLOW)),
+            Span::styled(mark, Style::new().fg(app.palette.selection)),
             Span::styled(format!("{glyph} "), Style::new().fg(gc)),
             Span::styled(
                 app.peer_display_name(id),
-                Style::new().fg(if sel { YELLOW } else { app.text_color }),
+                Style::new().fg(if sel {
+                    app.palette.selection
+                } else {
+                    app.palette.text
+                }),
             ),
         ])));
     }
@@ -534,8 +586,8 @@ fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.border_color))
-                .title(Span::styled(" birds ", Style::new().fg(GREEN))),
+                .border_style(Style::new().fg(app.palette.border))
+                .title(Span::styled(" birds ", Style::new().fg(app.palette.accent))),
         ),
         area,
     );
@@ -552,9 +604,9 @@ fn status_text(app: &App) -> String {
 fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
     let mut spans = Vec::new();
     for (_action, label, _x, _w) in toolbar_buttons(app) {
-        spans.push(Span::styled("[", Style::new().fg(GREEN)));
-        spans.push(Span::styled(label, Style::new().fg(GREEN)));
-        spans.push(Span::styled("]", Style::new().fg(GREEN)));
+        spans.push(Span::styled("[", Style::new().fg(app.palette.accent)));
+        spans.push(Span::styled(label, Style::new().fg(app.palette.accent)));
+        spans.push(Span::styled("]", Style::new().fg(app.palette.accent)));
         spans.push(Span::raw(" "));
     }
     let status = app
@@ -563,7 +615,7 @@ fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_else(|| status_text(app));
     if !status.is_empty() {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(status, Style::new().fg(DIM)));
+        spans.push(Span::styled(status, Style::new().fg(app.palette.dim)));
     }
     f.render_widget(Line::from(spans), area);
 }
@@ -585,8 +637,8 @@ fn draw_menu_popup(f: &mut Frame, app: &App) {
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::new().fg(app.border_color))
-            .title(Span::styled(" Menu ", Style::new().fg(GREEN))),
+            .border_style(Style::new().fg(app.palette.border))
+            .title(Span::styled(" Menu ", Style::new().fg(app.palette.accent))),
         popup,
     );
     let inner = popup.inner(Margin {
@@ -599,9 +651,11 @@ fn draw_menu_popup(f: &mut Frame, app: &App) {
         .map(|(i, item)| {
             let sel = i == app.menu_selection;
             let style = if sel {
-                Style::new().fg(YELLOW).add_modifier(Modifier::BOLD)
+                Style::new()
+                    .fg(app.palette.selection)
+                    .add_modifier(Modifier::BOLD)
             } else {
-                Style::new().fg(app.text_color)
+                Style::new().fg(app.palette.text)
             };
             let prefix = if sel { "> " } else { "  " };
             ListItem::new(Line::from(Span::styled(format!("{prefix}{item}"), style)))
@@ -616,8 +670,11 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::new().fg(app.border_color))
-            .title(Span::styled(" Create Room ", Style::new().fg(GREEN))),
+            .border_style(Style::new().fg(app.palette.border))
+            .title(Span::styled(
+                " Create Room ",
+                Style::new().fg(app.palette.accent),
+            )),
         popup,
     );
     let inner = popup.inner(Margin {
@@ -633,15 +690,16 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
     .split(inner);
     let invite = app.node_id.as_deref().unwrap_or("waiting for endpoint...");
     f.render_widget(
-        Paragraph::new("Your invite code:").style(Style::new().fg(app.text_color)),
+        Paragraph::new("Your invite code:").style(Style::new().fg(app.palette.text)),
         rows[0],
     );
     f.render_widget(
-        Paragraph::new(invite).style(Style::new().fg(INVITE)),
+        Paragraph::new(invite).style(Style::new().fg(app.palette.invite)),
         rows[1],
     );
     f.render_widget(
-        Paragraph::new("Press Enter to create, Esc to cancel.").style(Style::new().fg(DIM)),
+        Paragraph::new("Press Enter to create, Esc to cancel.")
+            .style(Style::new().fg(app.palette.dim)),
         rows[3],
     );
 }
@@ -653,8 +711,7 @@ fn draw_join_room_popup(f: &mut Frame, app: &App) {
         "Enter the room code:",
         &app.join_input,
         " Enter = join . Esc = cancel",
-        app.text_color,
-        app.border_color,
+        app,
     );
 }
 
@@ -665,27 +722,21 @@ fn draw_join_roost_popup(f: &mut Frame, app: &App) {
         "Enter the roost code:",
         &app.join_roost_input,
         " Enter = join . Esc = cancel",
-        app.text_color,
-        app.border_color,
+        app,
     );
 }
 
-fn draw_input_popup(
-    f: &mut Frame,
-    title: &str,
-    prompt: &str,
-    value: &str,
-    hint: &str,
-    text_color: Color,
-    border_color: Color,
-) {
+fn draw_input_popup(f: &mut Frame, title: &str, prompt: &str, value: &str, hint: &str, app: &App) {
     let popup = centered(f.area(), 60, 8);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::new().fg(border_color))
-            .title(Span::styled(title.to_string(), Style::new().fg(GREEN))),
+            .border_style(Style::new().fg(app.palette.border))
+            .title(Span::styled(
+                title.to_string(),
+                Style::new().fg(app.palette.accent),
+            )),
         popup,
     );
     let inner = popup.inner(Margin {
@@ -699,14 +750,17 @@ fn draw_input_popup(
     ])
     .split(inner);
     f.render_widget(
-        Paragraph::new(prompt).style(Style::new().fg(text_color)),
+        Paragraph::new(prompt).style(Style::new().fg(app.palette.text)),
         rows[0],
     );
     f.render_widget(
-        Paragraph::new(format!(" {value}_")).style(Style::new().fg(YELLOW)),
+        Paragraph::new(format!(" {value}_")).style(Style::new().fg(app.palette.selection)),
         rows[1],
     );
-    f.render_widget(Paragraph::new(hint).style(Style::new().fg(DIM)), rows[2]);
+    f.render_widget(
+        Paragraph::new(hint).style(Style::new().fg(app.palette.dim)),
+        rows[2],
+    );
 }
 
 fn color_swatches(code: &str) -> Vec<Span<'static>> {
@@ -721,11 +775,11 @@ fn color_swatches(code: &str) -> Vec<Span<'static>> {
     spans
 }
 
-fn flock_dot(code: &str) -> Color {
+fn flock_dot(code: &str, fallback: Color) -> Color {
     parse_color_code(code)
         .first()
         .map(|&(r, g, b)| Color::Rgb(r, g, b))
-        .unwrap_or(GREEN)
+        .unwrap_or(fallback)
 }
 
 fn parse_color_code(code: &str) -> Vec<(u8, u8, u8)> {

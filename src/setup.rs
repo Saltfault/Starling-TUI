@@ -7,7 +7,10 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
-use starling::config::Profile;
+use starling::config::{
+    DEFAULT_ACCENT_COLOR, DEFAULT_AUTHOR_COLOR, DEFAULT_BORDER_COLOR, DEFAULT_DIM_COLOR,
+    DEFAULT_SELECTION_COLOR, DEFAULT_TEXT_COLOR, Profile,
+};
 #[cfg(feature = "audio")]
 use starling::util::suppress_stderr;
 
@@ -27,6 +30,10 @@ enum Phase {
     ColorText,
     ColorBg,
     ColorBorder,
+    ColorAccent,
+    ColorAuthor,
+    ColorSelection,
+    ColorDim,
     Summary,
 }
 
@@ -46,6 +53,10 @@ struct SetupApp {
     text_color_input: String,
     bg_color_input: String,
     border_color_input: String,
+    accent_color_input: String,
+    author_color_input: String,
+    selection_color_input: String,
+    dim_color_input: String,
     hex_error: String,
 }
 
@@ -63,6 +74,14 @@ fn hex_preview(hex: &str) -> Option<Color> {
 
 fn valid_hex(hex: &str) -> bool {
     hex_preview(hex).is_some()
+}
+
+fn normalized_color(input: &str, default: &str) -> String {
+    if input.is_empty() {
+        default.to_string()
+    } else {
+        format!("#{}", input.trim_start_matches('#').to_ascii_uppercase())
+    }
 }
 
 impl SetupApp {
@@ -123,6 +142,10 @@ impl SetupApp {
             text_color_input: profile_clone.text_color.clone(),
             bg_color_input: profile_clone.bg_color.clone(),
             border_color_input: profile_clone.border_color.clone(),
+            accent_color_input: profile_clone.accent_color.clone(),
+            author_color_input: profile_clone.author_color.clone(),
+            selection_color_input: profile_clone.selection_color.clone(),
+            dim_color_input: profile_clone.dim_color.clone(),
             hex_error: String::new(),
         }
     }
@@ -132,6 +155,10 @@ impl SetupApp {
             Phase::ColorText => "Text Color",
             Phase::ColorBg => "Background Color",
             Phase::ColorBorder => "Border Color",
+            Phase::ColorAccent => "Accent Color",
+            Phase::ColorAuthor => "Author Color",
+            Phase::ColorSelection => "Selection Color",
+            Phase::ColorDim => "Dim Color",
             _ => "",
         }
     }
@@ -141,23 +168,43 @@ impl SetupApp {
             Phase::ColorText => &self.text_color_input,
             Phase::ColorBg => &self.bg_color_input,
             Phase::ColorBorder => &self.border_color_input,
+            Phase::ColorAccent => &self.accent_color_input,
+            Phase::ColorAuthor => &self.author_color_input,
+            Phase::ColorSelection => &self.selection_color_input,
+            Phase::ColorDim => &self.dim_color_input,
             _ => "",
         }
     }
 
+    fn current_hex_input_mut(&mut self, phase: &Phase) -> &mut String {
+        match phase {
+            Phase::ColorText => &mut self.text_color_input,
+            Phase::ColorBg => &mut self.bg_color_input,
+            Phase::ColorBorder => &mut self.border_color_input,
+            Phase::ColorAccent => &mut self.accent_color_input,
+            Phase::ColorAuthor => &mut self.author_color_input,
+            Phase::ColorSelection => &mut self.selection_color_input,
+            Phase::ColorDim => &mut self.dim_color_input,
+            _ => unreachable!("not a color phase"),
+        }
+    }
+
     fn finish_colors(&mut self) {
-        if valid_hex(&self.text_color_input) {
-            let h = self.text_color_input.trim_start_matches('#');
-            self.profile.text_color = format!("#{h}");
-        }
-        if valid_hex(&self.bg_color_input) {
-            let h = self.bg_color_input.trim_start_matches('#');
-            self.profile.bg_color = format!("#{h}");
-        }
-        if valid_hex(&self.border_color_input) {
-            let h = self.border_color_input.trim_start_matches('#');
-            self.profile.border_color = format!("#{h}");
-        }
+        self.profile.text_color = normalized_color(&self.text_color_input, DEFAULT_TEXT_COLOR);
+        self.profile.bg_color = if self.bg_color_input.is_empty() {
+            String::new()
+        } else {
+            normalized_color(&self.bg_color_input, "")
+        };
+        self.profile.border_color =
+            normalized_color(&self.border_color_input, DEFAULT_BORDER_COLOR);
+        self.profile.accent_color =
+            normalized_color(&self.accent_color_input, DEFAULT_ACCENT_COLOR);
+        self.profile.author_color =
+            normalized_color(&self.author_color_input, DEFAULT_AUTHOR_COLOR);
+        self.profile.selection_color =
+            normalized_color(&self.selection_color_input, DEFAULT_SELECTION_COLOR);
+        self.profile.dim_color = normalized_color(&self.dim_color_input, DEFAULT_DIM_COLOR);
     }
 }
 
@@ -547,21 +594,28 @@ fn run_wizard(
                     _ => {}
                 },
 
-                Phase::ColorText | Phase::ColorBg | Phase::ColorBorder => {
+                Phase::ColorText
+                | Phase::ColorBg
+                | Phase::ColorBorder
+                | Phase::ColorAccent
+                | Phase::ColorAuthor
+                | Phase::ColorSelection
+                | Phase::ColorDim => {
                     let cur = app.phase.clone();
                     let next = match cur {
                         Phase::ColorText => Phase::ColorBg,
                         Phase::ColorBg => Phase::ColorBorder,
-                        _ => Phase::Summary,
+                        Phase::ColorBorder => Phase::ColorAccent,
+                        Phase::ColorAccent => Phase::ColorAuthor,
+                        Phase::ColorAuthor => Phase::ColorSelection,
+                        Phase::ColorSelection => Phase::ColorDim,
+                        Phase::ColorDim => Phase::Summary,
+                        _ => unreachable!(),
                     };
                     match k.code {
                         KeyCode::Enter => {
-                            let val = match cur {
-                                Phase::ColorText => app.text_color_input.clone(),
-                                Phase::ColorBg => app.bg_color_input.clone(),
-                                _ => app.border_color_input.clone(),
-                            };
-                            if val.is_empty() || valid_hex(&val) {
+                            let val = app.current_hex_input(&cur);
+                            if val.is_empty() || valid_hex(val) {
                                 app.hex_error.clear();
                                 app.phase = next;
                             } else {
@@ -575,20 +629,12 @@ fn run_wizard(
                             if "0123456789ABCDEF#".contains(upper)
                                 && app.current_hex_input(&cur).len() < 7
                             {
-                                match cur {
-                                    Phase::ColorText => app.text_color_input.push(upper),
-                                    Phase::ColorBg => app.bg_color_input.push(upper),
-                                    _ => app.border_color_input.push(upper),
-                                }
+                                app.current_hex_input_mut(&cur).push(upper);
                                 app.hex_error.clear();
                             }
                         }
                         KeyCode::Backspace => {
-                            match cur {
-                                Phase::ColorText => app.text_color_input.pop(),
-                                Phase::ColorBg => app.bg_color_input.pop(),
-                                _ => app.border_color_input.pop(),
-                            };
+                            app.current_hex_input_mut(&cur).pop();
                         }
                         KeyCode::Esc => return Ok(None),
                         _ => {}
@@ -614,7 +660,7 @@ fn draw(f: &mut Frame, app: &SetupApp) {
     f.render_widget(Clear, area);
 
     let width = 60.min(area.width);
-    let height = 20.min(area.height);
+    let height = 26.min(area.height);
     let popup = Rect::new(
         area.x + (area.width.saturating_sub(width)) / 2,
         area.y + (area.height.saturating_sub(height)) / 2,
@@ -654,7 +700,13 @@ fn draw(f: &mut Frame, app: &SetupApp) {
             &app.output_devices,
             app.selected_output,
         ),
-        Phase::ColorText | Phase::ColorBg | Phase::ColorBorder => draw_color_entry(f, inner, app),
+        Phase::ColorText
+        | Phase::ColorBg
+        | Phase::ColorBorder
+        | Phase::ColorAccent
+        | Phase::ColorAuthor
+        | Phase::ColorSelection
+        | Phase::ColorDim => draw_color_entry(f, inner, app),
         Phase::Summary => draw_summary(f, inner, app),
     }
 }
@@ -928,6 +980,10 @@ fn draw_summary(f: &mut Frame, area: Rect, app: &SetupApp) {
     let text_preview = hex_preview(&app.profile.text_color);
     let border_preview = hex_preview(&app.profile.border_color);
     let bg_preview = hex_preview(&app.profile.bg_color);
+    let accent_preview = hex_preview(&app.profile.accent_color);
+    let author_preview = hex_preview(&app.profile.author_color);
+    let selection_preview = hex_preview(&app.profile.selection_color);
+    let dim_preview = hex_preview(&app.profile.dim_color);
 
     let mut lines = vec![
         Line::raw(""),
@@ -979,6 +1035,34 @@ fn draw_summary(f: &mut Frame, area: Rect, app: &SetupApp) {
             border_preview.map_or(Style::new().fg(Color::White), |c| Style::new().fg(c)),
         ),
     ]));
+    lines.push(Line::from(vec![
+        Span::raw("  Accent:  "),
+        Span::styled(
+            &app.profile.accent_color,
+            accent_preview.map_or(Style::new().fg(Color::White), |c| Style::new().fg(c)),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("  Author:  "),
+        Span::styled(
+            &app.profile.author_color,
+            author_preview.map_or(Style::new().fg(Color::White), |c| Style::new().fg(c)),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("  Select:  "),
+        Span::styled(
+            &app.profile.selection_color,
+            selection_preview.map_or(Style::new().fg(Color::White), |c| Style::new().fg(c)),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("  Dim:     "),
+        Span::styled(
+            &app.profile.dim_color,
+            dim_preview.map_or(Style::new().fg(Color::White), |c| Style::new().fg(c)),
+        ),
+    ]));
 
     lines.push(Line::raw(""));
     lines.push(Line::from(vec![
@@ -995,4 +1079,20 @@ fn draw_summary(f: &mut Frame, area: Rect, app: &SetupApp) {
     ));
 
     f.render_widget(Paragraph::new(lines), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized_color;
+
+    #[test]
+    fn blank_color_restores_default() {
+        assert_eq!(normalized_color("", "#123456"), "#123456");
+    }
+
+    #[test]
+    fn entered_color_is_normalized() {
+        assert_eq!(normalized_color("abcdef", "#123456"), "#ABCDEF");
+        assert_eq!(normalized_color("#ABCDEF", "#123456"), "#ABCDEF");
+    }
 }

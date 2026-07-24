@@ -51,19 +51,45 @@ impl Drop for TerminalCleanup {
 }
 
 fn apply_profile(app: &mut App, profile: &starling::config::Profile) {
+    use starling::config::{DEFAULT_ACCENT_COLOR, DEFAULT_DIM_COLOR};
+
     app.name.clone_from(&profile.name);
     app.pronouns.clone_from(&profile.pronouns);
+
+    let mut palette = ui::Palette::default();
     if let Some(color) = ui::hex_to_color(&profile.text_color) {
-        app.text_color = color;
+        palette.text = color;
     }
     if let Some(color) = ui::hex_to_color(&profile.border_color) {
-        app.border_color = color;
+        palette.border = color;
     }
-    app.bg_color = if profile.bg_color.is_empty() {
+    palette.background = if profile.bg_color.is_empty() {
         None
     } else {
         ui::hex_to_color(&profile.bg_color)
     };
+    if let Some(color) = ui::hex_to_color(&profile.accent_color) {
+        palette.accent = color;
+        if !profile
+            .accent_color
+            .eq_ignore_ascii_case(DEFAULT_ACCENT_COLOR)
+        {
+            palette.invite = color;
+        }
+    }
+    if let Some(color) = ui::hex_to_color(&profile.author_color) {
+        palette.author = color;
+    }
+    if let Some(color) = ui::hex_to_color(&profile.selection_color) {
+        palette.selection = color;
+    }
+    if let Some(color) = ui::hex_to_color(&profile.dim_color) {
+        palette.dim = color;
+        if !profile.dim_color.eq_ignore_ascii_case(DEFAULT_DIM_COLOR) {
+            palette.channel = color;
+        }
+    }
+    app.palette = palette;
 }
 
 fn merge_history(app: &mut App, flock: &str, old: Vec<starling::event::ChatMessage>) {
