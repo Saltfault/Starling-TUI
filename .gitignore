@@ -2,3 +2,5 @@
 /logs
 /scripts
 *.html
+
+.cargo/config.toml
