@@ -31,6 +31,7 @@ pub enum AppEvent {
     },
     JoinedFlock {
         code: String,
+        name: String,
     },
     JoinedRoost {
         code: String,

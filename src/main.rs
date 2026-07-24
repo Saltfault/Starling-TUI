@@ -101,11 +101,23 @@ fn apply_profile(app: &mut App, profile: &starling::config::Profile) {
     app.palette = palette;
 }
 
+fn refresh_create_flock_code(app: &mut App) {
+    app.create_flock_code = match (
+        app.node_id,
+        app.create_flock_secret,
+        app.create_flock_name.trim(),
+    ) {
+        (Some(opener), Some(secret), name) if !name.is_empty() => {
+            Some(starling::net::encode_flock_code(&secret, &opener, name))
+        }
+        _ => None,
+    };
+}
+
 fn open_create_room(app: &mut App) {
-    app.create_flock_code = app.node_id.map(|opener| {
-        let secret = iroh::SecretKey::generate().to_bytes();
-        starling::net::encode_flock_code(&secret, &opener)
-    });
+    app.create_flock_secret = Some(iroh::SecretKey::generate().to_bytes());
+    app.create_flock_name.clear();
+    refresh_create_flock_code(app);
     app.show_create_room = true;
 }
 
@@ -304,13 +316,13 @@ async fn main() -> anyhow::Result<()> {
                         roost.unread = roost.channels.iter().map(|channel| channel.unread).sum();
                     }
                 }
-                AppEvent::JoinedFlock { code } => {
+                AppEvent::JoinedFlock { code, name } => {
                     if app.flocks.iter().any(|flock| flock.code == code) {
                         continue;
                     }
                     app.flocks.push(FlockView {
                         code,
-                        name: String::new(),
+                        name,
                         messages: vec![],
                         unread: 0,
                     });
@@ -461,14 +473,25 @@ async fn main() -> anyhow::Result<()> {
 
                 if app.show_create_room {
                     match k.code {
-                        KeyCode::Enter => {
+                        KeyCode::Enter if app.create_flock_code.is_some() => {
                             if let Some(code) = app.create_flock_code.take() {
                                 let _ = cmd_tx.send(Command::Join { code });
                             }
+                            app.create_flock_secret = None;
                             app.show_create_room = false;
+                        }
+                        KeyCode::Char(c) if !c.is_control() && app.create_flock_name.len() < 64 => {
+                            app.create_flock_name.push(c);
+                            refresh_create_flock_code(&mut app);
+                        }
+                        KeyCode::Backspace => {
+                            app.create_flock_name.pop();
+                            refresh_create_flock_code(&mut app);
                         }
                         KeyCode::Esc => {
                             app.create_flock_code = None;
+                            app.create_flock_secret = None;
+                            app.create_flock_name.clear();
                             app.show_create_room = false;
                         }
                         _ => {}
@@ -928,7 +951,10 @@ fn activate_menu_item(
 
 #[cfg(test)]
 mod tests {
-    use super::{App, MENU_ITEMS, menu_item_at_size, open_create_room, update_menu_hover};
+    use super::{
+        App, MENU_ITEMS, menu_item_at_size, open_create_room, refresh_create_flock_code,
+        update_menu_hover,
+    };
 
     #[test]
     fn every_rendered_menu_row_is_clickable() {
@@ -963,8 +989,12 @@ mod tests {
         app.node_id = Some(iroh::SecretKey::generate().public());
 
         open_create_room(&mut app);
+        app.create_flock_name = "Night Birds".into();
+        refresh_create_flock_code(&mut app);
         let first = app.create_flock_code.clone().expect("first code");
         open_create_room(&mut app);
+        app.create_flock_name = "Night Birds".into();
+        refresh_create_flock_code(&mut app);
         let second = app.create_flock_code.clone().expect("second code");
 
         assert_ne!(first, second);

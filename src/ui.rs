@@ -151,6 +151,8 @@ pub struct App {
     pub selected_peer: usize,
     pub node_id: Option<EndpointId>,
     pub create_flock_code: Option<String>,
+    pub create_flock_secret: Option<[u8; 32]>,
+    pub create_flock_name: String,
     pub show_create_room: bool,
     pub show_join_room: bool,
     pub join_input: String,
@@ -189,6 +191,8 @@ impl Default for App {
             selected_peer: 0,
             node_id: None,
             create_flock_code: None,
+            create_flock_secret: None,
+            create_flock_name: String::new(),
             show_create_room: false,
             show_join_room: false,
             join_input: String::new(),
@@ -486,7 +490,11 @@ fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
                 String::new()
             };
             let dot = flock_dot(&fv.code, app.palette.accent);
-            let label = &fv.code[..12.min(fv.code.len())];
+            let label = if fv.name.is_empty() {
+                &fv.code[..12.min(fv.code.len())]
+            } else {
+                fv.name.as_str()
+            };
             ListItem::new(Line::from(vec![
                 Span::styled(mark, Style::new().fg(app.palette.selection)),
                 Span::styled("\u{25AE} ", Style::new().fg(dot)),
@@ -807,7 +815,7 @@ fn draw_menu_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_create_room_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 72, 12);
+    let popup = centered(f.area(), 72, 14);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -826,6 +834,8 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(4),
         Constraint::Min(1),
     ])
@@ -833,22 +843,31 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
     let invite = app
         .create_flock_code
         .as_deref()
-        .unwrap_or("waiting for endpoint...");
+        .unwrap_or("enter a flock name to generate the invite...");
     f.render_widget(
-        Paragraph::new("Your invite code:").style(Style::new().fg(app.palette.text)),
+        Paragraph::new("Flock name:").style(Style::new().fg(app.palette.text)),
         rows[0],
     );
-    f.render_widget(Line::from(color_swatches(invite)), rows[1]);
+    f.render_widget(
+        Paragraph::new(format!(" {}_", app.create_flock_name))
+            .style(Style::new().fg(app.palette.selection)),
+        rows[1],
+    );
+    f.render_widget(
+        Paragraph::new("Invite code:").style(Style::new().fg(app.palette.text)),
+        rows[2],
+    );
+    f.render_widget(Line::from(color_swatches(invite)), rows[3]);
     f.render_widget(
         Paragraph::new(invite)
             .style(Style::new().fg(app.palette.invite))
             .wrap(Wrap { trim: false }),
-        rows[2],
+        rows[4],
     );
     f.render_widget(
         Paragraph::new("Press Enter to create, Esc to cancel.")
             .style(Style::new().fg(app.palette.dim)),
-        rows[3],
+        rows[5],
     );
 }
 

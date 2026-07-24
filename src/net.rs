@@ -294,6 +294,7 @@ async fn join_by_code(
                 flocks,
                 evt_tx.clone(),
                 my_id,
+                flock.name,
                 name,
             )
             .await?;
@@ -325,6 +326,7 @@ async fn join_flock(
     flocks: &mut HashMap<String, FlockHandle>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
+    flock_name: String,
     name: String,
 ) -> anyhow::Result<()> {
     if flocks.contains_key(&code) {
@@ -387,7 +389,10 @@ async fn join_flock(
     });
 
     flocks.insert(code.clone(), FlockHandle { sender, crypto });
-    let _ = evt_tx.send(AppEvent::JoinedFlock { code });
+    let _ = evt_tx.send(AppEvent::JoinedFlock {
+        code,
+        name: flock_name,
+    });
     Ok(())
 }
 
