@@ -60,7 +60,9 @@ pub struct App {
     pub node_id: Option<String>,
     pub video_frame: Option<RgbImage>,
     pub name: String,
+    #[cfg(feature = "audio")]
     pub in_call: bool,
+    #[cfg(feature = "audio")]
     pub muted: bool,
     pub quit_requested: bool,
 }

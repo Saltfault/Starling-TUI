@@ -193,16 +193,12 @@ async fn main() -> anyhow::Result<()> {
                         p.push_opus(&bytes);
                     }
                 }
-                #[cfg(not(feature = "audio"))]
-                AppEvent::VoiceFrame(_) => {}
                 #[cfg(feature = "video")]
                 AppEvent::VideoFrame(jpeg) => {
                     if let Ok(img) = image::load_from_memory(&jpeg) {
                         app.video_frame = Some(img.to_rgb8());
                     }
                 }
-                #[cfg(not(feature = "video"))]
-                AppEvent::VideoFrame(_) => {}
                 AppEvent::HistoryChunk(old) => {
                     if let Some(fv) = app.flocks.first_mut() {
                         let known: std::collections::HashSet<_> =

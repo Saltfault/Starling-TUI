@@ -1,4 +1,6 @@
-use iroh::{EndpointAddr, EndpointId};
+use iroh::EndpointId;
+#[cfg(any(feature = "audio", feature = "video"))]
+use iroh::EndpointAddr;
 
 pub enum Command {
     SendText {
@@ -11,9 +13,13 @@ pub enum Command {
     JoinRoost {
         code: String,
     },
+    #[cfg(feature = "audio")]
     StartCall(EndpointAddr),
+    #[cfg(feature = "audio")]
     HangUp,
+    #[cfg(feature = "video")]
     StartVideo(EndpointAddr),
+    #[cfg(feature = "video")]
     StopVideo,
     Quit,
 }
@@ -28,7 +34,9 @@ pub enum AppEvent {
     PeerDisconnected(EndpointId),
     PeerNamed(EndpointId, String),
     Ticket(String),
+    #[cfg(feature = "audio")]
     VoiceFrame(Vec<u8>),
+    #[cfg(feature = "video")]
     VideoFrame(Vec<u8>),
     PeerStatus(EndpointId, starling::event::BirdStatus),
     HistoryChunk(Vec<starling::event::ChatMessage>),

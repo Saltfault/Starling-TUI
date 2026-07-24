@@ -1,6 +1,4 @@
 use starling::crypto::FlockCrypto;
-#[cfg(feature = "audio")]
-use starling::event::BirdStatus;
 use starling::event::{ChatMessage, GossipPayload};
 use crate::event::{AppEvent, Command};
 use starling::roost::RoostState;
@@ -162,17 +160,11 @@ pub async fn run(
                     let _ = crate::call::place_call(ep, addr, mic_rx).await;
                 });
             }
-            #[cfg(not(feature = "audio"))]
-            Command::StartCall(_) => {
-                starling::logger::warn("voice call not supported (audio feature disabled)");
-            }
 
             #[cfg(feature = "audio")]
             Command::HangUp => {
                 _mic_stream = None;
             }
-            #[cfg(not(feature = "audio"))]
-            Command::HangUp => {}
 
             #[cfg(feature = "video")]
             Command::StartVideo(addr) => {
@@ -183,16 +175,10 @@ pub async fn run(
                     let _ = crate::call::place_video(ep, addr, cam_rx).await;
                 });
             }
-            #[cfg(not(feature = "video"))]
-            Command::StartVideo(_) => {
-                starling::logger::warn("video not supported (video feature disabled)");
-            }
             #[cfg(feature = "video")]
             Command::StopVideo => {
                 _cam_thread = None;
             }
-            #[cfg(not(feature = "video"))]
-            Command::StopVideo => {}
 
             Command::Quit => break,
         }
