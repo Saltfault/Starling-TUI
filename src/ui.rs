@@ -59,7 +59,7 @@ pub struct RoostView {
     pub unread: usize,
 }
 
-pub const MENU_ITEMS: &[&str] = &["Create Room", "Join", "Settings", "Quit"];
+pub const MENU_ITEMS: &[&str] = &["Create Room", "Join", "Profile", "Settings", "Quit"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScrollPanel {
@@ -118,8 +118,6 @@ impl SpringScroll {
 
 #[derive(Clone, Copy)]
 pub enum ToolbarAction {
-    Create,
-    Join,
     Menu,
     #[cfg(feature = "audio")]
     Call,
@@ -127,7 +125,6 @@ pub enum ToolbarAction {
     Mute,
     #[cfg(feature = "video")]
     Video,
-    Quit,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -352,11 +349,8 @@ impl App {
 }
 
 pub fn toolbar_buttons(_app: &App) -> Vec<(ToolbarAction, &'static str, u16, u16)> {
-    let mut buttons = vec![
-        (ToolbarAction::Create, "Create"),
-        (ToolbarAction::Join, "Join"),
-        (ToolbarAction::Menu, "Menu"),
-    ];
+    #[allow(unused_mut)]
+    let mut buttons = vec![(ToolbarAction::Menu, "Menu")];
     #[cfg(feature = "audio")]
     {
         buttons.push((
@@ -377,8 +371,6 @@ pub fn toolbar_buttons(_app: &App) -> Vec<(ToolbarAction, &'static str, u16, u16
             "Video on"
         },
     ));
-    buttons.push((ToolbarAction::Quit, "Quit"));
-
     let mut x = 0u16;
     buttons
         .into_iter()

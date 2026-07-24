@@ -1,6 +1,8 @@
 #[cfg(feature = "audio")]
 use cpal::traits::HostTrait;
-use crossterm::event::{self as ct_event, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self as ct_event, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::{
@@ -14,8 +16,10 @@ use starling::config::{
 #[cfg(feature = "audio")]
 use starling::util::suppress_stderr;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Full,
+    Profile,
     Settings,
 }
 
@@ -39,6 +43,7 @@ enum Phase {
 }
 
 struct SetupApp {
+    mode: Mode,
     phase: Phase,
     profile: Profile,
     name_input: String,
@@ -113,7 +118,7 @@ impl SetupApp {
                     Phase::CodeEntry
                 }
             }
-            Mode::Settings => Phase::Settings,
+            Mode::Profile | Mode::Settings => Phase::Settings,
         };
 
         let selected_input = profile
@@ -129,6 +134,7 @@ impl SetupApp {
 
         let profile_clone = profile.clone();
         Self {
+            mode,
             phase,
             name_input: profile.name.clone(),
             pronouns_input: profile.pronouns.clone(),
@@ -148,7 +154,7 @@ impl SetupApp {
             author_color_input: profile_clone.author_color.clone(),
             selection_color_input: profile_clone.selection_color.clone(),
             dim_color_input: profile_clone.dim_color.clone(),
-            settings_focus: 0,
+            settings_focus: if mode == Mode::Settings { 2 } else { 0 },
             hex_error: String::new(),
         }
     }
@@ -236,33 +242,43 @@ impl SetupApp {
         }
     }
 
-    fn save_settings(&mut self) -> anyhow::Result<Profile> {
-        if self.name_input.trim().is_empty() {
+    fn focus_bounds(&self) -> (usize, usize) {
+        if self.mode == Mode::Profile {
+            (0, 1)
+        } else {
+            (2, 10)
+        }
+    }
+
+    fn save_editor(&mut self) -> anyhow::Result<Profile> {
+        if self.mode == Mode::Profile && self.name_input.trim().is_empty() {
             anyhow::bail!("Display name cannot be empty");
         }
-        for value in [
-            &self.text_color_input,
-            &self.border_color_input,
-            &self.accent_color_input,
-            &self.author_color_input,
-            &self.selection_color_input,
-            &self.dim_color_input,
-        ] {
-            if !value.is_empty() && !valid_hex(value) {
-                anyhow::bail!("Colors must use #RRGGBB");
+        if self.mode == Mode::Settings {
+            for value in [
+                &self.text_color_input,
+                &self.border_color_input,
+                &self.accent_color_input,
+                &self.author_color_input,
+                &self.selection_color_input,
+                &self.dim_color_input,
+            ] {
+                if !value.is_empty() && !valid_hex(value) {
+                    anyhow::bail!("Colors must use #RRGGBB");
+                }
             }
+            if !self.bg_color_input.is_empty() && !valid_hex(&self.bg_color_input) {
+                anyhow::bail!("Background must use #RRGGBB or be blank");
+            }
+            self.profile.input_device =
+                (self.selected_input > 0).then(|| self.input_devices[self.selected_input].clone());
+            self.profile.output_device = (self.selected_output > 0)
+                .then(|| self.output_devices[self.selected_output].clone());
+            self.finish_colors();
+        } else {
+            self.profile.name = self.name_input.trim().to_string();
+            self.profile.pronouns = self.pronouns_input.trim().to_string();
         }
-        if !self.bg_color_input.is_empty() && !valid_hex(&self.bg_color_input) {
-            anyhow::bail!("Background must use #RRGGBB or be blank");
-        }
-
-        self.profile.name = self.name_input.trim().to_string();
-        self.profile.pronouns = self.pronouns_input.trim().to_string();
-        self.profile.input_device =
-            (self.selected_input > 0).then(|| self.input_devices[self.selected_input].clone());
-        self.profile.output_device =
-            (self.selected_output > 0).then(|| self.output_devices[self.selected_output].clone());
-        self.finish_colors();
         self.profile.save()?;
         Ok(self.profile.clone())
     }
@@ -500,10 +516,79 @@ pub fn run_setup(
     run_wizard(term, Mode::Full)
 }
 
+pub fn run_profile(
+    term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+) -> anyhow::Result<Option<Profile>> {
+    run_wizard(term, Mode::Profile)
+}
+
 pub fn run_settings(
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<Option<Profile>> {
     run_wizard(term, Mode::Settings)
+}
+
+fn editor_mouse(app: &mut SetupApp, col: u16, row: u16, click: bool) -> Option<bool> {
+    let (term_w, term_h) = crossterm::terminal::size().ok()?;
+    editor_mouse_at_size(app, term_w, term_h, col, row, click)
+}
+
+fn editor_mouse_at_size(
+    app: &mut SetupApp,
+    term_w: u16,
+    term_h: u16,
+    col: u16,
+    row: u16,
+    click: bool,
+) -> Option<bool> {
+    let width = 88.min(term_w);
+    let height = 26.min(term_h);
+    let popup_x = (term_w.saturating_sub(width)) / 2;
+    let popup_y = (term_h.saturating_sub(height)) / 2;
+    let inner_x = popup_x + 2;
+    let field_y = popup_y + 3;
+    let right_x = inner_x + width.saturating_sub(4) / 2;
+
+    let focus = if app.mode == Mode::Profile && col >= inner_x && col < right_x {
+        match row.checked_sub(field_y) {
+            Some(0) => Some(0),
+            Some(1) => Some(1),
+            _ => None,
+        }
+    } else if app.mode == Mode::Settings {
+        if col >= inner_x && col < right_x {
+            match row.checked_sub(field_y) {
+                Some(0) => Some(2),
+                Some(1) => Some(3),
+                _ => None,
+            }
+        } else if col >= right_x && col < popup_x + width {
+            row.checked_sub(field_y)
+                .filter(|offset| *offset <= 6)
+                .map(|offset| 4 + offset as usize)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(focus) = focus {
+        app.settings_focus = focus;
+        if click && matches!(focus, 2 | 3) {
+            app.cycle_settings_device(1);
+        }
+    }
+
+    let footer_y = popup_y + height.saturating_sub(2);
+    if click && row == footer_y {
+        if col >= inner_x && col < inner_x + 8 {
+            return Some(true);
+        }
+        if col >= inner_x + 9 && col < inner_x + 19 {
+            return Some(false);
+        }
+    }
+    None
 }
 
 fn run_wizard(
@@ -518,7 +603,28 @@ fn run_wizard(
         if !ct_event::poll(std::time::Duration::from_millis(50))? {
             continue;
         }
-        if let Event::Key(k) = ct_event::read()? {
+        let event = ct_event::read()?;
+        if let Event::Mouse(mouse) = event
+            && matches!(app.phase, Phase::Settings)
+        {
+            let click = mouse.kind == MouseEventKind::Down(MouseButton::Left);
+            if matches!(
+                mouse.kind,
+                MouseEventKind::Moved | MouseEventKind::Down(MouseButton::Left)
+            ) && let Some(save) = editor_mouse(&mut app, mouse.column, mouse.row, click)
+            {
+                if save {
+                    match app.save_editor() {
+                        Ok(profile) => return Ok(Some(profile)),
+                        Err(error) => app.hex_error = error.to_string(),
+                    }
+                } else {
+                    return Ok(None);
+                }
+            }
+            continue;
+        }
+        if let Event::Key(k) = event {
             if k.kind != KeyEventKind::Press {
                 continue;
             }
@@ -527,7 +633,7 @@ fn run_wizard(
                     if k.modifiers.contains(KeyModifiers::CONTROL)
                         && matches!(k.code, KeyCode::Char('s' | 'S'))
                     {
-                        match app.save_settings() {
+                        match app.save_editor() {
                             Ok(profile) => return Ok(Some(profile)),
                             Err(error) => app.hex_error = error.to_string(),
                         }
@@ -535,10 +641,12 @@ fn run_wizard(
                     }
                     match k.code {
                         KeyCode::Up | KeyCode::BackTab => {
-                            app.settings_focus = app.settings_focus.saturating_sub(1);
+                            let (min, _) = app.focus_bounds();
+                            app.settings_focus = app.settings_focus.saturating_sub(1).max(min);
                         }
                         KeyCode::Down | KeyCode::Tab | KeyCode::Enter => {
-                            app.settings_focus = (app.settings_focus + 1).min(10);
+                            let (_, max) = app.focus_bounds();
+                            app.settings_focus = (app.settings_focus + 1).min(max);
                         }
                         KeyCode::Left => app.cycle_settings_device(-1),
                         KeyCode::Right => app.cycle_settings_device(1),
@@ -773,10 +881,10 @@ fn draw(f: &mut Frame, app: &SetupApp) {
     );
 
     f.render_widget(Clear, popup);
-    let title = if matches!(app.phase, Phase::Settings) {
-        " Starling Settings "
-    } else {
-        " Starling Setup "
+    let title = match app.mode {
+        Mode::Profile => " Starling Profile ",
+        Mode::Settings => " Starling Settings ",
+        Mode::Full => " Starling Setup ",
     };
     f.render_widget(Block::default().borders(Borders::ALL).title(title), popup);
 
@@ -857,30 +965,36 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &SetupApp) {
         .get(app.selected_output)
         .cloned()
         .unwrap_or_else(|| "System Default".into());
-    let left = vec![
-        Line::styled(" Identity & Audio", Style::new().fg(Color::Cyan).bold()),
-        Line::raw(""),
-        settings_line(
-            app.settings_focus == 0,
-            "Name",
-            app.name_input.clone(),
-            None,
-        ),
-        settings_line(
-            app.settings_focus == 1,
-            "Pronouns",
-            app.pronouns_input.clone(),
-            None,
-        ),
-        Line::raw(""),
-        settings_line(app.settings_focus == 2, "Input", input, None),
-        settings_line(app.settings_focus == 3, "Output", output, None),
-        Line::raw(""),
-        Line::styled(
-            " Left/Right changes devices",
-            Style::new().fg(Color::DarkGray),
-        ),
-    ];
+    let left = if app.mode == Mode::Profile {
+        vec![
+            Line::styled(" Profile", Style::new().fg(Color::Cyan).bold()),
+            Line::raw(""),
+            settings_line(
+                app.settings_focus == 0,
+                "Name",
+                app.name_input.clone(),
+                None,
+            ),
+            settings_line(
+                app.settings_focus == 1,
+                "Pronouns",
+                app.pronouns_input.clone(),
+                None,
+            ),
+        ]
+    } else {
+        vec![
+            Line::styled(" Audio", Style::new().fg(Color::Cyan).bold()),
+            Line::raw(""),
+            settings_line(app.settings_focus == 2, "Input", input, None),
+            settings_line(app.settings_focus == 3, "Output", output, None),
+            Line::raw(""),
+            Line::styled(
+                " Click or Left/Right to change",
+                Style::new().fg(Color::DarkGray),
+            ),
+        ]
+    };
     let right = vec![
         Line::styled(" Theme", Style::new().fg(Color::Cyan).bold()),
         Line::raw(""),
@@ -933,7 +1047,9 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &SetupApp) {
     ];
 
     f.render_widget(Paragraph::new(left), columns[0]);
-    f.render_widget(Paragraph::new(right), columns[1]);
+    if app.mode == Mode::Settings {
+        f.render_widget(Paragraph::new(right), columns[1]);
+    }
     if !app.hex_error.is_empty() {
         f.render_widget(
             Paragraph::new(app.hex_error.as_str()).style(Style::new().fg(Color::Red)),
@@ -941,7 +1057,7 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &SetupApp) {
         );
     }
     f.render_widget(
-        Paragraph::new(" Up/Down or Tab = focus . Enter = next . Ctrl+S = save . Esc = cancel")
+        Paragraph::new("[ Save ]  [ Cancel ]   Mouse or Tab = focus . Ctrl+S = save")
             .style(Style::new().fg(Color::DarkGray)),
         rows[2],
     );
@@ -1319,11 +1435,26 @@ fn draw_summary(f: &mut Frame, area: Rect, app: &SetupApp) {
 
 #[cfg(test)]
 mod tests {
-    use super::normalized_color;
+    use super::{Mode, SetupApp, editor_mouse_at_size, normalized_color};
 
     #[test]
     fn blank_color_restores_default() {
         assert_eq!(normalized_color("", "#123456"), "#123456");
+    }
+
+    #[test]
+    fn profile_and_settings_support_mouse_focus() {
+        let mut profile = SetupApp::new(Mode::Profile);
+        editor_mouse_at_size(&mut profile, 100, 40, 10, 11, false);
+        assert_eq!(profile.settings_focus, 1);
+
+        let mut settings = SetupApp::new(Mode::Settings);
+        editor_mouse_at_size(&mut settings, 100, 40, 55, 13, false);
+        assert_eq!(settings.settings_focus, 7);
+        assert_eq!(
+            editor_mouse_at_size(&mut settings, 100, 40, 10, 31, true),
+            Some(true)
+        );
     }
 
     #[test]

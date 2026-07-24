@@ -163,13 +163,23 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if first == Some("settings") {
+    if matches!(first, Some("profile" | "settings")) {
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen, ct_event::EnableBracketedPaste)?;
-        let _cleanup = TerminalCleanup { mouse: false };
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            ct_event::EnableMouseCapture,
+            ct_event::EnableBracketedPaste,
+            Print(MOUSE_TRACKING_ON)
+        )?;
+        let _cleanup = TerminalCleanup { mouse: true };
         let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
-        setup::run_settings(&mut term)?;
+        if first == Some("profile") {
+            setup::run_profile(&mut term)?;
+        } else {
+            setup::run_settings(&mut term)?;
+        }
         return Ok(());
     }
 
@@ -719,13 +729,6 @@ fn handle_mouse_click(
         for (action, _label, bx, bw) in btns {
             if col >= bx && col < bx + bw {
                 match action {
-                    ToolbarAction::Create => {
-                        open_create_room(app);
-                    }
-                    ToolbarAction::Join => {
-                        app.join_input.clear();
-                        app.show_join_room = true;
-                    }
                     ToolbarAction::Menu => {
                         app.show_menu = true;
                         app.menu_selection = 0;
@@ -764,9 +767,6 @@ fn handle_mouse_click(
                         } else {
                             app.error_message = Some("Video service is unavailable".into());
                         }
-                    }
-                    ToolbarAction::Quit => {
-                        app.quit_requested = true;
                     }
                 }
                 return Ok(());
@@ -848,6 +848,44 @@ fn menu_item_at_size(term_w: u16, term_h: u16, col: u16, row: u16) -> Option<usi
     (idx < MENU_ITEMS.len()).then_some(idx)
 }
 
+fn open_editor(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+    editor: &str,
+) -> anyhow::Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        std::io::stdout(),
+        Print(MOUSE_TRACKING_OFF),
+        LeaveAlternateScreen,
+        ct_event::DisableMouseCapture,
+        ct_event::DisableBracketedPaste
+    )?;
+    let result = std::process::Command::new(std::env::current_exe()?)
+        .arg(editor)
+        .status();
+    execute!(
+        std::io::stdout(),
+        EnterAlternateScreen,
+        ct_event::EnableMouseCapture,
+        ct_event::EnableBracketedPaste,
+        Print(MOUSE_TRACKING_ON)
+    )?;
+    enable_raw_mode()?;
+    if result.is_ok_and(|status| status.success()) {
+        if let Some(profile) = starling::config::Profile::load() {
+            apply_profile(app, &profile);
+            let _ = cmd_tx.send(Command::UpdateProfile {
+                name: profile.name,
+                input_device: profile.input_device,
+            });
+        }
+    } else {
+        app.error_message = Some(format!("{editor} editor failed"));
+    }
+    Ok(())
+}
+
 #[allow(unused_variables)]
 fn activate_menu_item(
     app: &mut App,
@@ -868,39 +906,9 @@ fn activate_menu_item(
             app.join_input.clear();
             app.show_join_room = true;
         }
-        2 => {
-            disable_raw_mode()?;
-            execute!(
-                std::io::stdout(),
-                Print(MOUSE_TRACKING_OFF),
-                LeaveAlternateScreen,
-                ct_event::DisableMouseCapture,
-                ct_event::DisableBracketedPaste
-            )?;
-            let editor_result = std::process::Command::new(std::env::current_exe()?)
-                .arg("settings")
-                .status();
-            execute!(
-                std::io::stdout(),
-                EnterAlternateScreen,
-                ct_event::EnableMouseCapture,
-                ct_event::EnableBracketedPaste,
-                Print(MOUSE_TRACKING_ON)
-            )?;
-            enable_raw_mode()?;
-            if editor_result.is_ok_and(|status| status.success()) {
-                if let Some(profile) = starling::config::Profile::load() {
-                    apply_profile(app, &profile);
-                    let _ = cmd_tx.send(Command::UpdateProfile {
-                        name: profile.name,
-                        input_device: profile.input_device,
-                    });
-                }
-            } else {
-                app.error_message = Some("Settings editor failed".into());
-            }
-        }
-        3 => {
+        2 => open_editor(app, cmd_tx, "profile")?,
+        3 => open_editor(app, cmd_tx, "settings")?,
+        4 => {
             app.quit_requested = true;
         }
         _ => {}
