@@ -25,9 +25,9 @@ use event::{AppEvent, Command};
 use std::sync::Arc;
 #[allow(unused_imports)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use ui::{App, FlockView, MENU_ITEMS, RoostView, Selection, ToolbarAction};
+use ui::{App, FlockView, MENU_ITEMS, RoostView, ScrollPanel, Selection, ToolbarAction};
 
 struct TerminalCleanup {
     mouse: bool,
@@ -239,6 +239,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    let mut last_frame = Instant::now();
     loop {
         if net_task.is_finished() {
             match (&mut net_task).await {
@@ -250,6 +251,16 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        let now = Instant::now();
+        let dt = now.duration_since(last_frame).as_secs_f32().min(0.1);
+        last_frame = now;
+        let (_, flock_h, _, roost_h, bird_h) = panel_geometry(crossterm::terminal::size()?.1);
+        app.update_scroll_bounds(
+            flock_h.saturating_sub(2) as usize,
+            roost_h.saturating_sub(2) as usize,
+            bird_h.saturating_sub(2) as usize,
+        );
+        app.advance_scroll(dt);
         term.draw(|f| ui::draw(f, &app))?;
 
         while let Ok(ev) = evt_rx.try_recv() {
@@ -540,6 +551,13 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
 
+                    KeyCode::PageUp => {
+                        page_scroll(&mut app, -1.0, crossterm::terminal::size()?.1);
+                    }
+                    KeyCode::PageDown => {
+                        page_scroll(&mut app, 1.0, crossterm::terminal::size()?.1);
+                    }
+
                     KeyCode::Esc => {
                         app.show_menu = true;
                         app.menu_selection = 0;
@@ -572,6 +590,12 @@ async fn main() -> anyhow::Result<()> {
                             app.menu_selection = idx;
                         }
                     }
+                    MouseEventKind::ScrollUp if !app.show_menu => {
+                        handle_mouse_scroll(&mut app, m.column, m.row, -3.0)?;
+                    }
+                    MouseEventKind::ScrollDown if !app.show_menu => {
+                        handle_mouse_scroll(&mut app, m.column, m.row, 3.0)?;
+                    }
                     _ => {}
                 }
             }
@@ -591,6 +615,46 @@ async fn main() -> anyhow::Result<()> {
         ct_event::DisableMouseCapture,
         ct_event::DisableBracketedPaste
     )?;
+    Ok(())
+}
+
+fn panel_geometry(term_h: u16) -> (u16, u16, u16, u16, u16) {
+    let body_top = 2;
+    let body_h = term_h.saturating_sub(6);
+    let flocks_h = (body_h * 33) / 100;
+    let roosts_top = body_top + flocks_h;
+    let roosts_h = body_h.saturating_sub(flocks_h);
+    (body_top, flocks_h, roosts_top, roosts_h, body_h)
+}
+
+fn page_scroll(app: &mut App, direction: f32, term_h: u16) {
+    let (_, flocks_h, _, roosts_h, birds_h) = panel_geometry(term_h);
+    let page = match app.scroll_focus {
+        ScrollPanel::Flocks => flocks_h.saturating_sub(2),
+        ScrollPanel::Roosts => roosts_h.saturating_sub(2),
+        ScrollPanel::Birds => birds_h.saturating_sub(2),
+    }
+    .max(1) as f32;
+    app.scroll_mut(app.scroll_focus).scroll(direction * page);
+}
+
+fn handle_mouse_scroll(app: &mut App, col: u16, row: u16, delta: f32) -> anyhow::Result<()> {
+    let (term_w, term_h) = crossterm::terminal::size()?;
+    let (flocks_top, flocks_h, roosts_top, roosts_h, birds_h) = panel_geometry(term_h);
+    let panel = if col < 26 && row >= flocks_top && row < flocks_top + flocks_h {
+        Some(ScrollPanel::Flocks)
+    } else if col < 26 && row >= roosts_top && row < roosts_top + roosts_h {
+        Some(ScrollPanel::Roosts)
+    } else if col >= term_w.saturating_sub(24) && row >= flocks_top && row < flocks_top + birds_h {
+        Some(ScrollPanel::Birds)
+    } else {
+        None
+    };
+
+    if let Some(panel) = panel {
+        app.scroll_focus = panel;
+        app.scroll_mut(panel).scroll(delta);
+    }
     Ok(())
 }
 
@@ -680,31 +744,29 @@ fn handle_mouse_click(
         return Ok(());
     }
 
-    if col < 26 {
-        let body_top = 2u16;
-        let body_h = term_h.saturating_sub(6);
-        let flocks_h = (body_h * 33) / 100;
-        let roosts_h = body_h.saturating_sub(flocks_h);
-
-        let flocks_top = body_top;
-        let roosts_top = body_top + flocks_h;
-
-        if row > flocks_top && row < flocks_top + flocks_h.saturating_sub(1) {
-            let idx = (row - flocks_top - 1) as usize;
-            if app.flocks.get(idx).is_some() {
-                app.select(Selection::Flock(idx));
-            }
-        } else if row > roosts_top && row < roosts_top + roosts_h.saturating_sub(1) {
-            let mut cursor = roosts_top + 1;
+    let (flocks_top, flocks_h, roosts_top, roosts_h, birds_h) = panel_geometry(term_h);
+    if col < 26 && row > flocks_top && row < flocks_top + flocks_h.saturating_sub(1) {
+        app.scroll_focus = ScrollPanel::Flocks;
+        let visible_row = (row - flocks_top - 1) as usize;
+        if let Some(idx) = app.flock_scroll.row_index(visible_row)
+            && app.flocks.get(idx).is_some()
+        {
+            app.select(Selection::Flock(idx));
+        }
+    } else if col < 26 && row > roosts_top && row < roosts_top + roosts_h.saturating_sub(1) {
+        app.scroll_focus = ScrollPanel::Roosts;
+        let visible_row = (row - roosts_top - 1) as usize;
+        if let Some(content_row) = app.roost_scroll.row_index(visible_row) {
+            let mut cursor = 0usize;
             for (ri, rv) in app.roosts.iter().enumerate() {
-                if cursor == row {
+                if cursor == content_row {
                     app.toggle_expand(ri);
                     return Ok(());
                 }
                 cursor += 1;
                 if app.expanded.contains(&ri) {
                     for ci in 0..rv.channels.len() {
-                        if cursor == row {
+                        if cursor == content_row {
                             app.select(Selection::Channel(ri, ci));
                             return Ok(());
                         }
@@ -712,6 +774,18 @@ fn handle_mouse_click(
                     }
                 }
             }
+        }
+    } else if col >= term_w.saturating_sub(24)
+        && row > flocks_top
+        && row < flocks_top + birds_h.saturating_sub(1)
+    {
+        app.scroll_focus = ScrollPanel::Birds;
+        let visible_row = (row - flocks_top - 1) as usize;
+        if let Some(content_row) = app.bird_scroll.row_index(visible_row)
+            && content_row > 0
+            && content_row <= app.peers.len()
+        {
+            app.selected_peer = content_row - 1;
         }
     }
 

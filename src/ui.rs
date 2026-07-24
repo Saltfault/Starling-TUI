@@ -67,6 +67,61 @@ pub const MENU_ITEMS: &[&str] = &[
     "Quit",
 ];
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ScrollPanel {
+    Flocks,
+    Roosts,
+    Birds,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct SpringScroll {
+    pub current: f32,
+    target: f32,
+    velocity: f32,
+    max: f32,
+}
+
+impl SpringScroll {
+    pub fn set_max(&mut self, max: usize) {
+        self.max = max as f32;
+        self.target = self.target.clamp(0.0, self.max);
+    }
+
+    pub fn scroll(&mut self, delta: f32) {
+        let desired = self.target + delta;
+        self.target = desired.clamp(0.0, self.max);
+        if desired < 0.0 || desired > self.max {
+            self.current += (desired - self.target) * 0.45;
+        }
+    }
+
+    pub fn advance(&mut self, dt: f32) -> bool {
+        let stiffness = 95.0;
+        let damping = 19.5;
+        self.velocity += (self.target - self.current) * stiffness * dt;
+        self.velocity *= (-damping * dt).exp();
+        self.current += self.velocity * dt;
+
+        if (self.current - self.target).abs() < 0.01 && self.velocity.abs() < 0.01 {
+            self.current = self.target;
+            self.velocity = 0.0;
+            false
+        } else {
+            true
+        }
+    }
+
+    pub fn row_index(&self, visible_row: usize) -> Option<usize> {
+        let index = self.current.round() as isize + visible_row as isize;
+        (index >= 0).then_some(index as usize)
+    }
+
+    fn rounded_offset(&self) -> isize {
+        self.current.round() as isize
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum ToolbarAction {
     Create,
@@ -119,6 +174,10 @@ pub struct App {
     pub show_video: bool,
     pub show_menu: bool,
     pub menu_selection: usize,
+    pub flock_scroll: SpringScroll,
+    pub roost_scroll: SpringScroll,
+    pub bird_scroll: SpringScroll,
+    pub scroll_focus: ScrollPanel,
     pub quit_requested: bool,
     pub error_message: Option<String>,
     pub palette: Palette,
@@ -150,6 +209,10 @@ impl Default for App {
             show_video: false,
             show_menu: false,
             menu_selection: 0,
+            flock_scroll: SpringScroll::default(),
+            roost_scroll: SpringScroll::default(),
+            bird_scroll: SpringScroll::default(),
+            scroll_focus: ScrollPanel::Flocks,
             quit_requested: false,
             error_message: None,
             palette: Palette::default(),
@@ -252,6 +315,46 @@ impl App {
             .get(id)
             .cloned()
             .unwrap_or_else(|| id.fmt_short().to_string())
+    }
+
+    pub fn roost_row_count(&self) -> usize {
+        self.roosts
+            .iter()
+            .enumerate()
+            .map(|(index, roost)| {
+                1 + self
+                    .expanded
+                    .contains(&index)
+                    .then_some(roost.channels.len())
+                    .unwrap_or(0)
+            })
+            .sum()
+    }
+
+    pub fn scroll_mut(&mut self, panel: ScrollPanel) -> &mut SpringScroll {
+        match panel {
+            ScrollPanel::Flocks => &mut self.flock_scroll,
+            ScrollPanel::Roosts => &mut self.roost_scroll,
+            ScrollPanel::Birds => &mut self.bird_scroll,
+        }
+    }
+
+    pub fn update_scroll_bounds(
+        &mut self,
+        flock_viewport: usize,
+        roost_viewport: usize,
+        bird_viewport: usize,
+    ) {
+        self.flock_scroll
+            .set_max(self.flocks.len().saturating_sub(flock_viewport));
+        self.roost_scroll
+            .set_max(self.roost_row_count().saturating_sub(roost_viewport));
+        self.bird_scroll
+            .set_max(self.bird_count().saturating_sub(bird_viewport));
+    }
+
+    pub fn advance_scroll(&mut self, dt: f32) -> bool {
+        self.flock_scroll.advance(dt) | self.roost_scroll.advance(dt) | self.bird_scroll.advance(dt)
     }
 }
 
@@ -374,6 +477,18 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+fn window_list_items<'a>(items: Vec<ListItem<'a>>, scroll: SpringScroll) -> Vec<ListItem<'a>> {
+    let offset = scroll.rounded_offset();
+    if offset < 0 {
+        std::iter::repeat_with(|| ListItem::new(""))
+            .take((-offset) as usize)
+            .chain(items)
+            .collect()
+    } else {
+        items.into_iter().skip(offset as usize).collect()
+    }
+}
+
 fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = app
         .flocks
@@ -404,6 +519,7 @@ fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
             ]))
         })
         .collect();
+    let items = window_list_items(items, app.flock_scroll);
 
     f.render_widget(
         List::new(items).block(
@@ -484,6 +600,7 @@ fn draw_roosts(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
+    let items = window_list_items(items, app.roost_scroll);
     f.render_widget(
         List::new(items).block(
             Block::default()
@@ -582,6 +699,7 @@ fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
         ])));
     }
 
+    let items = window_list_items(items, app.bird_scroll);
     f.render_widget(
         List::new(items).block(
             Block::default()
@@ -823,6 +941,31 @@ mod tests {
         assert_eq!(app.active_code(), Some("roost/general"));
         assert_eq!(app.roosts[0].channels[0].unread, 0);
         assert_eq!(app.roosts[0].unread, 0);
+    }
+
+    #[test]
+    fn overscroll_springs_back_to_the_clamped_edge() {
+        let mut scroll = SpringScroll::default();
+        scroll.set_max(4);
+        scroll.scroll(-3.0);
+        assert!(scroll.current < 0.0);
+
+        for _ in 0..100 {
+            scroll.advance(0.05);
+        }
+
+        assert_eq!(scroll.current, 0.0);
+        assert_eq!(scroll.row_index(0), Some(0));
+    }
+
+    #[test]
+    fn scroll_offset_maps_visible_rows_to_content() {
+        let mut scroll = SpringScroll::default();
+        scroll.set_max(10);
+        scroll.current = 4.0;
+
+        assert_eq!(scroll.row_index(0), Some(4));
+        assert_eq!(scroll.row_index(3), Some(7));
     }
 
     #[test]
