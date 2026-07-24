@@ -33,8 +33,6 @@ pub const MENU_ITEMS: &[&str] = &[
     "Create Room",
     "Join Flock",
     "Join Roost",
-    "Create Roost",
-    "Invite",
     "Profile",
     "Settings",
     "Quit",
@@ -77,7 +75,6 @@ pub struct App {
     pub peers: Vec<EndpointId>,
     pub selected_peer: usize,
     pub node_id: Option<String>,
-    pub show_invite: bool,
     pub show_create_room: bool,
     pub show_join_room: bool,
     pub join_input: String,
@@ -93,8 +90,6 @@ pub struct App {
     pub show_video: bool,
     pub show_menu: bool,
     pub menu_selection: usize,
-    pub show_create_roost: bool,
-    pub create_roost_input: String,
     pub quit_requested: bool,
     pub error_message: Option<String>,
     pub text_color: Color,
@@ -115,7 +110,6 @@ impl Default for App {
             peers: Vec::new(),
             selected_peer: 0,
             node_id: None,
-            show_invite: false,
             show_create_room: false,
             show_join_room: false,
             join_input: String::new(),
@@ -129,8 +123,6 @@ impl Default for App {
             show_video: false,
             show_menu: false,
             menu_selection: 0,
-            show_create_roost: false,
-            create_roost_input: String::new(),
             quit_requested: false,
             error_message: None,
             text_color: Color::Rgb(207, 214, 210),
@@ -331,16 +323,12 @@ pub fn draw(f: &mut Frame, app: &App) {
         chunks[3],
     );
 
-    if app.show_invite {
-        draw_invite_popup(f, app);
-    } else if app.show_create_room {
+    if app.show_create_room {
         draw_create_room_popup(f, app);
     } else if app.show_join_room {
         draw_join_room_popup(f, app);
     } else if app.show_join_roost {
         draw_join_roost_popup(f, app);
-    } else if app.show_create_roost {
-        draw_create_roost_popup(f, app);
     } else if app.show_menu {
         draw_menu_popup(f, app);
     }
@@ -682,18 +670,6 @@ fn draw_join_roost_popup(f: &mut Frame, app: &App) {
     );
 }
 
-fn draw_create_roost_popup(f: &mut Frame, app: &App) {
-    draw_input_popup(
-        f,
-        " Create Roost ",
-        "Enter the roost name:",
-        &app.create_roost_input,
-        " Enter = create . Esc = cancel",
-        app.text_color,
-        app.border_color,
-    );
-}
-
 fn draw_input_popup(
     f: &mut Frame,
     title: &str,
@@ -731,53 +707,6 @@ fn draw_input_popup(
         rows[1],
     );
     f.render_widget(Paragraph::new(hint).style(Style::new().fg(DIM)), rows[2]);
-}
-
-fn draw_invite_popup(f: &mut Frame, app: &App) {
-    let area = f.area();
-    let code = app.active_code().unwrap_or("");
-    let swatches = color_swatches(code);
-    let content_width = swatches.len().max(code.len()).max(40) + 6;
-    let popup = centered(area, content_width as u16, 12);
-    f.render_widget(Clear, popup);
-    f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::new().fg(app.border_color))
-            .title(Span::styled(" Invite ", Style::new().fg(GREEN))),
-        popup,
-    );
-    let inner = popup.inner(Margin {
-        vertical: 1,
-        horizontal: 2,
-    });
-    let rows = Layout::vertical(vec![Constraint::Length(1); 10]).split(inner);
-
-    f.render_widget(Line::from(swatches), rows[1]);
-
-    let (c1, c2) = if code.len() > 40 {
-        let mid = code.len() / 2;
-        let split = code[mid..].find('-').map(|i| mid + i).unwrap_or(mid);
-        (&code[..split], &code[split..])
-    } else {
-        (code, "")
-    };
-    f.render_widget(Paragraph::new(c1).style(Style::new().fg(INVITE)), rows[3]);
-    if !c2.is_empty() {
-        f.render_widget(Paragraph::new(c2).style(Style::new().fg(INVITE)), rows[4]);
-    }
-    f.render_widget(
-        Paragraph::new("They join with:").style(Style::new().fg(app.text_color)),
-        rows[6],
-    );
-    f.render_widget(
-        Paragraph::new("  starling join <code>").style(Style::new().fg(YELLOW)),
-        rows[7],
-    );
-    f.render_widget(
-        Paragraph::new("  Esc to close").style(Style::new().fg(DIM)),
-        rows[9],
-    );
 }
 
 fn color_swatches(code: &str) -> Vec<Span<'static>> {

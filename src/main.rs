@@ -367,13 +367,6 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
-                if app.show_invite {
-                    if k.code == KeyCode::Esc {
-                        app.show_invite = false;
-                    }
-                    continue;
-                }
-
                 if app.show_create_room {
                     match k.code {
                         KeyCode::Enter => {
@@ -457,32 +450,6 @@ async fn main() -> anyhow::Result<()> {
                         }
                         KeyCode::Esc => {
                             app.show_menu = false;
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                if app.show_create_roost {
-                    match k.code {
-                        KeyCode::Enter if !app.create_roost_input.is_empty() => {
-                            let name = std::mem::take(&mut app.create_roost_input);
-                            let _ = std::process::Command::new("starling")
-                                .args(["roost", "create", &name])
-                                .spawn()
-                                .map(|mut child| {
-                                    let _ = child.wait();
-                                });
-                            app.show_create_roost = false;
-                        }
-                        KeyCode::Char(c) if !c.is_control() => {
-                            app.create_roost_input.push(c);
-                        }
-                        KeyCode::Backspace => {
-                            app.create_roost_input.pop();
-                        }
-                        KeyCode::Esc => {
-                            app.show_create_roost = false;
                         }
                         _ => {}
                     }
@@ -774,13 +741,6 @@ fn activate_menu_item(
             app.show_join_roost = true;
         }
         3 => {
-            app.create_roost_input.clear();
-            app.show_create_roost = true;
-        }
-        4 => {
-            app.show_invite = app.active_code().is_some();
-        }
-        5 => {
             disable_raw_mode()?;
             execute!(
                 std::io::stdout(),
@@ -810,7 +770,7 @@ fn activate_menu_item(
                 app.error_message = Some("Profile editor failed".into());
             }
         }
-        6 => {
+        4 => {
             disable_raw_mode()?;
             execute!(
                 std::io::stdout(),
@@ -840,7 +800,7 @@ fn activate_menu_item(
                 app.error_message = Some("Settings editor failed".into());
             }
         }
-        7 => {
+        5 => {
             app.quit_requested = true;
         }
         _ => {}
