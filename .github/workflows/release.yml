@@ -52,13 +52,6 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Checkout starling library
-        uses: actions/checkout@v6
-        with:
-          repository: Saltfault/starling
-          path: starling
-      - name: Fix starling dep path
-        run: sed -i '' 's|path = "../starling"|path = "starling"|' Cargo.toml
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
       - name: Build release
