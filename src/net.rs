@@ -42,9 +42,8 @@ pub async fn run(
         .await?;
     endpoint.online().await;
 
-    let my_code = starling::net::encode_flock_code(my_node_id.as_bytes());
-    starling::logger::warn(&format!("endpoint bound: room_code={my_code}"));
-    let _ = evt_tx.send(AppEvent::Ticket(my_code));
+    starling::logger::warn(&format!("endpoint bound: node_id={my_node_id}"));
+    let _ = evt_tx.send(AppEvent::Ticket(my_node_id));
 
     let gossip = Gossip::builder().spawn(endpoint.clone());
     let history: starling::sync::History = Default::default();
@@ -237,25 +236,25 @@ async fn join_by_code(
 ) -> anyhow::Result<()> {
     let decoded = starling::net::decode_typed_code(&code)
         .ok_or_else(|| anyhow::anyhow!("invalid or unsupported typed code"))?;
-    let opener = starling::net::typed_code_node_id(&decoded)
-        .ok_or_else(|| anyhow::anyhow!("join code has an invalid endpoint payload"))?;
-
     match decoded.code_type {
         starling::net::CodeType::Flock => {
+            let flock = starling::net::decode_flock_code(&decoded)
+                .ok_or_else(|| anyhow::anyhow!("flock code has an invalid payload"))?;
             join_flock(
                 gossip,
                 code.clone(),
-                vec![opener],
+                vec![flock.opener],
                 flocks,
                 evt_tx.clone(),
                 my_id,
                 name,
             )
             .await?;
-            if opener != my_id {
+            if flock.opener != my_id {
                 let (ep, tx) = (endpoint.clone(), evt_tx.clone());
                 tokio::spawn(async move {
-                    if let Err(error) = crate::sync::backfill(ep, opener, code, 0, tx.clone()).await
+                    if let Err(error) =
+                        crate::sync::backfill(ep, flock.opener, code, 0, tx.clone()).await
                     {
                         let _ =
                             tx.send(AppEvent::Error(format!("history backfill failed: {error}")));
@@ -265,6 +264,8 @@ async fn join_by_code(
             Ok(())
         }
         starling::net::CodeType::Roost => {
+            let opener = starling::net::typed_code_node_id(&decoded)
+                .ok_or_else(|| anyhow::anyhow!("roost code has an invalid endpoint payload"))?;
             join_roost(gossip, endpoint, code, opener, flocks, evt_tx, my_id, name).await
         }
     }

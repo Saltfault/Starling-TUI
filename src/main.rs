@@ -92,6 +92,14 @@ fn apply_profile(app: &mut App, profile: &starling::config::Profile) {
     app.palette = palette;
 }
 
+fn open_create_room(app: &mut App) {
+    app.create_flock_code = app.node_id.map(|opener| {
+        let secret = iroh::SecretKey::generate().to_bytes();
+        starling::net::encode_flock_code(&secret, &opener)
+    });
+    app.show_create_room = true;
+}
+
 fn merge_history(app: &mut App, flock: &str, old: Vec<starling::event::ChatMessage>) {
     let view = app
         .flocks
@@ -366,8 +374,8 @@ async fn main() -> anyhow::Result<()> {
                 AppEvent::PeerStatus(id, s) => {
                     app.peer_status.insert(id, s);
                 }
-                AppEvent::Ticket(code) => {
-                    app.node_id = Some(code);
+                AppEvent::Ticket(node_id) => {
+                    app.node_id = Some(node_id);
                 }
                 AppEvent::Error(error) => {
                     starling::logger::warn(&error);
@@ -405,12 +413,13 @@ async fn main() -> anyhow::Result<()> {
                 if app.show_create_room {
                     match k.code {
                         KeyCode::Enter => {
-                            if let Some(code) = &app.node_id {
-                                let _ = cmd_tx.send(Command::Join { code: code.clone() });
+                            if let Some(code) = app.create_flock_code.take() {
+                                let _ = cmd_tx.send(Command::Join { code });
                             }
                             app.show_create_room = false;
                         }
                         KeyCode::Esc => {
+                            app.create_flock_code = None;
                             app.show_create_room = false;
                         }
                         _ => {}
@@ -546,7 +555,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             } else if let Event::Mouse(m) = event {
                 match m.kind {
-                    MouseEventKind::Down(MouseButton::Left) => {
+                    MouseEventKind::Up(MouseButton::Left) => {
                         handle_mouse_click(
                             &mut app,
                             &cmd_tx,
@@ -668,7 +677,7 @@ fn handle_mouse_click(
             if col >= bx && col < bx + bw {
                 match action {
                     ToolbarAction::Create => {
-                        app.show_create_room = true;
+                        open_create_room(app);
                     }
                     ToolbarAction::Join => {
                         app.join_input.clear();
@@ -801,7 +810,7 @@ fn activate_menu_item(
 
     match i {
         0 => {
-            app.show_create_room = true;
+            open_create_room(app);
         }
         1 => {
             app.join_input.clear();
@@ -874,4 +883,41 @@ fn activate_menu_item(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{App, MENU_ITEMS, menu_item_at_size, open_create_room};
+
+    #[test]
+    fn every_rendered_menu_row_is_clickable() {
+        let (width, height) = (100, 40);
+        let popup_y = (height - (MENU_ITEMS.len() as u16 + 2)) / 2;
+        let popup_x = (width - 28) / 2;
+
+        for index in 0..MENU_ITEMS.len() {
+            assert_eq!(
+                menu_item_at_size(width, height, popup_x + 2, popup_y + 1 + index as u16),
+                Some(index)
+            );
+        }
+        assert_eq!(menu_item_at_size(width, height, popup_x + 2, popup_y), None);
+    }
+
+    #[test]
+    fn create_room_generates_a_new_flock_code_each_time() {
+        let mut app = App::default();
+        app.node_id = Some(iroh::SecretKey::generate().public());
+
+        open_create_room(&mut app);
+        let first = app.create_flock_code.clone().expect("first code");
+        open_create_room(&mut app);
+        let second = app.create_flock_code.clone().expect("second code");
+
+        assert_ne!(first, second);
+        assert_eq!(
+            starling::net::decode_typed_code(&first).map(|code| code.code_type),
+            Some(starling::net::CodeType::Flock)
+        );
+    }
 }

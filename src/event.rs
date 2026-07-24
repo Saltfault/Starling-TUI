@@ -48,7 +48,7 @@ pub enum AppEvent {
     PeerConnected(EndpointId),
     PeerDisconnected(EndpointId),
     PeerNamed(EndpointId, String),
-    Ticket(String),
+    Ticket(EndpointId),
     Error(String),
     #[cfg(feature = "audio")]
     VoiceFrame(Vec<u8>),

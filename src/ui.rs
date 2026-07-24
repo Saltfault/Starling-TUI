@@ -2,7 +2,7 @@ use image::RgbImage;
 use iroh::{EndpointAddr, EndpointId};
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 use sha2::{Digest, Sha256};
 use starling::event::{BirdStatus, ChatMessage};
@@ -152,7 +152,8 @@ pub struct App {
     pub input: String,
     pub peers: Vec<EndpointId>,
     pub selected_peer: usize,
-    pub node_id: Option<String>,
+    pub node_id: Option<EndpointId>,
+    pub create_flock_code: Option<String>,
     pub show_create_room: bool,
     pub show_join_room: bool,
     pub join_input: String,
@@ -188,6 +189,7 @@ impl Default for App {
             peers: Vec::new(),
             selected_peer: 0,
             node_id: None,
+            create_flock_code: None,
             show_create_room: false,
             show_join_room: false,
             join_input: String::new(),
@@ -771,7 +773,7 @@ fn draw_menu_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_create_room_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 56, 8);
+    let popup = centered(f.area(), 72, 12);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -790,18 +792,24 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(4),
         Constraint::Min(1),
     ])
     .split(inner);
-    let invite = app.node_id.as_deref().unwrap_or("waiting for endpoint...");
+    let invite = app
+        .create_flock_code
+        .as_deref()
+        .unwrap_or("waiting for endpoint...");
     f.render_widget(
         Paragraph::new("Your invite code:").style(Style::new().fg(app.palette.text)),
         rows[0],
     );
+    f.render_widget(Line::from(color_swatches(invite)), rows[1]);
     f.render_widget(
-        Paragraph::new(invite).style(Style::new().fg(app.palette.invite)),
-        rows[1],
+        Paragraph::new(invite)
+            .style(Style::new().fg(app.palette.invite))
+            .wrap(Wrap { trim: false }),
+        rows[2],
     );
     f.render_widget(
         Paragraph::new("Press Enter to create, Esc to cancel.")
@@ -878,6 +886,25 @@ fn flock_dot(code: &str, fallback: Color) -> Color {
 }
 
 fn parse_color_code(code: &str) -> Vec<(u8, u8, u8)> {
+    let compact = code.trim();
+    if !compact.is_empty()
+        && !compact.contains('-')
+        && compact.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return compact
+            .as_bytes()
+            .chunks_exact(6)
+            .filter_map(|group| {
+                let group = std::str::from_utf8(group).ok()?;
+                Some((
+                    u8::from_str_radix(&group[0..2], 16).ok()?,
+                    u8::from_str_radix(&group[2..4], 16).ok()?,
+                    u8::from_str_radix(&group[4..6], 16).ok()?,
+                ))
+            })
+            .collect();
+    }
+
     let mut colors = Vec::new();
     for group in code.split('-') {
         if group == "BIRD" || group.len() != 6 {
@@ -954,9 +981,9 @@ mod tests {
     }
 
     #[test]
-    fn typed_codes_keep_a_color_identity() {
-        let colors = parse_color_code("AEBAGBAFAYDQQCIKBMGA2DQPCAIREEYU");
-        assert_eq!(colors.len(), 6);
+    fn hexadecimal_codes_map_directly_to_colors() {
+        let colors = parse_color_code("001122AABBCC");
+        assert_eq!(colors, vec![(0x00, 0x11, 0x22), (0xAA, 0xBB, 0xCC)]);
     }
 
     #[test]
