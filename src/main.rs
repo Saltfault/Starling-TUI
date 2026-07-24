@@ -172,15 +172,13 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("Usage: starling-tui join <code>");
                 return Ok(());
             };
-            match starling::net::decode_node_id(code) {
-                Some(node_id) => vec![node_id],
-                None => {
-                    eprintln!("Invalid join code.");
-                    return Ok(());
-                }
+            if starling::net::decode_typed_code(code).is_none() {
+                eprintln!("Invalid or unsupported join code.");
+                return Ok(());
             }
+            Some(code.to_ascii_uppercase())
         }
-        _ => vec![],
+        _ => None,
     };
 
     let profile = starling::config::Profile::load();
@@ -408,7 +406,7 @@ async fn main() -> anyhow::Result<()> {
                     match k.code {
                         KeyCode::Enter => {
                             if let Some(code) = &app.node_id {
-                                let _ = cmd_tx.send(Command::JoinFlock { code: code.clone() });
+                                let _ = cmd_tx.send(Command::Join { code: code.clone() });
                             }
                             app.show_create_room = false;
                         }
@@ -424,13 +422,15 @@ async fn main() -> anyhow::Result<()> {
                     match k.code {
                         KeyCode::Enter => {
                             let code = app.join_input.trim();
-                            if starling::net::decode_node_id(code).is_some() {
-                                let _ = cmd_tx.send(Command::JoinFlock { code: code.into() });
+                            if starling::net::decode_typed_code(code).is_some() {
+                                let _ = cmd_tx.send(Command::Join {
+                                    code: code.to_ascii_uppercase(),
+                                });
                                 app.join_input.clear();
                                 app.show_join_room = false;
                                 app.error_message = None;
                             } else {
-                                app.error_message = Some("Invalid flock code".into());
+                                app.error_message = Some("Invalid or unsupported join code".into());
                             }
                         }
                         KeyCode::Char(c) if !c.is_control() => {
@@ -441,33 +441,6 @@ async fn main() -> anyhow::Result<()> {
                         }
                         KeyCode::Esc => {
                             app.show_join_room = false;
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                if app.show_join_roost {
-                    match k.code {
-                        KeyCode::Enter => {
-                            let code = app.join_roost_input.trim();
-                            if starling::net::decode_node_id(code).is_some() {
-                                let _ = cmd_tx.send(Command::JoinRoost { code: code.into() });
-                                app.join_roost_input.clear();
-                                app.show_join_roost = false;
-                                app.error_message = None;
-                            } else {
-                                app.error_message = Some("Invalid roost code".into());
-                            }
-                        }
-                        KeyCode::Char(c) if !c.is_control() => {
-                            app.join_roost_input.push(c);
-                        }
-                        KeyCode::Backspace => {
-                            app.join_roost_input.pop();
-                        }
-                        KeyCode::Esc => {
-                            app.show_join_roost = false;
                         }
                         _ => {}
                     }
@@ -496,19 +469,17 @@ async fn main() -> anyhow::Result<()> {
                 match k.code {
                     KeyCode::Enter if !app.input.is_empty() => {
                         let text = std::mem::take(&mut app.input);
-                        if let Some(code) = text.strip_prefix("/join-roost ") {
+                        if let Some(code) = text
+                            .strip_prefix("/join ")
+                            .or_else(|| text.strip_prefix("/join-roost "))
+                        {
                             let code = code.trim();
-                            if starling::net::decode_node_id(code).is_some() {
-                                let _ = cmd_tx.send(Command::JoinRoost { code: code.into() });
+                            if starling::net::decode_typed_code(code).is_some() {
+                                let _ = cmd_tx.send(Command::Join {
+                                    code: code.to_ascii_uppercase(),
+                                });
                             } else {
-                                app.error_message = Some("Invalid roost code".into());
-                            }
-                        } else if let Some(code) = text.strip_prefix("/join ") {
-                            let code = code.trim();
-                            if starling::net::decode_node_id(code).is_some() {
-                                let _ = cmd_tx.send(Command::JoinFlock { code: code.into() });
-                            } else {
-                                app.error_message = Some("Invalid flock code".into());
+                                app.error_message = Some("Invalid or unsupported join code".into());
                             }
                         } else if let Some(code) = app.active_code() {
                             let _ = cmd_tx.send(Command::SendText {
@@ -837,10 +808,6 @@ fn activate_menu_item(
             app.show_join_room = true;
         }
         2 => {
-            app.join_roost_input.clear();
-            app.show_join_roost = true;
-        }
-        3 => {
             disable_raw_mode()?;
             execute!(
                 std::io::stdout(),
@@ -870,7 +837,7 @@ fn activate_menu_item(
                 app.error_message = Some("Profile editor failed".into());
             }
         }
-        4 => {
+        3 => {
             disable_raw_mode()?;
             execute!(
                 std::io::stdout(),
@@ -900,7 +867,7 @@ fn activate_menu_item(
                 app.error_message = Some("Settings editor failed".into());
             }
         }
-        5 => {
+        4 => {
             app.quit_requested = true;
         }
         _ => {}

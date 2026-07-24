@@ -23,7 +23,7 @@ struct FlockHandle {
 }
 
 pub async fn run(
-    bootstrap: Vec<EndpointId>,
+    bootstrap: Option<String>,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     muted: Arc<AtomicBool>,
@@ -42,7 +42,7 @@ pub async fn run(
         .await?;
     endpoint.online().await;
 
-    let my_code = starling::net::encode_node_id(&my_node_id);
+    let my_code = starling::net::encode_flock_code(my_node_id.as_bytes());
     starling::logger::warn(&format!("endpoint bound: room_code={my_code}"));
     let _ = evt_tx.send(AppEvent::Ticket(my_code));
 
@@ -80,26 +80,17 @@ pub async fn run(
 
     let mut flocks: HashMap<String, FlockHandle> = HashMap::new();
 
-    if let Some(&opener) = bootstrap.first() {
-        let room = starling::net::encode_node_id(&opener);
-        join_flock(
+    if let Some(code) = bootstrap {
+        join_by_code(
             &gossip,
-            room.clone(),
-            bootstrap,
+            &endpoint,
+            code,
             &mut flocks,
             evt_tx.clone(),
             my_node_id,
             name.clone(),
         )
         .await?;
-        if opener != my_node_id {
-            let (ep, tx) = (endpoint.clone(), evt_tx.clone());
-            tokio::spawn(async move {
-                if let Err(e) = crate::sync::backfill(ep, opener, room, 0, tx.clone()).await {
-                    let _ = tx.send(AppEvent::Error(format!("history backfill failed: {e}")));
-                }
-            });
-        }
     }
 
     #[cfg(feature = "audio")]
@@ -130,49 +121,19 @@ pub async fn run(
                 }
             }
 
-            Command::JoinFlock { code } => {
-                if let Some(opener) = starling::net::decode_node_id(&code) {
-                    let room = starling::net::encode_node_id(&opener);
-                    if let Err(e) = join_flock(
-                        &gossip,
-                        room.clone(),
-                        vec![opener],
-                        &mut flocks,
-                        evt_tx.clone(),
-                        my_node_id,
-                        name.clone(),
-                    )
-                    .await
-                    {
-                        let _ = evt_tx.send(AppEvent::Error(format!("failed to join flock: {e}")));
-                    } else if opener != my_node_id {
-                        let (ep, tx) = (endpoint.clone(), evt_tx.clone());
-                        tokio::spawn(async move {
-                            if let Err(e) =
-                                crate::sync::backfill(ep, opener, room, 0, tx.clone()).await
-                            {
-                                let _ = tx
-                                    .send(AppEvent::Error(format!("history backfill failed: {e}")));
-                            }
-                        });
-                    }
-                }
-            }
-
-            Command::JoinRoost { code } => {
-                if let Some(opener) = starling::net::decode_node_id(&code)
-                    && let Err(e) = join_roost(
-                        &gossip,
-                        &endpoint,
-                        opener,
-                        &mut flocks,
-                        evt_tx.clone(),
-                        my_node_id,
-                        name.clone(),
-                    )
-                    .await
+            Command::Join { code } => {
+                if let Err(error) = join_by_code(
+                    &gossip,
+                    &endpoint,
+                    code,
+                    &mut flocks,
+                    evt_tx.clone(),
+                    my_node_id,
+                    name.clone(),
+                )
+                .await
                 {
-                    let _ = evt_tx.send(AppEvent::Error(format!("failed to join roost: {e}")));
+                    let _ = evt_tx.send(AppEvent::Error(format!("join failed: {error}")));
                 }
             }
 
@@ -264,6 +225,51 @@ impl iroh::protocol::ProtocolHandler for VideoProto {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn join_by_code(
+    gossip: &Gossip,
+    endpoint: &Endpoint,
+    code: String,
+    flocks: &mut HashMap<String, FlockHandle>,
+    evt_tx: mpsc::UnboundedSender<AppEvent>,
+    my_id: EndpointId,
+    name: String,
+) -> anyhow::Result<()> {
+    let decoded = starling::net::decode_typed_code(&code)
+        .ok_or_else(|| anyhow::anyhow!("invalid or unsupported typed code"))?;
+    let opener = starling::net::typed_code_node_id(&decoded)
+        .ok_or_else(|| anyhow::anyhow!("join code has an invalid endpoint payload"))?;
+
+    match decoded.code_type {
+        starling::net::CodeType::Flock => {
+            join_flock(
+                gossip,
+                code.clone(),
+                vec![opener],
+                flocks,
+                evt_tx.clone(),
+                my_id,
+                name,
+            )
+            .await?;
+            if opener != my_id {
+                let (ep, tx) = (endpoint.clone(), evt_tx.clone());
+                tokio::spawn(async move {
+                    if let Err(error) = crate::sync::backfill(ep, opener, code, 0, tx.clone()).await
+                    {
+                        let _ =
+                            tx.send(AppEvent::Error(format!("history backfill failed: {error}")));
+                    }
+                });
+            }
+            Ok(())
+        }
+        starling::net::CodeType::Roost => {
+            join_roost(gossip, endpoint, code, opener, flocks, evt_tx, my_id, name).await
+        }
+    }
+}
+
 async fn join_flock(
     gossip: &Gossip,
     code: String,
@@ -340,13 +346,13 @@ async fn join_flock(
 async fn join_roost(
     gossip: &Gossip,
     endpoint: &Endpoint,
+    code: String,
     opener: EndpointId,
     flocks: &mut HashMap<String, FlockHandle>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
     name: String,
 ) -> anyhow::Result<()> {
-    let code = starling::net::encode_node_id(&opener);
     let control_key = format!("{code}/_control");
     let topic = starling::net::topic_for(&format!("starling/roost/{control_key}"));
     let crypto = FlockCrypto::from_room_code(&control_key);
@@ -364,7 +370,7 @@ async fn join_roost(
         anyhow::bail!("roost control subscription ended before state arrived")
     })
     .await
-    .map_err(|_| anyhow::anyhow!("timed out waiting for roost state"))??;
+    .map_err(|_| anyhow::anyhow!("roost server did not answer within 10 seconds"))??;
 
     for channel in &state.channels {
         join_roost_channel(

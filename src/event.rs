@@ -7,10 +7,7 @@ pub enum Command {
         flock: String,
         body: String,
     },
-    JoinFlock {
-        code: String,
-    },
-    JoinRoost {
+    Join {
         code: String,
     },
     UpdateProfile {

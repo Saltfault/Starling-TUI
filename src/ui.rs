@@ -4,6 +4,7 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
+use sha2::{Digest, Sha256};
 use starling::event::{BirdStatus, ChatMessage};
 use std::collections::{HashMap, HashSet};
 
@@ -58,14 +59,7 @@ pub struct RoostView {
     pub unread: usize,
 }
 
-pub const MENU_ITEMS: &[&str] = &[
-    "Create Room",
-    "Join Flock",
-    "Join Roost",
-    "Profile",
-    "Settings",
-    "Quit",
-];
+pub const MENU_ITEMS: &[&str] = &["Create Room", "Join", "Profile", "Settings", "Quit"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScrollPanel {
@@ -162,8 +156,6 @@ pub struct App {
     pub show_create_room: bool,
     pub show_join_room: bool,
     pub join_input: String,
-    pub show_join_roost: bool,
-    pub join_roost_input: String,
     pub in_call: bool,
     pub muted: bool,
     pub peer_names: HashMap<EndpointId, String>,
@@ -199,8 +191,6 @@ impl Default for App {
             show_create_room: false,
             show_join_room: false,
             join_input: String::new(),
-            show_join_roost: false,
-            join_roost_input: String::new(),
             in_call: false,
             muted: false,
             peer_names: HashMap::new(),
@@ -455,8 +445,6 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_create_room_popup(f, app);
     } else if app.show_join_room {
         draw_join_room_popup(f, app);
-    } else if app.show_join_roost {
-        draw_join_roost_popup(f, app);
     } else if app.show_menu {
         draw_menu_popup(f, app);
     }
@@ -825,20 +813,9 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
 fn draw_join_room_popup(f: &mut Frame, app: &App) {
     draw_input_popup(
         f,
-        " Join Room ",
-        "Enter the room code:",
+        " Join ",
+        "Enter a flock or roost code:",
         &app.join_input,
-        " Enter = join . Esc = cancel",
-        app,
-    );
-}
-
-fn draw_join_roost_popup(f: &mut Frame, app: &App) {
-    draw_input_popup(
-        f,
-        " Join Roost ",
-        "Enter the roost code:",
-        &app.join_roost_input,
         " Enter = join . Esc = cancel",
         app,
     );
@@ -914,6 +891,14 @@ fn parse_color_code(code: &str) -> Vec<(u8, u8, u8)> {
             colors.push((r, g, b));
         }
     }
+    if colors.is_empty() && !code.is_empty() {
+        colors.extend(
+            Sha256::digest(code.as_bytes())
+                .chunks_exact(3)
+                .take(6)
+                .map(|chunk| (chunk[0], chunk[1], chunk[2])),
+        );
+    }
     colors
 }
 
@@ -966,6 +951,12 @@ mod tests {
 
         assert_eq!(scroll.row_index(0), Some(4));
         assert_eq!(scroll.row_index(3), Some(7));
+    }
+
+    #[test]
+    fn typed_codes_keep_a_color_identity() {
+        let colors = parse_color_code("AEBAGBAFAYDQQCIKBMGA2DQPCAIREEYU");
+        assert_eq!(colors.len(), 6);
     }
 
     #[test]

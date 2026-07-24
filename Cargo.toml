@@ -1,6 +1,6 @@
 [package]
 name = "Starling-TUI"
-version = "0.5.21"
+version = "0.5.22"
 edition = "2024"
 
 [[bin]]
@@ -26,6 +26,7 @@ postcard = { version = "1.1.3", features = ["use-std"] }
 ratatui = "0.30.2"
 ringbuf = { version = "0.5.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.0"
 starling = { git = "https://forgejo.hearthhome.lol/Saltfault/Starling.git" }
 tokio = { version = "1.53.1", features = ["full"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
