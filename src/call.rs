@@ -8,11 +8,11 @@
 #[cfg(any(feature = "audio", feature = "video"))]
 use crate::event::AppEvent;
 #[cfg(any(feature = "audio", feature = "video"))]
-use iroh::{Endpoint, EndpointAddr, endpoint::Connection};
+use iroh::{Endpoint, EndpointAddr, EndpointId, endpoint::Connection};
 #[cfg(feature = "video")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(any(feature = "audio", feature = "video"))]
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 /// ALPN string for the voice protocol.
 #[cfg(feature = "audio")]
@@ -27,13 +27,27 @@ pub const VIDEO_ALPN: &[u8] = b"starling/video/0";
 #[cfg(feature = "audio")]
 pub async fn place_call(
     endpoint: Endpoint,
-    peer: EndpointAddr,
+    peer: EndpointId,
     mut frame_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    evt_tx: mpsc::UnboundedSender<AppEvent>,
 ) -> anyhow::Result<()> {
-    let conn = endpoint.connect(peer, VOICE_ALPN).await?;
-    while let Some(frame) = frame_rx.recv().await {
-        let _ = conn.send_datagram(frame.into());
+    let conn = endpoint
+        .connect(EndpointAddr::from(peer), VOICE_ALPN)
+        .await?;
+    let _ = evt_tx.send(AppEvent::CallStarted(peer));
+    loop {
+        tokio::select! {
+            frame = frame_rx.recv() => {
+                let Some(frame) = frame else { break };
+                let _ = conn.send_datagram(frame.into());
+            }
+            datagram = conn.read_datagram() => {
+                let Ok(bytes) = datagram else { break };
+                let _ = evt_tx.send(AppEvent::VoiceFrame(bytes.to_vec()));
+            }
+        }
     }
+    let _ = evt_tx.send(AppEvent::CallEnded(peer));
     Ok(())
 }
 
@@ -41,11 +55,24 @@ pub async fn place_call(
 #[cfg(feature = "audio")]
 pub async fn handle_incoming(
     conn: Connection,
+    mut frame_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
 ) -> anyhow::Result<()> {
-    while let Ok(bytes) = conn.read_datagram().await {
-        let _ = evt_tx.send(AppEvent::VoiceFrame(bytes.to_vec()));
+    let peer = conn.remote_id();
+    let _ = evt_tx.send(AppEvent::CallStarted(peer));
+    loop {
+        tokio::select! {
+            frame = frame_rx.recv() => {
+                let Some(frame) = frame else { break };
+                let _ = conn.send_datagram(frame.into());
+            }
+            datagram = conn.read_datagram() => {
+                let Ok(bytes) = datagram else { break };
+                let _ = evt_tx.send(AppEvent::VoiceFrame(bytes.to_vec()));
+            }
+        }
     }
+    let _ = evt_tx.send(AppEvent::CallEnded(peer));
     Ok(())
 }
 
@@ -55,12 +82,19 @@ pub async fn handle_incoming(
 #[cfg(feature = "video")]
 pub async fn place_video(
     endpoint: Endpoint,
-    peer: EndpointAddr,
-    mut frame_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    peer: EndpointId,
+    mut frame_rx: broadcast::Receiver<Vec<u8>>,
 ) -> anyhow::Result<()> {
-    let conn = endpoint.connect(peer, VIDEO_ALPN).await?;
+    let conn = endpoint
+        .connect(EndpointAddr::from(peer), VIDEO_ALPN)
+        .await?;
     let mut tx = conn.open_uni().await?;
-    while let Some(jpeg) = frame_rx.recv().await {
+    loop {
+        let jpeg = match frame_rx.recv().await {
+            Ok(jpeg) => jpeg,
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => break,
+        };
         tx.write_u32(jpeg.len() as u32).await?;
         tx.write_all(&jpeg).await?;
     }
@@ -74,11 +108,20 @@ pub async fn recv_video(
     conn: Connection,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
 ) -> anyhow::Result<()> {
+    let peer = conn.remote_id();
     let mut rx = conn.accept_uni().await?;
-    loop {
-        let len = rx.read_u32().await? as usize;
-        let mut buf = vec![0u8; len];
-        rx.read_exact(&mut buf).await?;
-        let _ = evt_tx.send(AppEvent::VideoFrame(buf));
+    let result = async {
+        loop {
+            let len = rx.read_u32().await? as usize;
+            if len > 8 * 1024 * 1024 {
+                anyhow::bail!("video frame exceeds 8 MiB limit");
+            }
+            let mut buf = vec![0u8; len];
+            rx.read_exact(&mut buf).await?;
+            let _ = evt_tx.send(AppEvent::RemoteVideoFrame { peer, jpeg: buf });
+        }
     }
+    .await;
+    let _ = evt_tx.send(AppEvent::RemoteVideoStopped(peer));
+    result
 }

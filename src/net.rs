@@ -56,6 +56,8 @@ pub async fn run(
             crate::call::VOICE_ALPN,
             VoiceProto {
                 evt_tx: evt_tx.clone(),
+                muted: muted.clone(),
+                input_device: input_device.clone(),
             },
         );
     }
@@ -98,6 +100,8 @@ pub async fn run(
     #[cfg(feature = "video")]
     #[allow(unused)]
     let mut _camera: Option<crate::video::CameraHandle> = None;
+    #[cfg(feature = "video")]
+    let mut _video_tx: Option<tokio::sync::broadcast::Sender<Vec<u8>>> = None;
 
     loop {
         let Some(cmd) = cmd_rx.recv().await else {
@@ -150,20 +154,29 @@ pub async fn run(
             }
 
             #[cfg(feature = "audio")]
-            Command::StartCall(addr) => {
+            Command::StartCall(peer) => {
                 let (mic_tx, mic_rx) = mpsc::unbounded_channel();
-                _mic_stream = Some(crate::voice::start_capture(
-                    mic_tx,
-                    muted.clone(),
-                    input_device.as_deref(),
-                )?);
-                let ep = endpoint.clone();
-                let tx = evt_tx.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = crate::call::place_call(ep, addr, mic_rx).await {
-                        let _ = tx.send(AppEvent::Error(format!("call ended: {e}")));
+                match crate::voice::start_capture(mic_tx, muted.clone(), input_device.as_deref()) {
+                    Ok(stream) => {
+                        _mic_stream = Some(stream);
+                        let ep = endpoint.clone();
+                        let tx = evt_tx.clone();
+                        tokio::spawn(async move {
+                            if let Err(error) =
+                                crate::call::place_call(ep, peer, mic_rx, tx.clone()).await
+                            {
+                                let _ = tx.send(AppEvent::Error(format!(
+                                    "could not start call: {error}"
+                                )));
+                            }
+                        });
                     }
-                });
+                    Err(error) => {
+                        let _ = evt_tx.send(AppEvent::Error(format!(
+                            "could not start microphone: {error}"
+                        )));
+                    }
+                }
             }
 
             #[cfg(feature = "audio")]
@@ -172,21 +185,38 @@ pub async fn run(
             }
 
             #[cfg(feature = "video")]
-            Command::StartVideo(addr) => {
-                let (cam_tx, cam_rx) = mpsc::unbounded_channel();
+            Command::StartVideo(peers) => {
                 _camera = None;
-                _camera = Some(crate::video::start_camera(cam_tx)?);
-                let ep = endpoint.clone();
-                let tx = evt_tx.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = crate::call::place_video(ep, addr, cam_rx).await {
-                        let _ = tx.send(AppEvent::Error(format!("video ended: {e}")));
+                _video_tx = None;
+                let (video_tx, _) = tokio::sync::broadcast::channel(2);
+                match crate::video::start_camera(video_tx.clone(), evt_tx.clone()) {
+                    Ok(camera) => {
+                        _camera = Some(camera);
+                        for peer in peers {
+                            let ep = endpoint.clone();
+                            let frames = video_tx.subscribe();
+                            let tx = evt_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(error) = crate::call::place_video(ep, peer, frames).await
+                                {
+                                    let _ = tx.send(AppEvent::Error(format!(
+                                        "video to {peer} ended: {error}"
+                                    )));
+                                }
+                            });
+                        }
+                        _video_tx = Some(video_tx);
                     }
-                });
+                    Err(error) => {
+                        let _ = evt_tx
+                            .send(AppEvent::Error(format!("could not start camera: {error}")));
+                    }
+                }
             }
             #[cfg(feature = "video")]
             Command::StopVideo => {
                 _camera = None;
+                _video_tx = None;
             }
 
             Command::Quit => break,
@@ -200,12 +230,29 @@ pub async fn run(
 #[derive(Debug)]
 struct VoiceProto {
     evt_tx: mpsc::UnboundedSender<AppEvent>,
+    muted: Arc<AtomicBool>,
+    input_device: Option<String>,
 }
 
 #[cfg(feature = "audio")]
 impl iroh::protocol::ProtocolHandler for VoiceProto {
     async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
-        let _ = crate::call::handle_incoming(conn, self.evt_tx.clone()).await;
+        let (mic_tx, mic_rx) = mpsc::unbounded_channel();
+        let stream = match crate::voice::start_capture(
+            mic_tx,
+            self.muted.clone(),
+            self.input_device.as_deref(),
+        ) {
+            Ok(stream) => stream,
+            Err(error) => {
+                let _ = self
+                    .evt_tx
+                    .send(AppEvent::Error(format!("could not answer call: {error}")));
+                return Ok(());
+            }
+        };
+        let _stream = stream;
+        let _ = crate::call::handle_incoming(conn, mic_rx, self.evt_tx.clone()).await;
         Ok(())
     }
 }

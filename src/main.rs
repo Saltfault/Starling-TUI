@@ -235,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
         Ok(p) => Some(p),
         Err(e) => {
             starling::logger::warn(&format!("audio playback unavailable: {e}"));
+            app.error_message = Some(format!("Audio output unavailable: {e}"));
             None
         }
     };
@@ -356,6 +357,8 @@ async fn main() -> anyhow::Result<()> {
                     app.peers.retain(|p| p != &id);
                     app.peer_names.remove(&id);
                     app.peer_status.remove(&id);
+                    #[cfg(feature = "video")]
+                    app.remote_video_frames.remove(&id);
                     if !app.peers.is_empty() {
                         app.selected_peer %= app.peers.len();
                     } else {
@@ -363,9 +366,15 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 AppEvent::PeerNamed(id, name) => {
+                    if id != my_node_id && !app.peers.contains(&id) {
+                        app.peers.push(id);
+                    }
                     app.peer_names.insert(id, name);
                 }
                 AppEvent::PeerStatus(id, s) => {
+                    if id != my_node_id && !app.peers.contains(&id) {
+                        app.peers.push(id);
+                    }
                     app.peer_status.insert(id, s);
                 }
                 AppEvent::Ticket(node_id) => {
@@ -374,9 +383,6 @@ async fn main() -> anyhow::Result<()> {
                 AppEvent::Error(error) => {
                     starling::logger::warn(&error);
                     app.error_message = Some(error);
-                    app.in_call = false;
-                    app.show_video = false;
-                    app.video_frame = None;
                 }
                 #[cfg(feature = "audio")]
                 AppEvent::VoiceFrame(bytes) => {
@@ -384,11 +390,40 @@ async fn main() -> anyhow::Result<()> {
                         p.push_opus(&bytes);
                     }
                 }
-                #[cfg(feature = "video")]
-                AppEvent::VideoFrame(jpeg) => {
-                    if let Ok(img) = image::load_from_memory(&jpeg) {
-                        app.video_frame = Some(img.to_rgb8());
+                #[cfg(feature = "audio")]
+                AppEvent::CallStarted(peer) => {
+                    if !app.peers.contains(&peer) {
+                        app.peers.push(peer);
                     }
+                    app.in_call = true;
+                    app.error_message = None;
+                }
+                #[cfg(feature = "audio")]
+                AppEvent::CallEnded(_peer) => {
+                    app.in_call = false;
+                }
+                #[cfg(feature = "video")]
+                AppEvent::LocalVideoFrame(jpeg) => {
+                    if let Ok(img) = image::load_from_memory(&jpeg) {
+                        app.local_video_frame = Some(img.to_rgb8());
+                        app.error_message = None;
+                    }
+                }
+                #[cfg(feature = "video")]
+                AppEvent::LocalVideoFailed(error) => {
+                    app.show_video = false;
+                    app.local_video_frame = None;
+                    app.error_message = Some(error);
+                }
+                #[cfg(feature = "video")]
+                AppEvent::RemoteVideoFrame { peer, jpeg } => {
+                    if let Ok(img) = image::load_from_memory(&jpeg) {
+                        app.remote_video_frames.insert(peer, img.to_rgb8());
+                    }
+                }
+                #[cfg(feature = "video")]
+                AppEvent::RemoteVideoStopped(peer) => {
+                    app.remote_video_frames.remove(&peer);
                 }
                 AppEvent::HistoryChunk { flock, messages } => {
                     merge_history(&mut app, &flock, messages);
@@ -691,11 +726,17 @@ fn handle_mouse_click(
                     #[cfg(feature = "audio")]
                     ToolbarAction::Call => {
                         if app.in_call {
-                            let _ = cmd_tx.send(Command::HangUp);
-                            app.in_call = false;
-                        } else if let Some(addr) = app.selected_peer_addr() {
-                            let _ = cmd_tx.send(Command::StartCall(addr));
-                            app.in_call = true;
+                            if cmd_tx.send(Command::HangUp).is_ok() {
+                                app.in_call = false;
+                            }
+                        } else if let Some(peer) = app.selected_peer_id() {
+                            if cmd_tx.send(Command::StartCall(peer)).is_err() {
+                                app.error_message = Some("Call service is unavailable".into());
+                            } else {
+                                app.error_message = Some("Connecting call...".into());
+                            }
+                        } else {
+                            app.error_message = Some("Select an online bird before calling".into());
                         }
                     }
                     #[cfg(feature = "audio")]
@@ -705,14 +746,16 @@ fn handle_mouse_click(
                     }
                     #[cfg(feature = "video")]
                     ToolbarAction::Video => {
-                        app.show_video = !app.show_video;
-                        match (app.show_video, app.selected_peer_addr()) {
-                            (true, Some(addr)) => {
-                                let _ = cmd_tx.send(Command::StartVideo(addr));
+                        if app.show_video {
+                            if cmd_tx.send(Command::StopVideo).is_ok() {
+                                app.show_video = false;
+                                app.local_video_frame = None;
                             }
-                            _ => {
-                                let _ = cmd_tx.send(Command::StopVideo);
-                            }
+                        } else if cmd_tx.send(Command::StartVideo(app.peers.clone())).is_ok() {
+                            app.show_video = true;
+                            app.error_message = Some("Starting camera...".into());
+                        } else {
+                            app.error_message = Some("Video service is unavailable".into());
                         }
                     }
                     ToolbarAction::Quit => {

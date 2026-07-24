@@ -1,5 +1,5 @@
 use image::RgbImage;
-use iroh::{EndpointAddr, EndpointId};
+use iroh::EndpointId;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
@@ -162,7 +162,9 @@ pub struct App {
     pub peer_names: HashMap<EndpointId, String>,
     pub peer_status: HashMap<EndpointId, BirdStatus>,
     #[allow(dead_code)]
-    pub video_frame: Option<RgbImage>,
+    pub local_video_frame: Option<RgbImage>,
+    #[allow(dead_code)]
+    pub remote_video_frames: HashMap<EndpointId, RgbImage>,
     #[allow(dead_code)]
     pub show_video: bool,
     pub show_menu: bool,
@@ -197,7 +199,8 @@ impl Default for App {
             muted: false,
             peer_names: HashMap::new(),
             peer_status: HashMap::new(),
-            video_frame: None,
+            local_video_frame: None,
+            remote_video_frames: HashMap::new(),
             show_video: false,
             show_menu: false,
             menu_selection: 0,
@@ -296,10 +299,8 @@ impl App {
     }
 
     #[allow(dead_code)]
-    pub fn selected_peer_addr(&self) -> Option<EndpointAddr> {
-        self.peers
-            .get(self.selected_peer)
-            .map(|id| EndpointAddr::from(*id))
+    pub fn selected_peer_id(&self) -> Option<EndpointId> {
+        self.peers.get(self.selected_peer).copied()
     }
 
     pub fn peer_display_name(&self, id: &EndpointId) -> String {
@@ -605,23 +606,64 @@ fn draw_roosts(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+#[cfg(feature = "video")]
+fn draw_video_grid(f: &mut Frame, app: &App, area: Rect) {
+    let mut tiles: Vec<(String, Option<&RgbImage>)> = Vec::new();
+    if app.show_video {
+        tiles.push((
+            format!("{} (you)", app.name),
+            app.local_video_frame.as_ref(),
+        ));
+    }
+    for (peer, frame) in &app.remote_video_frames {
+        tiles.push((app.peer_display_name(peer), Some(frame)));
+    }
+    if tiles.is_empty() {
+        return;
+    }
+
+    let mut columns = 1usize;
+    while columns * columns < tiles.len() {
+        columns += 1;
+    }
+    let rows = tiles.len().div_ceil(columns);
+    let row_areas = Layout::vertical(vec![Constraint::Ratio(1, rows as u32); rows]).split(area);
+    for (row, row_area) in row_areas.iter().enumerate() {
+        let column_areas = Layout::horizontal(vec![Constraint::Ratio(1, columns as u32); columns])
+            .split(*row_area);
+        for (column, tile_area) in column_areas.iter().enumerate() {
+            let index = row * columns + column;
+            let Some((name, frame)) = tiles.get(index) else {
+                continue;
+            };
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(app.palette.border))
+                .title(Span::styled(
+                    format!(" {name} "),
+                    Style::new().fg(app.palette.accent),
+                ));
+            let inner = block.inner(*tile_area);
+            f.render_widget(block, *tile_area);
+            if let Some(frame) = frame {
+                let lines = crate::video::frame_to_lines(frame, inner.width, inner.height);
+                f.render_widget(Paragraph::new(lines), inner);
+            } else {
+                f.render_widget(
+                    Paragraph::new("camera starting...").style(Style::new().fg(app.palette.dim)),
+                    inner,
+                );
+            }
+        }
+    }
+}
+
 fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
     #[cfg(feature = "video")]
-    let area = if app.show_video {
-        let panes = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+    let area = if app.show_video || !app.remote_video_frames.is_empty() {
+        let panes = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
-        if let Some(img) = &app.video_frame {
-            let inner = panes[1].inner(Margin {
-                vertical: 1,
-                horizontal: 1,
-            });
-            let lines = crate::video::frame_to_lines(img, inner.width, inner.height);
-            f.render_widget(
-                Block::default().borders(Borders::ALL).title(" video "),
-                panes[1],
-            );
-            f.render_widget(Paragraph::new(lines), inner);
-        }
+        draw_video_grid(f, app, panes[1]);
         panes[0]
     } else {
         area

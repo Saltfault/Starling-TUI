@@ -1,5 +1,3 @@
-#[cfg(any(feature = "audio", feature = "video"))]
-use iroh::EndpointAddr;
 use iroh::EndpointId;
 
 pub enum Command {
@@ -15,11 +13,11 @@ pub enum Command {
         input_device: Option<String>,
     },
     #[cfg(feature = "audio")]
-    StartCall(EndpointAddr),
+    StartCall(EndpointId),
     #[cfg(feature = "audio")]
     HangUp,
     #[cfg(feature = "video")]
-    StartVideo(EndpointAddr),
+    StartVideo(Vec<EndpointId>),
     #[cfg(feature = "video")]
     StopVideo,
     Quit,
@@ -52,8 +50,21 @@ pub enum AppEvent {
     Error(String),
     #[cfg(feature = "audio")]
     VoiceFrame(Vec<u8>),
+    #[cfg(feature = "audio")]
+    CallStarted(EndpointId),
+    #[cfg(feature = "audio")]
+    CallEnded(EndpointId),
     #[cfg(feature = "video")]
-    VideoFrame(Vec<u8>),
+    LocalVideoFrame(Vec<u8>),
+    #[cfg(feature = "video")]
+    LocalVideoFailed(String),
+    #[cfg(feature = "video")]
+    RemoteVideoFrame {
+        peer: EndpointId,
+        jpeg: Vec<u8>,
+    },
+    #[cfg(feature = "video")]
+    RemoteVideoStopped(EndpointId),
     PeerStatus(EndpointId, starling::event::BirdStatus),
     HistoryChunk {
         flock: String,

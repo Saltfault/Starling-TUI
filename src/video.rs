@@ -16,7 +16,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 #[cfg(feature = "video")]
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 /// Convert an RGB image to terminal lines using half-block characters:
 /// each cell represents two vertical pixels (top = fg, bottom = bg).
@@ -61,7 +61,10 @@ impl Drop for CameraHandle {
 
 /// Start the webcam on a background thread, sending JPEG frames to `tx`.
 #[cfg(feature = "video")]
-pub fn start_camera(tx: mpsc::UnboundedSender<Vec<u8>>) -> anyhow::Result<CameraHandle> {
+pub fn start_camera(
+    tx: broadcast::Sender<Vec<u8>>,
+    evt_tx: mpsc::UnboundedSender<crate::event::AppEvent>,
+) -> anyhow::Result<CameraHandle> {
     // nokhwa::Camera is not Send on all platforms (e.g. Windows COM objects),
     // so we create the camera inside the thread rather than moving it in.
     let stop = Arc::new(AtomicBool::new(false));
@@ -74,16 +77,25 @@ pub fn start_camera(tx: mpsc::UnboundedSender<Vec<u8>>) -> anyhow::Result<Camera
             Ok(c) => c,
             Err(e) => {
                 starling::logger::error(&format!("camera init failed: {e}"));
+                let _ = evt_tx.send(crate::event::AppEvent::LocalVideoFailed(format!(
+                    "camera initialization failed: {e}"
+                )));
                 return;
             }
         };
         if let Err(e) = cam.open_stream() {
             starling::logger::error(&format!("camera stream open failed: {e}"));
+            let _ = evt_tx.send(crate::event::AppEvent::LocalVideoFailed(format!(
+                "camera stream failed: {e}"
+            )));
             return;
         }
 
         while !thread_stop.load(Ordering::Relaxed) {
             let Ok(frame) = cam.frame() else {
+                let _ = evt_tx.send(crate::event::AppEvent::LocalVideoFailed(
+                    "camera stopped producing frames".into(),
+                ));
                 break;
             };
             if let Ok(img) = frame.decode_image::<RgbFormat>() {
@@ -91,9 +103,10 @@ pub fn start_camera(tx: mpsc::UnboundedSender<Vec<u8>>) -> anyhow::Result<Camera
                 if DynamicImage::ImageRgb8(img)
                     .write_to(&mut jpeg, ImageFormat::Jpeg)
                     .is_ok()
-                    && tx.send(jpeg.into_inner()).is_err()
                 {
-                    break;
+                    let jpeg = jpeg.into_inner();
+                    let _ = evt_tx.send(crate::event::AppEvent::LocalVideoFrame(jpeg.clone()));
+                    let _ = tx.send(jpeg);
                 }
             }
         }
