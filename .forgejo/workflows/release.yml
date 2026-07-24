@@ -100,15 +100,20 @@ jobs:
           fi
           TAG="v${{ needs.detect.outputs.version }}"
           for i in $(seq 1 60); do
-            assets=$(curl -s "https://api.github.com/repos/Saltfault/Starling-TUI/releases/tags/$TAG" \
-              -H "Authorization: Bearer $GH_TOKEN" | jq -r '.assets[]?.browser_download_url // empty')
-            if [ -n "$assets" ]; then break; fi
-            echo "GitHub release not ready yet, retry $i/60..."
+            response=$(curl --fail --silent --show-error \
+              "https://api.github.com/repos/Saltfault/Starling-TUI/releases/tags/$TAG" \
+              -H "Authorization: Bearer $GH_TOKEN" || true)
+            asset_count=$(echo "$response" | jq '.assets | length' 2>/dev/null || echo 0)
+            if [ "$asset_count" -ge 3 ]; then
+              assets=$(echo "$response" | jq -r '.assets[].browser_download_url')
+              break
+            fi
+            echo "Waiting for all GitHub artifacts ($asset_count/3), retry $i/60..."
             sleep 30
           done
-          if [ -z "$assets" ]; then
-            echo "macOS binaries not available on GitHub after retries"
-            exit 0
+          if [ "${asset_count:-0}" -lt 3 ]; then
+            echo "GitHub release did not publish all three native artifacts"
+            exit 1
           fi
           echo "$assets" | while read url; do
             [ -z "$url" ] && continue
@@ -142,12 +147,21 @@ jobs:
             exit 1
           fi
 
+          expected_count=$(find artifacts -maxdepth 1 -type f | wc -l)
           for f in artifacts/*; do
             [ ! -f "$f" ] && continue
             echo "Uploading $(basename $f)"
-            curl -s -X POST "$API/repos/$OWNER/$REPO/releases/$release_id/assets" \
+            curl --fail-with-body --silent --show-error \
+              -X POST "$API/repos/$OWNER/$REPO/releases/$release_id/assets" \
               -H "Authorization: Bearer $FORGEJO_TOKEN" \
-              -F "attachment=@$f" > /dev/null 2>&1 || echo "Upload failed for $(basename $f)"
+              -F "attachment=@$f"
           done
 
-          echo "Forgejo release $TAG created with $(ls -1 artifacts | wc -l) assets"
+          uploaded_count=$(curl --fail --silent --show-error \
+            "$API/repos/$OWNER/$REPO/releases/$release_id" \
+            -H "Authorization: Bearer $FORGEJO_TOKEN" | jq '.assets | length')
+          if [ "$uploaded_count" -ne "$expected_count" ] || [ "$uploaded_count" -ne 4 ]; then
+            echo "Expected 4 release assets, uploaded $uploaded_count from $expected_count files"
+            exit 1
+          fi
+          echo "Forgejo release $TAG created with $uploaded_count assets"

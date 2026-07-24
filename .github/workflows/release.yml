@@ -90,12 +90,7 @@ jobs:
           body: |
             ## Which download?
 
-            - Windows (most PCs) ........... `starling-tui-x86_64-pc-windows-gnu.exe`
-            - Windows (older PCs) ......... `starling-tui-i686-pc-windows-gnu.exe`
+            - Windows (64-bit) ............. `starling-tui-x86_64-pc-windows-msvc.exe`
             - macOS (M1–M4) ............... `starling-tui-aarch64-apple-darwin`
             - macOS (Intel) ............... `starling-tui-x86_64-apple-darwin`
             - Linux (most) ............... `starling-tui-x86_64-unknown-linux-gnu`
-            - Linux (portable/Alpine) .... `starling-tui-x86_64-unknown-linux-musl`
-            - Linux (ARM64 / Pi 4+) ...... `starling-tui-aarch64-unknown-linux-gnu`
-            - Linux (ARMv7 / Pi 2–3) ..... `starling-tui-armv7-unknown-linux-gnueabihf`
-            - Linux (32-bit) ............. `starling-tui-i686-unknown-linux-gnu`
