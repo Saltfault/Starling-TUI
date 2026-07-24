@@ -552,12 +552,25 @@ async fn main() -> anyhow::Result<()> {
 
                     _ => {}
                 }
-            } else if let Event::Mouse(m) = event
-                && m.kind == MouseEventKind::Down(MouseButton::Left)
-            {
-                let col = m.column;
-                let row = m.row;
-                handle_mouse_click(&mut app, &cmd_tx, &muted_flag, &mut term, col, row)?;
+            } else if let Event::Mouse(m) = event {
+                match m.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        handle_mouse_click(
+                            &mut app,
+                            &cmd_tx,
+                            &muted_flag,
+                            &mut term,
+                            m.column,
+                            m.row,
+                        )?;
+                    }
+                    MouseEventKind::Moved if app.show_menu => {
+                        if let Some(idx) = menu_item_at(m.column, m.row) {
+                            app.menu_selection = idx;
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -589,22 +602,22 @@ fn handle_mouse_click(
     let (term_w, term_h) = crossterm::terminal::size()?;
 
     if app.show_menu {
-        let popup_w = 28u16.min(term_w);
-        let popup_h = (MENU_ITEMS.len() as u16 + 2).min(term_h);
-        let popup_x = (term_w.saturating_sub(popup_w)) / 2;
-        let popup_y = (term_h.saturating_sub(popup_h)) / 2;
-
-        if col >= popup_x && col < popup_x + popup_w && row >= popup_y && row < popup_y + popup_h {
-            let inner_row = row - popup_y;
-            if inner_row >= 1 && inner_row < popup_h - 1 {
-                let idx = (inner_row - 1) as usize;
-                if idx < MENU_ITEMS.len() {
-                    app.menu_selection = idx;
-                    activate_menu_item(app, cmd_tx, muted_flag)?;
-                }
-            }
+        if let Some(idx) = menu_item_at_size(term_w, term_h, col, row) {
+            app.menu_selection = idx;
+            activate_menu_item(app, cmd_tx, muted_flag)?;
         } else {
-            app.show_menu = false;
+            let popup_w = 28u16.min(term_w);
+            let popup_h = (MENU_ITEMS.len() as u16 + 2).min(term_h);
+            let popup_x = (term_w.saturating_sub(popup_w)) / 2;
+            let popup_y = (term_h.saturating_sub(popup_h)) / 2;
+
+            if col < popup_x
+                || col >= popup_x + popup_w
+                || row < popup_y
+                || row >= popup_y + popup_h
+            {
+                app.show_menu = false;
+            }
         }
         return Ok(());
     }
@@ -673,6 +686,30 @@ fn handle_mouse_click(
     }
 
     Ok(())
+}
+
+fn menu_item_at(col: u16, row: u16) -> Option<usize> {
+    let (term_w, term_h) = crossterm::terminal::size().ok()?;
+    menu_item_at_size(term_w, term_h, col, row)
+}
+
+fn menu_item_at_size(term_w: u16, term_h: u16, col: u16, row: u16) -> Option<usize> {
+    let popup_w = 28u16.min(term_w);
+    let popup_h = (MENU_ITEMS.len() as u16 + 2).min(term_h);
+    let popup_x = (term_w.saturating_sub(popup_w)) / 2;
+    let popup_y = (term_h.saturating_sub(popup_h)) / 2;
+
+    if col < popup_x || col >= popup_x + popup_w {
+        return None;
+    }
+
+    let inner_row = row.checked_sub(popup_y)?;
+    if inner_row == 0 || inner_row >= popup_h.saturating_sub(1) {
+        return None;
+    }
+
+    let idx = (inner_row - 1) as usize;
+    (idx < MENU_ITEMS.len()).then_some(idx)
 }
 
 #[allow(unused_variables)]

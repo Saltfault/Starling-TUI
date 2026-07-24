@@ -563,7 +563,7 @@ fn draw_menu_popup(f: &mut Frame, app: &App) {
         popup,
     );
     let inner = popup.inner(Margin {
-        vertical: 0,
+        vertical: 1,
         horizontal: 2,
     });
     let items: Vec<ListItem> = MENU_ITEMS
