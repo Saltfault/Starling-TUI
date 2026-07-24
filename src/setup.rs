@@ -11,12 +11,22 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
+enum Mode {
+    Full,
+    Settings,
+}
+
+#[derive(Clone)]
 enum Phase {
     DependencyCheck,
     CodeEntry,
     NameEntry,
+    PronounsEntry,
     InputDevice,
     OutputDevice,
+    ColorText,
+    ColorBg,
+    ColorBorder,
     Summary,
 }
 
@@ -24,6 +34,7 @@ struct SetupApp {
     phase: Phase,
     profile: Profile,
     name_input: String,
+    pronouns_input: String,
     code_input: String,
     input_devices: Vec<String>,
     output_devices: Vec<String>,
@@ -32,10 +43,30 @@ struct SetupApp {
     missing_deps: Vec<String>,
     install_cmd: Option<String>,
     install_status: String,
+    text_color_input: String,
+    bg_color_input: String,
+    border_color_input: String,
+    hex_error: String,
+}
+
+fn hex_preview(hex: &str) -> Option<Color> {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 {
+        return None;
+    }
+    Some(Color::Rgb(
+        u8::from_str_radix(&hex[0..2], 16).ok()?,
+        u8::from_str_radix(&hex[2..4], 16).ok()?,
+        u8::from_str_radix(&hex[4..6], 16).ok()?,
+    ))
+}
+
+fn valid_hex(hex: &str) -> bool {
+    hex_preview(hex).is_some()
 }
 
 impl SetupApp {
-    fn new() -> Self {
+    fn new(mode: Mode) -> Self {
         #[cfg(feature = "audio")]
         let input_devices = suppress_stderr(|| list_devices(true));
         #[cfg(not(feature = "audio"))]
@@ -53,24 +84,79 @@ impl SetupApp {
             install_command()
         };
 
-        let phase = if !missing_deps.is_empty() {
-            Phase::DependencyCheck
-        } else {
-            Phase::CodeEntry
+        let phase = match &mode {
+            Mode::Full => {
+                if !missing_deps.is_empty() {
+                    Phase::DependencyCheck
+                } else {
+                    Phase::CodeEntry
+                }
+            }
+            Mode::Settings => Phase::InputDevice,
         };
 
+        let selected_input = profile
+            .input_device
+            .as_ref()
+            .and_then(|d| input_devices.iter().position(|x| x == d))
+            .unwrap_or(0);
+        let selected_output = profile
+            .output_device
+            .as_ref()
+            .and_then(|d| output_devices.iter().position(|x| x == d))
+            .unwrap_or(0);
+
+        let profile_clone = profile.clone();
         Self {
             phase,
             name_input: profile.name.clone(),
+            pronouns_input: profile.pronouns.clone(),
             code_input: String::new(),
             input_devices,
             output_devices,
-            selected_input: 0,
-            selected_output: 0,
+            selected_input,
+            selected_output,
             profile,
             missing_deps,
             install_cmd,
             install_status: String::new(),
+            text_color_input: profile_clone.text_color.clone(),
+            bg_color_input: profile_clone.bg_color.clone(),
+            border_color_input: profile_clone.border_color.clone(),
+            hex_error: String::new(),
+        }
+    }
+
+    fn hex_color_name(&self, phase: &Phase) -> &str {
+        match phase {
+            Phase::ColorText => "Text Color",
+            Phase::ColorBg => "Background Color",
+            Phase::ColorBorder => "Border Color",
+            _ => "",
+        }
+    }
+
+    fn current_hex_input(&self, phase: &Phase) -> &str {
+        match phase {
+            Phase::ColorText => &self.text_color_input,
+            Phase::ColorBg => &self.bg_color_input,
+            Phase::ColorBorder => &self.border_color_input,
+            _ => "",
+        }
+    }
+
+    fn finish_colors(&mut self) {
+        if valid_hex(&self.text_color_input) {
+            let h = self.text_color_input.trim_start_matches('#');
+            self.profile.text_color = format!("#{h}");
+        }
+        if valid_hex(&self.bg_color_input) {
+            let h = self.bg_color_input.trim_start_matches('#');
+            self.profile.bg_color = format!("#{h}");
+        }
+        if valid_hex(&self.border_color_input) {
+            let h = self.border_color_input.trim_start_matches('#');
+            self.profile.border_color = format!("#{h}");
         }
     }
 }
@@ -287,7 +373,20 @@ fn list_devices(is_input: bool) -> Vec<String> {
 pub fn run_setup(
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<Option<Profile>> {
-    let mut app = SetupApp::new();
+    run_wizard(term, Mode::Full)
+}
+
+pub fn run_settings(
+    term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+) -> anyhow::Result<Option<Profile>> {
+    run_wizard(term, Mode::Settings)
+}
+
+fn run_wizard(
+    term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    mode: Mode,
+) -> anyhow::Result<Option<Profile>> {
+    let mut app = SetupApp::new(mode);
 
     loop {
         term.draw(|f| draw(f, &app))?;
@@ -351,11 +450,24 @@ pub fn run_setup(
                 Phase::NameEntry => match k.code {
                     KeyCode::Enter if !app.name_input.is_empty() => {
                         app.profile.name = app.name_input.clone();
-                        app.phase = Phase::InputDevice;
+                        app.phase = Phase::PronounsEntry;
                     }
                     KeyCode::Char(c) => app.name_input.push(c),
                     KeyCode::Backspace => {
                         app.name_input.pop();
+                    }
+                    KeyCode::Esc => return Ok(None),
+                    _ => {}
+                },
+
+                Phase::PronounsEntry => match k.code {
+                    KeyCode::Enter => {
+                        app.profile.pronouns = app.pronouns_input.clone();
+                        app.phase = Phase::InputDevice;
+                    }
+                    KeyCode::Char(c) => app.pronouns_input.push(c),
+                    KeyCode::Backspace => {
+                        app.pronouns_input.pop();
                     }
                     KeyCode::Esc => return Ok(None),
                     _ => {}
@@ -391,7 +503,7 @@ pub fn run_setup(
                         } else {
                             Some(app.output_devices[app.selected_output].clone())
                         };
-                        app.phase = Phase::Summary;
+                        app.phase = Phase::ColorText;
                     }
                     KeyCode::Up => {
                         if app.selected_output > 0 {
@@ -407,8 +519,55 @@ pub fn run_setup(
                     _ => {}
                 },
 
+                Phase::ColorText | Phase::ColorBg | Phase::ColorBorder => {
+                    let cur = app.phase.clone();
+                    let next = match cur {
+                        Phase::ColorText => Phase::ColorBg,
+                        Phase::ColorBg => Phase::ColorBorder,
+                        _ => Phase::Summary,
+                    };
+                    match k.code {
+                        KeyCode::Enter => {
+                            let val = match cur {
+                                Phase::ColorText => app.text_color_input.clone(),
+                                Phase::ColorBg => app.bg_color_input.clone(),
+                                _ => app.border_color_input.clone(),
+                            };
+                            if val.is_empty() || valid_hex(&val) {
+                                app.hex_error.clear();
+                                app.phase = next;
+                            } else {
+                                app.hex_error =
+                                    "Invalid hex color. Use #RRGGBB or leave empty for default."
+                                        .into();
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            let upper = c.to_ascii_uppercase();
+                            if "0123456789ABCDEF#".contains(upper) {
+                                match cur {
+                                    Phase::ColorText => app.text_color_input.push(upper),
+                                    Phase::ColorBg => app.bg_color_input.push(upper),
+                                    _ => app.border_color_input.push(upper),
+                                }
+                                app.hex_error.clear();
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            match cur {
+                                Phase::ColorText => app.text_color_input.pop(),
+                                Phase::ColorBg => app.bg_color_input.pop(),
+                                _ => app.border_color_input.pop(),
+                            };
+                        }
+                        KeyCode::Esc => return Ok(None),
+                        _ => {}
+                    }
+                }
+
                 Phase::Summary => match k.code {
                     KeyCode::Enter => {
+                        app.finish_colors();
                         app.profile.save()?;
                         return Ok(Some(app.profile));
                     }
@@ -417,7 +576,7 @@ pub fn run_setup(
                 },
             }
         }
-    }
+    };
 }
 
 fn draw(f: &mut Frame, app: &SetupApp) {
@@ -450,6 +609,7 @@ fn draw(f: &mut Frame, app: &SetupApp) {
         Phase::DependencyCheck => draw_dependency_check(f, inner, app),
         Phase::CodeEntry => draw_code_entry(f, inner, app),
         Phase::NameEntry => draw_name_entry(f, inner, app),
+        Phase::PronounsEntry => draw_pronouns_entry(f, inner, app),
         Phase::InputDevice => draw_device_list(
             f,
             inner,
@@ -464,6 +624,9 @@ fn draw(f: &mut Frame, app: &SetupApp) {
             &app.output_devices,
             app.selected_output,
         ),
+        Phase::ColorText | Phase::ColorBg | Phase::ColorBorder => {
+            draw_color_entry(f, inner, app)
+        }
         Phase::Summary => draw_summary(f, inner, app),
     }
 }
@@ -607,6 +770,35 @@ fn draw_name_entry(f: &mut Frame, area: Rect, app: &SetupApp) {
     );
 }
 
+fn draw_pronouns_entry(f: &mut Frame, area: Rect, app: &SetupApp) {
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(area);
+
+    f.render_widget(
+        Paragraph::new("Enter your pronouns (optional)"),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new("shown as a subtitle next to your name."),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new(format!(" Pronouns: {}_", app.pronouns_input))
+            .style(Style::new().fg(Color::Yellow)),
+        chunks[3],
+    );
+    f.render_widget(
+        Paragraph::new(" Enter = continue . Esc = cancel").style(Style::new().fg(Color::DarkGray)),
+        chunks[4],
+    );
+}
+
 fn draw_device_list(f: &mut Frame, area: Rect, title: &str, devices: &[String], selected: usize) {
     let chunks = Layout::vertical([
         Constraint::Length(1),
@@ -640,6 +832,55 @@ fn draw_device_list(f: &mut Frame, area: Rect, title: &str, devices: &[String], 
     );
 }
 
+fn draw_color_entry(f: &mut Frame, area: Rect, app: &SetupApp) {
+    let label = app.hex_color_name(&app.phase);
+    let input = app.current_hex_input(&app.phase);
+
+    let color_preview = hex_preview(input);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(3),
+        Constraint::Min(1),
+    ])
+    .split(area);
+
+    f.render_widget(
+        Paragraph::new(format!("{label} (#RRGGBB)")).style(Style::new().fg(Color::White)),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(format!(" {}_", input)).style(Style::new().fg(Color::Yellow)),
+        chunks[2],
+    );
+
+    if let Some(c) = color_preview {
+        let preview_str = format!("  {label}: {}  ", input);
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(&preview_str, Style::new().bg(c)),
+            ])),
+            chunks[4],
+        );
+    }
+
+    if !app.hex_error.is_empty() {
+        f.render_widget(
+            Paragraph::new(format!(" {}", app.hex_error)).style(Style::new().fg(Color::Red)),
+            chunks[3],
+        );
+    }
+
+    f.render_widget(
+        Paragraph::new(" Enter = confirm . Esc = cancel")
+            .style(Style::new().fg(Color::DarkGray)),
+        chunks[5],
+    );
+}
+
 fn draw_summary(f: &mut Frame, area: Rect, app: &SetupApp) {
     let input_name = app
         .profile
@@ -653,34 +894,74 @@ fn draw_summary(f: &mut Frame, area: Rect, app: &SetupApp) {
         .unwrap_or("System Default");
     let code = app.profile.to_code();
 
-    let lines = vec![
+    let text_preview = hex_preview(&app.profile.text_color);
+    let border_preview = hex_preview(&app.profile.border_color);
+    let bg_preview = hex_preview(&app.profile.bg_color);
+
+    let mut lines = vec![
         Line::raw(""),
         Line::from(vec![
-            Span::raw("  Name:   "),
+            Span::raw("  Name:    "),
             Span::styled(&app.profile.name, Style::new().fg(Color::Yellow)),
         ]),
         Line::from(vec![
-            Span::raw("  Input:  "),
-            Span::styled(input_name, Style::new().fg(Color::Cyan)),
-        ]),
-        Line::from(vec![
-            Span::raw("  Output: "),
-            Span::styled(output_name, Style::new().fg(Color::Cyan)),
+            Span::raw("  Pronouns: "),
+            Span::styled(&app.profile.pronouns, Style::new().fg(Color::Cyan)),
         ]),
         Line::raw(""),
-        Line::from(vec![
-            Span::raw("  Profile code: "),
-            Span::styled(code, Style::new().fg(Color::Green).bold()),
-        ]),
-        Line::raw(""),
-        Line::raw("  Save this code to restore your name on"),
-        Line::raw("  another machine with: starling setup"),
-        Line::raw(""),
-        Line::styled(
-            "  Enter = save & exit . Esc = cancel",
-            Style::new().fg(Color::DarkGray),
-        ),
     ];
+
+    let input_style = input_name
+        .parse::<String>()
+        .map(|_| Style::new().fg(Color::Cyan))
+        .unwrap_or_else(|_| Style::new().fg(Color::Cyan));
+    lines.push(Line::from(vec![
+        Span::raw("  Input:   "),
+        Span::styled(input_name, input_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("  Output:  "),
+        Span::styled(output_name, Style::new().fg(Color::Cyan)),
+    ]));
+    lines.push(Line::raw(""));
+
+    lines.push(Line::from(vec![
+        Span::raw("  Text:    "),
+        Span::styled(
+            &app.profile.text_color,
+            text_preview.map_or(Style::new().fg(Color::White), |c| Style::new().fg(c)),
+        ),
+    ]));
+    if !app.profile.bg_color.is_empty() {
+        lines.push(Line::from(vec![
+            Span::raw("  Bg:      "),
+            Span::styled(
+                &app.profile.bg_color,
+                bg_preview.map_or(Style::new().fg(Color::White), |c| Style::new().fg(c)),
+            ),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::raw("  Border:  "),
+        Span::styled(
+            &app.profile.border_color,
+            border_preview.map_or(Style::new().fg(Color::White), |c| Style::new().fg(c)),
+        ),
+    ]));
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::raw("  Profile code: "),
+        Span::styled(code, Style::new().fg(Color::Green).bold()),
+    ]));
+    lines.push(Line::raw(""));
+    lines.push(Line::raw("  Save this code to restore your name on"));
+    lines.push(Line::raw("  another machine with: starling setup"));
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "  Enter = save & exit . Esc = cancel",
+        Style::new().fg(Color::DarkGray),
+    ));
 
     f.render_widget(Paragraph::new(lines), area);
 }

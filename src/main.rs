@@ -25,7 +25,22 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use ui::{App, FlockView, RoostView, MENU_ITEMS};
+use ui::{App, FlockView, RoostView, MENU_ITEMS, Selection};
+
+fn nav_items(app: &App) -> Vec<Selection> {
+    let mut nav = Vec::new();
+    for i in 0..app.flocks.len() {
+        nav.push(Selection::Flock(i));
+    }
+    for (ri, rv) in app.roosts.iter().enumerate() {
+        if app.expanded.contains(&ri) {
+            for ci in 0..rv.channels.len() {
+                nav.push(Selection::Channel(ri, ci));
+            }
+        }
+    }
+    nav
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -45,6 +60,17 @@ async fn main() -> anyhow::Result<()> {
         execute!(stdout, EnterAlternateScreen)?;
         let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
         setup::run_setup(&mut term)?;
+        disable_raw_mode()?;
+        execute!(term.backend_mut(), LeaveAlternateScreen)?;
+        return Ok(());
+    }
+
+    if first == Some("settings") {
+        enable_raw_mode()?;
+        let mut stdout = std::io::stdout();
+        execute!(stdout, EnterAlternateScreen)?;
+        let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
+        setup::run_settings(&mut term)?;
         disable_raw_mode()?;
         execute!(term.backend_mut(), LeaveAlternateScreen)?;
         return Ok(());
@@ -93,6 +119,16 @@ async fn main() -> anyhow::Result<()> {
     #[allow(unused)]
     let output_device = profile.output_device;
     app.name = name.clone();
+    app.pronouns = profile.pronouns.clone();
+    if let Some(c) = ui::hex_to_color(&profile.text_color) {
+        app.text_color = c;
+    }
+    if let Some(c) = ui::hex_to_color(&profile.border_color) {
+        app.border_color = c;
+    }
+    if !profile.bg_color.is_empty() {
+        app.bg_color = ui::hex_to_color(&profile.bg_color);
+    }
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel::<AppEvent>();
@@ -137,6 +173,7 @@ async fn main() -> anyhow::Result<()> {
                 AppEvent::JoinedFlock { code } => {
                     app.flocks.push(FlockView {
                         code,
+                        name: String::new(),
                         messages: vec![],
                         unread: 0,
                     });
@@ -146,7 +183,8 @@ async fn main() -> anyhow::Result<()> {
                         code,
                         name,
                         channels: channels.into_iter().map(|c| FlockView {
-                            code: c,
+                            code: c.clone(),
+                            name: c,
                             messages: vec![],
                             unread: 0,
                         }).collect(),
@@ -157,7 +195,8 @@ async fn main() -> anyhow::Result<()> {
                     if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
                         rv.name = name;
                         rv.channels = channels.into_iter().map(|c| FlockView {
-                            code: c,
+                            code: c.clone(),
+                            name: c,
                             messages: vec![],
                             unread: 0,
                         }).collect();
@@ -328,20 +367,45 @@ async fn main() -> anyhow::Result<()> {
                             let _ = cmd_tx.send(Command::JoinFlock {
                                 code: code.trim().into(),
                             });
-                        } else if let Some(fv) = app.active() {
+                        } else if let Some(code) = app.active_code() {
                             let _ = cmd_tx.send(Command::SendText {
-                                flock: fv.code.clone(),
+                                flock: code.to_string(),
                                 body: text,
                             });
                         }
                     }
 
                     KeyCode::Up if k.modifiers.contains(KeyModifiers::ALT) => {
-                        let max = app.rail_len().saturating_sub(1);
-                        app.current_item = app.current_item.saturating_sub(1).min(max);
+                        let nav = nav_items(&app);
+                        if let Some(pos) = nav.iter().position(|s| *s == app.selection) {
+                            if pos > 0 {
+                                app.selection = nav[pos - 1];
+                            }
+                        }
                     }
                     KeyCode::Down if k.modifiers.contains(KeyModifiers::ALT) => {
-                        app.current_item = (app.current_item + 1).min(app.rail_len().saturating_sub(1));
+                        let nav = nav_items(&app);
+                        if let Some(pos) = nav.iter().position(|s| *s == app.selection) {
+                            if pos + 1 < nav.len() {
+                                app.selection = nav[pos + 1];
+                            }
+                        }
+                    }
+                    KeyCode::Right if k.modifiers.contains(KeyModifiers::ALT) => {
+                        match app.selection {
+                            Selection::Flock(_) => {}
+                            Selection::Channel(ri, _) => {
+                                app.toggle_expand(ri);
+                            }
+                        }
+                    }
+                    KeyCode::Left if k.modifiers.contains(KeyModifiers::ALT) => {
+                        match app.selection {
+                            Selection::Flock(_) => {}
+                            Selection::Channel(ri, _) => {
+                                app.toggle_expand(ri);
+                            }
+                        }
                     }
 
                     KeyCode::Esc => {
@@ -434,21 +498,37 @@ fn handle_mouse_click(
         return Ok(());
     }
 
-    if col < 14 {
-        let middle_h = term_h.saturating_sub(6);
-        let flocks_h = middle_h / 2;
-        let flocks_top = 2u16;
-        let roosts_top = flocks_top + flocks_h;
+    if col < 26 {
+        let body_top = 2u16;
+        let body_h = term_h.saturating_sub(6);
+        let flocks_h = (body_h * 33) / 100;
+        let roosts_h = body_h.saturating_sub(flocks_h);
 
-        if row >= flocks_top + 1 && row < roosts_top {
+        let flocks_top = body_top;
+        let roosts_top = body_top + flocks_h;
+
+        if row >= flocks_top + 1 && row < flocks_top + flocks_h.saturating_sub(1) {
             let idx = (row - flocks_top - 1) as usize;
-            if idx < app.flocks.len() {
-                app.current_item = idx;
+            if let Some(fv) = app.flocks.get(idx) {
+                app.selection = Selection::Flock(idx);
             }
-        } else if row >= roosts_top + 1 && row < roosts_top + middle_h - flocks_h {
-            let idx = (row - roosts_top - 1) as usize;
-            if idx < app.roosts.len() {
-                app.current_item = app.flocks.len() + idx;
+        } else if row >= roosts_top + 1 && row < roosts_top + roosts_h.saturating_sub(1) {
+            let mut cursor = roosts_top + 1;
+            for (ri, rv) in app.roosts.iter().enumerate() {
+                if cursor == row {
+                    app.toggle_expand(ri);
+                    return Ok(());
+                }
+                cursor += 1;
+                if app.expanded.contains(&ri) {
+                    for ci in 0..rv.channels.len() {
+                        if cursor == row {
+                            app.selection = Selection::Channel(ri, ci);
+                            return Ok(());
+                        }
+                        cursor += 1;
+                    }
+                }
             }
         }
     }
@@ -476,16 +556,13 @@ fn activate_menu_item(
         3 => { app.create_roost_input.clear(); app.show_create_roost = true; }
         4 => { app.show_invite = app.active_code().is_some(); }
         5 => {
-            app.select_next_peer();
-        }
-        6 => {
             #[cfg(feature = "audio")]
             {
                 app.muted = !app.muted;
                 muted_flag.store(app.muted, Ordering::Relaxed);
             }
         }
-        7 => {
+        6 => {
             #[cfg(feature = "video")]
             {
                 app.show_video = !app.show_video;
@@ -499,7 +576,7 @@ fn activate_menu_item(
                 }
             }
         }
-        8 => {
+        7 => {
             #[cfg(feature = "audio")]
             {
                 if app.in_call {
@@ -511,8 +588,51 @@ fn activate_menu_item(
                 }
             }
         }
+        8 => {
+            disable_raw_mode()?;
+            execute!(std::io::stdout(), LeaveAlternateScreen, ct_event::DisableMouseCapture)?;
+            let _ = std::process::Command::new(std::env::current_exe()?)
+                .args(["profile"])
+                .spawn()
+                .map(|mut c| { let _ = c.wait(); });
+            execute!(std::io::stdout(), EnterAlternateScreen, ct_event::EnableMouseCapture)?;
+            enable_raw_mode()?;
+            let profile = starling::config::Profile::load();
+            if let Some(p) = profile {
+                app.name = p.name.clone();
+                app.pronouns = p.pronouns.clone();
+                if let Some(c) = ui::hex_to_color(&p.text_color) {
+                    app.text_color = c;
+                }
+                if let Some(c) = ui::hex_to_color(&p.border_color) {
+                    app.border_color = c;
+                }
+                if !p.bg_color.is_empty() {
+                    app.bg_color = ui::hex_to_color(&p.bg_color);
+                }
+            }
+        }
         9 => {
-            app.quit_requested = true;
+            disable_raw_mode()?;
+            execute!(std::io::stdout(), LeaveAlternateScreen, ct_event::DisableMouseCapture)?;
+            let _ = std::process::Command::new(std::env::current_exe()?)
+                .args(["settings"])
+                .spawn()
+                .map(|mut c| { let _ = c.wait(); });
+            execute!(std::io::stdout(), EnterAlternateScreen, ct_event::EnableMouseCapture)?;
+            enable_raw_mode()?;
+            let profile = starling::config::Profile::load();
+            if let Some(p) = profile {
+                if let Some(c) = ui::hex_to_color(&p.text_color) {
+                    app.text_color = c;
+                }
+                if let Some(c) = ui::hex_to_color(&p.border_color) {
+                    app.border_color = c;
+                }
+                if !p.bg_color.is_empty() {
+                    app.bg_color = ui::hex_to_color(&p.bg_color);
+                }
+            }
         }
         10 => {
             app.quit_requested = true;
