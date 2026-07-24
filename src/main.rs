@@ -38,7 +38,12 @@ impl Drop for TerminalCleanup {
         let _ = disable_raw_mode();
         let mut stdout = std::io::stdout();
         if self.mouse {
-            let _ = execute!(stdout, LeaveAlternateScreen, ct_event::DisableMouseCapture);
+            let _ = execute!(
+                stdout,
+                LeaveAlternateScreen,
+                ct_event::DisableMouseCapture,
+                ct_event::DisableBracketedPaste
+            );
         } else {
             let _ = execute!(stdout, LeaveAlternateScreen);
         }
@@ -156,7 +161,12 @@ async fn main() -> anyhow::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, ct_event::EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        ct_event::EnableMouseCapture,
+        ct_event::EnableBracketedPaste
+    )?;
     let _cleanup = TerminalCleanup { mouse: true };
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
@@ -585,7 +595,8 @@ async fn main() -> anyhow::Result<()> {
     execute!(
         term.backend_mut(),
         LeaveAlternateScreen,
-        ct_event::DisableMouseCapture
+        ct_event::DisableMouseCapture,
+        ct_event::DisableBracketedPaste
     )?;
     Ok(())
 }
@@ -782,7 +793,8 @@ fn activate_menu_item(
             execute!(
                 std::io::stdout(),
                 LeaveAlternateScreen,
-                ct_event::DisableMouseCapture
+                ct_event::DisableMouseCapture,
+                ct_event::DisableBracketedPaste
             )?;
             let editor_result = std::process::Command::new(std::env::current_exe()?)
                 .arg("profile")
@@ -790,7 +802,8 @@ fn activate_menu_item(
             execute!(
                 std::io::stdout(),
                 EnterAlternateScreen,
-                ct_event::EnableMouseCapture
+                ct_event::EnableMouseCapture,
+                ct_event::EnableBracketedPaste
             )?;
             enable_raw_mode()?;
             if editor_result.is_ok_and(|status| status.success()) {
@@ -810,7 +823,8 @@ fn activate_menu_item(
             execute!(
                 std::io::stdout(),
                 LeaveAlternateScreen,
-                ct_event::DisableMouseCapture
+                ct_event::DisableMouseCapture,
+                ct_event::DisableBracketedPaste
             )?;
             let editor_result = std::process::Command::new(std::env::current_exe()?)
                 .arg("settings")
@@ -818,7 +832,8 @@ fn activate_menu_item(
             execute!(
                 std::io::stdout(),
                 EnterAlternateScreen,
-                ct_event::EnableMouseCapture
+                ct_event::EnableMouseCapture,
+                ct_event::EnableBracketedPaste
             )?;
             enable_raw_mode()?;
             if editor_result.is_ok_and(|status| status.success()) {
