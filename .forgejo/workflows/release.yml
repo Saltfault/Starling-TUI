@@ -60,27 +60,21 @@ jobs:
         run: |
           apt-get update && apt-get install -y jq
 
-      - name: Install cross-compilation packages
+      - name: Install media build dependencies
         run: |
           apt-get install -y \
-            gcc-i686-linux-gnu \
-            gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabihf \
-            lld \
+            build-essential \
+            pkg-config \
             libasound2-dev \
-            musl-tools
-          update-alternatives --set ld /usr/bin/x86_64-linux-gnu-ld 2>/dev/null || true
+            libpulse-dev \
+            libclang-dev \
+            libv4l-dev
 
       - name: Build all targets
         run: |
           set -e
-          export PKG_CONFIG_ALLOW_CROSS=1
           targets=(
             "x86_64-unknown-linux-gnu"
-            "x86_64-unknown-linux-musl:musl-gcc"
-            "i686-unknown-linux-gnu:i686-linux-gnu-gcc"
-            "aarch64-unknown-linux-gnu:aarch64-linux-gnu-gcc"
-            "armv7-unknown-linux-gnueabihf:arm-linux-gnueabihf-gcc"
           )
           for entry in "${targets[@]}"; do
             IFS=':' read -r target linker <<< "$entry"
@@ -90,7 +84,7 @@ jobs:
               target_upper=$(echo "$target" | tr '[:lower:]-' '[:upper:]_')
               export "CARGO_TARGET_${target_upper}_LINKER=$linker"
             fi
-            cargo build --release --target "$target"
+            cargo build --release --target "$target" --all-features
             ext=""
             [[ "$target" == *-windows-* ]] && ext=".exe"
             cp "target/$target/release/starling-tui$ext" "starling-tui-$target$ext"

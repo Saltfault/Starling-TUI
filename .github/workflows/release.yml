@@ -47,19 +47,20 @@ jobs:
       matrix:
         include:
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-15-intel
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-15
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
-          - target: i686-pc-windows-msvc
             os: windows-latest
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
+      - name: Install Opus for Intel macOS
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: brew install opus
       - name: Build release
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --all-features
       - name: Prepare binary
         shell: bash
         run: |
