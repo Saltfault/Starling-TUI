@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Starling-TUI"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1100,7 +1100,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -4999,6 +4999,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "starling"
 version = "0.3.7"
+source = "git+https://github.com/Saltfault/starling.git#2d25767e9c14880b1a9af77bea977c7192f33775"
 dependencies = [
  "anyhow",
  "chacha20poly1305",
@@ -6477,3 +6478,7 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
+
+[[patch.unused]]
+name = "starling"
+version = "0.3.8"

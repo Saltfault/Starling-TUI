@@ -1,6 +1,3 @@
-use starling::config::Profile;
-#[cfg(feature = "audio")]
-use starling::util::suppress_stderr;
 #[cfg(feature = "audio")]
 use cpal::traits::HostTrait;
 use crossterm::event::{self as ct_event, Event, KeyCode, KeyEventKind};
@@ -10,6 +7,9 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
+use starling::config::Profile;
+#[cfg(feature = "audio")]
+use starling::util::suppress_stderr;
 
 enum Mode {
     Full,
@@ -190,17 +190,20 @@ fn check_dependencies() -> Vec<String> {
             missing.push("C compiler (gcc/cc)".into());
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", any(feature = "audio", feature = "video")))]
         {
             if !command_exists("pkg-config") {
                 missing.push("pkg-config".into());
             }
+            #[cfg(feature = "audio")]
             if !pkg_config_exists("alsa") {
                 missing.push("libasound2-dev (ALSA headers)".into());
             }
+            #[cfg(feature = "audio")]
             if !pkg_config_exists("libpulse") {
                 missing.push("libpulse-dev (PulseAudio headers)".into());
             }
+            #[cfg(feature = "video")]
             let has_libclang = command_exists("libclang")
                 || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libclang.so").exists()
                 || std::path::Path::new("/usr/lib/aarch64-linux-gnu/libclang.so").exists()
@@ -221,17 +224,21 @@ fn check_dependencies() -> Vec<String> {
                         })
                     })
                     .unwrap_or(false);
+            #[cfg(feature = "video")]
             if !has_libclang {
                 missing.push("libclang-dev (needed by nokhwa/V4L2 bindgen)".into());
             }
+            #[cfg(feature = "video")]
             if !pkg_config_exists("libv4l2") && !pkg_config_exists("v4l-utils") {
                 missing.push("libv4l-dev (needed by nokhwa/V4L2)".into());
             }
+            #[cfg(feature = "audio")]
             if std::path::Path::new("/mnt/wslg").exists()
                 && !std::path::Path::new("/etc/asound.conf").exists()
             {
                 missing.push("libasound2-plugins + /etc/asound.conf (WSL2 audio bridge)".into());
             }
+            #[cfg(feature = "video")]
             if std::path::Path::new("/mnt/wslg").exists()
                 && !std::fs::read_dir("/dev")
                     .map(|mut d| {
@@ -305,6 +312,9 @@ fn run_shell_command(
     );
 
     println!("> {cmd}\n");
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("cmd").args(["/C", cmd]).status();
+    #[cfg(not(target_os = "windows"))]
     let status = std::process::Command::new("sh").args(["-c", cmd]).status();
 
     let success = status.map(|s| s.success()).unwrap_or(false);
@@ -322,8 +332,15 @@ fn run_shell_command(
 }
 
 fn rebuild_command() -> String {
-    let git_dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
-        .join(".cargo/git/db");
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| std::path::PathBuf::from(home).join(".cargo"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from(".cargo"));
+    let git_dir = cargo_home.join("git/db");
 
     if let Ok(entries) = std::fs::read_dir(&git_dir) {
         for entry in entries.flatten() {
@@ -431,15 +448,22 @@ fn run_wizard(
 
                 Phase::CodeEntry => match k.code {
                     KeyCode::Enter => {
-                        if !app.code_input.is_empty() {
-                            if let Some(p) = Profile::from_code(&app.code_input) {
-                                app.name_input = p.name.clone();
-                                app.profile = p;
-                            }
+                        if app.code_input.is_empty() {
+                            app.install_status.clear();
+                            app.phase = Phase::NameEntry;
+                        } else if let Some(profile) = Profile::from_code(app.code_input.trim()) {
+                            app.name_input = profile.name.clone();
+                            app.profile = profile;
+                            app.install_status.clear();
+                            app.phase = Phase::NameEntry;
+                        } else {
+                            app.install_status =
+                                "Invalid profile code (expected 32 hex digits).".into();
                         }
-                        app.phase = Phase::NameEntry;
                     }
-                    KeyCode::Char(c) => app.code_input.push(c),
+                    KeyCode::Char(c) if !c.is_control() && app.code_input.len() < 256 => {
+                        app.code_input.push(c)
+                    }
                     KeyCode::Backspace => {
                         app.code_input.pop();
                     }
@@ -448,11 +472,13 @@ fn run_wizard(
                 },
 
                 Phase::NameEntry => match k.code {
-                    KeyCode::Enter if !app.name_input.is_empty() => {
-                        app.profile.name = app.name_input.clone();
+                    KeyCode::Enter if !app.name_input.trim().is_empty() => {
+                        app.profile.name = app.name_input.trim().to_string();
                         app.phase = Phase::PronounsEntry;
                     }
-                    KeyCode::Char(c) => app.name_input.push(c),
+                    KeyCode::Char(c) if !c.is_control() && app.name_input.len() < 64 => {
+                        app.name_input.push(c)
+                    }
                     KeyCode::Backspace => {
                         app.name_input.pop();
                     }
@@ -465,7 +491,9 @@ fn run_wizard(
                         app.profile.pronouns = app.pronouns_input.clone();
                         app.phase = Phase::InputDevice;
                     }
-                    KeyCode::Char(c) => app.pronouns_input.push(c),
+                    KeyCode::Char(c) if !c.is_control() && app.pronouns_input.len() < 64 => {
+                        app.pronouns_input.push(c)
+                    }
                     KeyCode::Backspace => {
                         app.pronouns_input.pop();
                     }
@@ -544,7 +572,9 @@ fn run_wizard(
                         }
                         KeyCode::Char(c) => {
                             let upper = c.to_ascii_uppercase();
-                            if "0123456789ABCDEF#".contains(upper) {
+                            if "0123456789ABCDEF#".contains(upper)
+                                && app.current_hex_input(&cur).len() < 7
+                            {
                                 match cur {
                                     Phase::ColorText => app.text_color_input.push(upper),
                                     Phase::ColorBg => app.bg_color_input.push(upper),
@@ -576,7 +606,7 @@ fn run_wizard(
                 },
             }
         }
-    };
+    }
 }
 
 fn draw(f: &mut Frame, app: &SetupApp) {
@@ -624,9 +654,7 @@ fn draw(f: &mut Frame, app: &SetupApp) {
             &app.output_devices,
             app.selected_output,
         ),
-        Phase::ColorText | Phase::ColorBg | Phase::ColorBorder => {
-            draw_color_entry(f, inner, app)
-        }
+        Phase::ColorText | Phase::ColorBg | Phase::ColorBorder => draw_color_entry(f, inner, app),
         Phase::Summary => draw_summary(f, inner, app),
     }
 }
@@ -736,6 +764,12 @@ fn draw_code_entry(f: &mut Frame, area: Rect, app: &SetupApp) {
         Paragraph::new(format!(" Code: {}_", app.code_input)).style(Style::new().fg(Color::Yellow)),
         chunks[3],
     );
+    if !app.install_status.is_empty() {
+        f.render_widget(
+            Paragraph::new(app.install_status.as_str()).style(Style::new().fg(Color::Red)),
+            chunks[4],
+        );
+    }
     f.render_widget(
         Paragraph::new(" Enter = continue . Esc = cancel").style(Style::new().fg(Color::DarkGray)),
         chunks[5],
@@ -780,10 +814,7 @@ fn draw_pronouns_entry(f: &mut Frame, area: Rect, app: &SetupApp) {
     ])
     .split(area);
 
-    f.render_widget(
-        Paragraph::new("Enter your pronouns (optional)"),
-        chunks[0],
-    );
+    f.render_widget(Paragraph::new("Enter your pronouns (optional)"), chunks[0]);
     f.render_widget(
         Paragraph::new("shown as a subtitle next to your name."),
         chunks[1],
@@ -860,9 +891,10 @@ fn draw_color_entry(f: &mut Frame, area: Rect, app: &SetupApp) {
     if let Some(c) = color_preview {
         let preview_str = format!("  {label}: {}  ", input);
         f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(&preview_str, Style::new().bg(c)),
-            ])),
+            Paragraph::new(Line::from(vec![Span::styled(
+                &preview_str,
+                Style::new().bg(c),
+            )])),
             chunks[4],
         );
     }
@@ -875,8 +907,7 @@ fn draw_color_entry(f: &mut Frame, area: Rect, app: &SetupApp) {
     }
 
     f.render_widget(
-        Paragraph::new(" Enter = confirm . Esc = cancel")
-            .style(Style::new().fg(Color::DarkGray)),
+        Paragraph::new(" Enter = confirm . Esc = cancel").style(Style::new().fg(Color::DarkGray)),
         chunks[5],
     );
 }

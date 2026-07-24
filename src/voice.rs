@@ -77,8 +77,6 @@ pub(crate) fn find_device<I: Iterator<Item = cpal::Device>>(
     devices: Option<I>,
     default: Option<cpal::Device>,
 ) -> Option<cpal::Device> {
-    name.and_then(|target| {
-        devices.and_then(|mut iter| iter.find(|d| d.to_string() == target))
-    })
-    .or(default)
+    name.and_then(|target| devices.and_then(|mut iter| iter.find(|d| d.to_string() == target)))
+        .or(default)
 }

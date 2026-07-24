@@ -1,10 +1,10 @@
-use starling::event::{BirdStatus, ChatMessage};
 use image::RgbImage;
 use iroh::{EndpointAddr, EndpointId};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
+use starling::event::{BirdStatus, ChatMessage};
 use std::collections::{HashMap, HashSet};
 
 const GREEN: Color = Color::Rgb(111, 174, 157);
@@ -85,6 +85,7 @@ pub struct App {
     pub show_create_roost: bool,
     pub create_roost_input: String,
     pub quit_requested: bool,
+    pub error_message: Option<String>,
     pub text_color: Color,
     pub bg_color: Option<Color>,
     pub border_color: Color,
@@ -120,6 +121,7 @@ impl Default for App {
             show_create_roost: false,
             create_roost_input: String::new(),
             quit_requested: false,
+            error_message: None,
             text_color: Color::Rgb(207, 214, 210),
             bg_color: None,
             border_color: Color::Rgb(51, 59, 55),
@@ -131,7 +133,11 @@ impl App {
     pub fn active_code(&self) -> Option<&str> {
         match self.selection {
             Selection::Flock(i) => self.flocks.get(i).map(|f| f.code.as_str()),
-            Selection::Channel(ri, _) => self.roosts.get(ri).map(|r| r.code.as_str()),
+            Selection::Channel(ri, ci) => self
+                .roosts
+                .get(ri)
+                .and_then(|r| r.channels.get(ci))
+                .map(|c| c.code.as_str()),
         }
     }
 
@@ -167,6 +173,25 @@ impl App {
                     format!("{rn} #{cn}")
                 })
                 .unwrap_or_default(),
+        }
+    }
+
+    pub fn select(&mut self, selection: Selection) {
+        self.selection = selection;
+        match selection {
+            Selection::Flock(i) => {
+                if let Some(flock) = self.flocks.get_mut(i) {
+                    flock.unread = 0;
+                }
+            }
+            Selection::Channel(ri, ci) => {
+                if let Some(roost) = self.roosts.get_mut(ri) {
+                    if let Some(channel) = roost.channels.get_mut(ci) {
+                        channel.unread = 0;
+                    }
+                    roost.unread = roost.channels.iter().map(|channel| channel.unread).sum();
+                }
+            }
         }
     }
 
@@ -231,8 +256,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     if let Some(bg) = app.bg_color {
         f.render_widget(
-            Paragraph::new(Line::from(vec![Span::raw("")]))
-                .style(Style::new().bg(bg)),
+            Paragraph::new(Line::from(vec![Span::raw("")])).style(Style::new().bg(bg)),
             area,
         );
     }
@@ -506,7 +530,10 @@ fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled("]", Style::new().fg(GREEN)));
         spans.push(Span::raw(" "));
     }
-    let status = status_text(app);
+    let status = app
+        .error_message
+        .clone()
+        .unwrap_or_else(|| status_text(app));
     if !status.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(status, Style::new().fg(DIM)));
@@ -628,7 +655,15 @@ fn draw_create_roost_popup(f: &mut Frame, app: &App) {
     );
 }
 
-fn draw_input_popup(f: &mut Frame, title: &str, prompt: &str, value: &str, hint: &str, text_color: Color, border_color: Color) {
+fn draw_input_popup(
+    f: &mut Frame,
+    title: &str,
+    prompt: &str,
+    value: &str,
+    hint: &str,
+    text_color: Color,
+    border_color: Color,
+) {
     let popup = centered(f.area(), 60, 8);
     f.render_widget(Clear, popup);
     f.render_widget(
@@ -648,7 +683,10 @@ fn draw_input_popup(f: &mut Frame, title: &str, prompt: &str, value: &str, hint:
         Constraint::Min(1),
     ])
     .split(inner);
-    f.render_widget(Paragraph::new(prompt).style(Style::new().fg(text_color)), rows[0]);
+    f.render_widget(
+        Paragraph::new(prompt).style(Style::new().fg(text_color)),
+        rows[0],
+    );
     f.render_widget(
         Paragraph::new(format!(" {value}_")).style(Style::new().fg(YELLOW)),
         rows[1],
@@ -689,7 +727,10 @@ fn draw_invite_popup(f: &mut Frame, app: &App) {
     if !c2.is_empty() {
         f.render_widget(Paragraph::new(c2).style(Style::new().fg(INVITE)), rows[4]);
     }
-    f.render_widget(Paragraph::new("They join with:").style(Style::new().fg(app.text_color)), rows[6]);
+    f.render_widget(
+        Paragraph::new("They join with:").style(Style::new().fg(app.text_color)),
+        rows[6],
+    );
     f.render_widget(
         Paragraph::new("  starling join <code>").style(Style::new().fg(YELLOW)),
         rows[7],
@@ -734,4 +775,38 @@ fn parse_color_code(code: &str) -> Vec<(u8, u8, u8)> {
         }
     }
     colors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_selection_uses_channel_route_and_clears_unread() {
+        let mut app = App::default();
+        app.roosts.push(RoostView {
+            code: "roost".into(),
+            name: "Nest".into(),
+            channels: vec![FlockView {
+                code: "roost/general".into(),
+                name: "general".into(),
+                messages: vec![],
+                unread: 3,
+            }],
+            unread: 3,
+        });
+
+        app.select(Selection::Channel(0, 0));
+
+        assert_eq!(app.active_code(), Some("roost/general"));
+        assert_eq!(app.roosts[0].channels[0].unread, 0);
+        assert_eq!(app.roosts[0].unread, 0);
+    }
+
+    #[test]
+    fn empty_background_and_invalid_colors_are_rejected() {
+        assert_eq!(hex_to_color("#102030"), Some(Color::Rgb(16, 32, 48)));
+        assert_eq!(hex_to_color(""), None);
+        assert_eq!(hex_to_color("#GGGGGG"), None);
+    }
 }

@@ -11,6 +11,11 @@ use nokhwa::{
 };
 use ratatui::prelude::*;
 #[cfg(feature = "video")]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+#[cfg(feature = "video")]
 use tokio::sync::mpsc;
 
 /// Convert an RGB image to terminal lines using half-block characters:
@@ -38,16 +43,30 @@ pub fn frame_to_lines(img: &RgbImage, cols: u16, rows: u16) -> Vec<Line<'static>
         .collect()
 }
 
-/// Start the webcam on a background thread, sending JPEG frames to `tx`.
-/// Returns the thread handle so the caller can stop it by dropping the
-/// channel (which causes `tx.send` to fail and the thread to exit).
 #[cfg(feature = "video")]
-pub fn start_camera(
-    tx: mpsc::UnboundedSender<Vec<u8>>,
-) -> anyhow::Result<std::thread::JoinHandle<()>> {
+pub struct CameraHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(feature = "video")]
+impl Drop for CameraHandle {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Start the webcam on a background thread, sending JPEG frames to `tx`.
+#[cfg(feature = "video")]
+pub fn start_camera(tx: mpsc::UnboundedSender<Vec<u8>>) -> anyhow::Result<CameraHandle> {
     // nokhwa::Camera is not Send on all platforms (e.g. Windows COM objects),
     // so we create the camera inside the thread rather than moving it in.
-    Ok(std::thread::Builder::new().spawn(move || {
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = stop.clone();
+    let thread = std::thread::Builder::new().spawn(move || {
         let mut cam = match Camera::new(
             CameraIndex::Index(0),
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate),
@@ -63,18 +82,24 @@ pub fn start_camera(
             return;
         }
 
-        while let Ok(frame) = cam.frame() {
+        while !thread_stop.load(Ordering::Relaxed) {
+            let Ok(frame) = cam.frame() else {
+                break;
+            };
             if let Ok(img) = frame.decode_image::<RgbFormat>() {
                 let mut jpeg = std::io::Cursor::new(Vec::new());
                 if DynamicImage::ImageRgb8(img)
                     .write_to(&mut jpeg, ImageFormat::Jpeg)
                     .is_ok()
+                    && tx.send(jpeg.into_inner()).is_err()
                 {
-                    if tx.send(jpeg.into_inner()).is_err() {
-                        break;
-                    }
+                    break;
                 }
             }
         }
-    })?)
+    })?;
+    Ok(CameraHandle {
+        stop,
+        thread: Some(thread),
+    })
 }
