@@ -18,6 +18,7 @@ use crossterm::{
         self as ct_event, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     },
     execute,
+    style::Print,
     terminal::*,
 };
 use event::{AppEvent, Command};
@@ -28,6 +29,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use ui::{App, FlockView, MENU_ITEMS, RoostView, ScrollPanel, Selection, ToolbarAction};
+
+const MOUSE_TRACKING_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
+const MOUSE_TRACKING_OFF: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
 struct TerminalCleanup {
     mouse: bool,
@@ -40,6 +44,7 @@ impl Drop for TerminalCleanup {
         if self.mouse {
             let _ = execute!(
                 stdout,
+                Print(MOUSE_TRACKING_OFF),
                 LeaveAlternateScreen,
                 ct_event::DisableMouseCapture,
                 ct_event::DisableBracketedPaste
@@ -191,7 +196,8 @@ async fn main() -> anyhow::Result<()> {
         stdout,
         EnterAlternateScreen,
         ct_event::EnableMouseCapture,
-        ct_event::EnableBracketedPaste
+        ct_event::EnableBracketedPaste,
+        Print(MOUSE_TRACKING_ON)
     )?;
     let _cleanup = TerminalCleanup { mouse: true };
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
@@ -587,6 +593,10 @@ async fn main() -> anyhow::Result<()> {
                     _ => {}
                 }
             } else if let Event::Mouse(m) = event {
+                if app.show_menu {
+                    let (term_w, term_h) = crossterm::terminal::size()?;
+                    update_menu_hover(&mut app, term_w, term_h, m.column, m.row);
+                }
                 match m.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
                         handle_mouse_click(
@@ -598,11 +608,7 @@ async fn main() -> anyhow::Result<()> {
                             m.row,
                         )?;
                     }
-                    MouseEventKind::Moved if app.show_menu => {
-                        if let Some(idx) = menu_item_at(m.column, m.row) {
-                            app.menu_selection = idx;
-                        }
-                    }
+                    MouseEventKind::Moved => {}
                     MouseEventKind::ScrollUp if !app.show_menu => {
                         handle_mouse_scroll(&mut app, m.column, m.row, -3.0)?;
                     }
@@ -627,6 +633,7 @@ async fn main() -> anyhow::Result<()> {
     disable_raw_mode()?;
     execute!(
         term.backend_mut(),
+        Print(MOUSE_TRACKING_OFF),
         LeaveAlternateScreen,
         ct_event::DisableMouseCapture,
         ct_event::DisableBracketedPaste
@@ -816,9 +823,10 @@ fn handle_mouse_click(
     Ok(())
 }
 
-fn menu_item_at(col: u16, row: u16) -> Option<usize> {
-    let (term_w, term_h) = crossterm::terminal::size().ok()?;
-    menu_item_at_size(term_w, term_h, col, row)
+fn update_menu_hover(app: &mut App, term_w: u16, term_h: u16, col: u16, row: u16) {
+    if let Some(index) = menu_item_at_size(term_w, term_h, col, row) {
+        app.menu_selection = index;
+    }
 }
 
 fn menu_item_at_size(term_w: u16, term_h: u16, col: u16, row: u16) -> Option<usize> {
@@ -864,6 +872,7 @@ fn activate_menu_item(
             disable_raw_mode()?;
             execute!(
                 std::io::stdout(),
+                Print(MOUSE_TRACKING_OFF),
                 LeaveAlternateScreen,
                 ct_event::DisableMouseCapture,
                 ct_event::DisableBracketedPaste
@@ -875,7 +884,8 @@ fn activate_menu_item(
                 std::io::stdout(),
                 EnterAlternateScreen,
                 ct_event::EnableMouseCapture,
-                ct_event::EnableBracketedPaste
+                ct_event::EnableBracketedPaste,
+                Print(MOUSE_TRACKING_ON)
             )?;
             enable_raw_mode()?;
             if editor_result.is_ok_and(|status| status.success()) {
@@ -901,7 +911,7 @@ fn activate_menu_item(
 
 #[cfg(test)]
 mod tests {
-    use super::{App, MENU_ITEMS, menu_item_at_size, open_create_room};
+    use super::{App, MENU_ITEMS, menu_item_at_size, open_create_room, update_menu_hover};
 
     #[test]
     fn every_rendered_menu_row_is_clickable() {
@@ -916,6 +926,18 @@ mod tests {
             );
         }
         assert_eq!(menu_item_at_size(width, height, popup_x + 2, popup_y), None);
+    }
+
+    #[test]
+    fn mouse_coordinates_update_menu_highlight() {
+        let (width, height) = (100, 40);
+        let popup_y = (height - (MENU_ITEMS.len() as u16 + 2)) / 2;
+        let popup_x = (width - 28) / 2;
+        let mut app = App::default();
+
+        update_menu_hover(&mut app, width, height, popup_x + 3, popup_y + 3);
+
+        assert_eq!(app.menu_selection, 2);
     }
 
     #[test]
