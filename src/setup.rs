@@ -1,6 +1,6 @@
 #[cfg(feature = "audio")]
 use cpal::traits::HostTrait;
-use crossterm::event::{self as ct_event, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self as ct_event, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::{
@@ -34,6 +34,7 @@ enum Phase {
     ColorAuthor,
     ColorSelection,
     ColorDim,
+    Settings,
     Summary,
 }
 
@@ -57,6 +58,7 @@ struct SetupApp {
     author_color_input: String,
     selection_color_input: String,
     dim_color_input: String,
+    settings_focus: usize,
     hex_error: String,
 }
 
@@ -111,7 +113,7 @@ impl SetupApp {
                     Phase::CodeEntry
                 }
             }
-            Mode::Settings => Phase::InputDevice,
+            Mode::Settings => Phase::Settings,
         };
 
         let selected_input = profile
@@ -146,6 +148,7 @@ impl SetupApp {
             author_color_input: profile_clone.author_color.clone(),
             selection_color_input: profile_clone.selection_color.clone(),
             dim_color_input: profile_clone.dim_color.clone(),
+            settings_focus: 0,
             hex_error: String::new(),
         }
     }
@@ -205,6 +208,63 @@ impl SetupApp {
         self.profile.selection_color =
             normalized_color(&self.selection_color_input, DEFAULT_SELECTION_COLOR);
         self.profile.dim_color = normalized_color(&self.dim_color_input, DEFAULT_DIM_COLOR);
+    }
+
+    fn settings_text_mut(&mut self) -> Option<&mut String> {
+        match self.settings_focus {
+            0 => Some(&mut self.name_input),
+            1 => Some(&mut self.pronouns_input),
+            4 => Some(&mut self.text_color_input),
+            5 => Some(&mut self.bg_color_input),
+            6 => Some(&mut self.border_color_input),
+            7 => Some(&mut self.accent_color_input),
+            8 => Some(&mut self.author_color_input),
+            9 => Some(&mut self.selection_color_input),
+            10 => Some(&mut self.dim_color_input),
+            _ => None,
+        }
+    }
+
+    fn cycle_settings_device(&mut self, direction: isize) {
+        let (selected, len) = match self.settings_focus {
+            2 => (&mut self.selected_input, self.input_devices.len()),
+            3 => (&mut self.selected_output, self.output_devices.len()),
+            _ => return,
+        };
+        if len > 0 {
+            *selected = (*selected as isize + direction).rem_euclid(len as isize) as usize;
+        }
+    }
+
+    fn save_settings(&mut self) -> anyhow::Result<Profile> {
+        if self.name_input.trim().is_empty() {
+            anyhow::bail!("Display name cannot be empty");
+        }
+        for value in [
+            &self.text_color_input,
+            &self.border_color_input,
+            &self.accent_color_input,
+            &self.author_color_input,
+            &self.selection_color_input,
+            &self.dim_color_input,
+        ] {
+            if !value.is_empty() && !valid_hex(value) {
+                anyhow::bail!("Colors must use #RRGGBB");
+            }
+        }
+        if !self.bg_color_input.is_empty() && !valid_hex(&self.bg_color_input) {
+            anyhow::bail!("Background must use #RRGGBB or be blank");
+        }
+
+        self.profile.name = self.name_input.trim().to_string();
+        self.profile.pronouns = self.pronouns_input.trim().to_string();
+        self.profile.input_device =
+            (self.selected_input > 0).then(|| self.input_devices[self.selected_input].clone());
+        self.profile.output_device =
+            (self.selected_output > 0).then(|| self.output_devices[self.selected_output].clone());
+        self.finish_colors();
+        self.profile.save()?;
+        Ok(self.profile.clone())
     }
 }
 
@@ -463,6 +523,50 @@ fn run_wizard(
                 continue;
             }
             match app.phase {
+                Phase::Settings => {
+                    if k.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(k.code, KeyCode::Char('s' | 'S'))
+                    {
+                        match app.save_settings() {
+                            Ok(profile) => return Ok(Some(profile)),
+                            Err(error) => app.hex_error = error.to_string(),
+                        }
+                        continue;
+                    }
+                    match k.code {
+                        KeyCode::Up | KeyCode::BackTab => {
+                            app.settings_focus = app.settings_focus.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Tab | KeyCode::Enter => {
+                            app.settings_focus = (app.settings_focus + 1).min(10);
+                        }
+                        KeyCode::Left => app.cycle_settings_device(-1),
+                        KeyCode::Right => app.cycle_settings_device(1),
+                        KeyCode::Backspace => {
+                            if let Some(value) = app.settings_text_mut() {
+                                value.pop();
+                            }
+                            app.hex_error.clear();
+                        }
+                        KeyCode::Char(c) if !c.is_control() => {
+                            let focus = app.settings_focus;
+                            if let Some(value) = app.settings_text_mut() {
+                                if focus >= 4 {
+                                    let upper = c.to_ascii_uppercase();
+                                    if "0123456789ABCDEF#".contains(upper) && value.len() < 7 {
+                                        value.push(upper);
+                                    }
+                                } else if value.len() < 64 {
+                                    value.push(c);
+                                }
+                            }
+                            app.hex_error.clear();
+                        }
+                        KeyCode::Esc => return Ok(None),
+                        _ => {}
+                    }
+                }
+
                 Phase::DependencyCheck => match k.code {
                     KeyCode::Enter => {
                         if let Some(cmd) = &app.install_cmd {
@@ -659,7 +763,7 @@ fn draw(f: &mut Frame, app: &SetupApp) {
     let area = f.area();
     f.render_widget(Clear, area);
 
-    let width = 60.min(area.width);
+    let width = 88.min(area.width);
     let height = 26.min(area.height);
     let popup = Rect::new(
         area.x + (area.width.saturating_sub(width)) / 2,
@@ -669,12 +773,12 @@ fn draw(f: &mut Frame, app: &SetupApp) {
     );
 
     f.render_widget(Clear, popup);
-    f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Starling Setup "),
-        popup,
-    );
+    let title = if matches!(app.phase, Phase::Settings) {
+        " Starling Settings "
+    } else {
+        " Starling Setup "
+    };
+    f.render_widget(Block::default().borders(Borders::ALL).title(title), popup);
 
     let inner = popup.inner(Margin {
         vertical: 1,
@@ -682,6 +786,7 @@ fn draw(f: &mut Frame, app: &SetupApp) {
     });
 
     match app.phase {
+        Phase::Settings => draw_settings(f, inner, app),
         Phase::DependencyCheck => draw_dependency_check(f, inner, app),
         Phase::CodeEntry => draw_code_entry(f, inner, app),
         Phase::NameEntry => draw_name_entry(f, inner, app),
@@ -709,6 +814,137 @@ fn draw(f: &mut Frame, app: &SetupApp) {
         | Phase::ColorDim => draw_color_entry(f, inner, app),
         Phase::Summary => draw_summary(f, inner, app),
     }
+}
+
+fn settings_line(
+    focused: bool,
+    label: &str,
+    value: String,
+    preview: Option<Color>,
+) -> Line<'static> {
+    let marker = if focused { ">" } else { " " };
+    let label_style = if focused {
+        Style::new().fg(Color::Yellow).bold()
+    } else {
+        Style::new().fg(Color::DarkGray)
+    };
+    let value_style = preview.map_or(Style::new().fg(Color::White), |color| {
+        Style::new().fg(color)
+    });
+    Line::from(vec![
+        Span::styled(format!("{marker} {label:<11}"), label_style),
+        Span::styled(value, value_style),
+    ])
+}
+
+fn draw_settings(f: &mut Frame, area: Rect, app: &SetupApp) {
+    let rows = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    let columns =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
+
+    let input = app
+        .input_devices
+        .get(app.selected_input)
+        .cloned()
+        .unwrap_or_else(|| "System Default".into());
+    let output = app
+        .output_devices
+        .get(app.selected_output)
+        .cloned()
+        .unwrap_or_else(|| "System Default".into());
+    let left = vec![
+        Line::styled(" Identity & Audio", Style::new().fg(Color::Cyan).bold()),
+        Line::raw(""),
+        settings_line(
+            app.settings_focus == 0,
+            "Name",
+            app.name_input.clone(),
+            None,
+        ),
+        settings_line(
+            app.settings_focus == 1,
+            "Pronouns",
+            app.pronouns_input.clone(),
+            None,
+        ),
+        Line::raw(""),
+        settings_line(app.settings_focus == 2, "Input", input, None),
+        settings_line(app.settings_focus == 3, "Output", output, None),
+        Line::raw(""),
+        Line::styled(
+            " Left/Right changes devices",
+            Style::new().fg(Color::DarkGray),
+        ),
+    ];
+    let right = vec![
+        Line::styled(" Theme", Style::new().fg(Color::Cyan).bold()),
+        Line::raw(""),
+        settings_line(
+            app.settings_focus == 4,
+            "Text",
+            app.text_color_input.clone(),
+            hex_preview(&app.text_color_input),
+        ),
+        settings_line(
+            app.settings_focus == 5,
+            "Background",
+            if app.bg_color_input.is_empty() {
+                "none".into()
+            } else {
+                app.bg_color_input.clone()
+            },
+            hex_preview(&app.bg_color_input),
+        ),
+        settings_line(
+            app.settings_focus == 6,
+            "Border",
+            app.border_color_input.clone(),
+            hex_preview(&app.border_color_input),
+        ),
+        settings_line(
+            app.settings_focus == 7,
+            "Accent",
+            app.accent_color_input.clone(),
+            hex_preview(&app.accent_color_input),
+        ),
+        settings_line(
+            app.settings_focus == 8,
+            "Author",
+            app.author_color_input.clone(),
+            hex_preview(&app.author_color_input),
+        ),
+        settings_line(
+            app.settings_focus == 9,
+            "Selection",
+            app.selection_color_input.clone(),
+            hex_preview(&app.selection_color_input),
+        ),
+        settings_line(
+            app.settings_focus == 10,
+            "Dim",
+            app.dim_color_input.clone(),
+            hex_preview(&app.dim_color_input),
+        ),
+    ];
+
+    f.render_widget(Paragraph::new(left), columns[0]);
+    f.render_widget(Paragraph::new(right), columns[1]);
+    if !app.hex_error.is_empty() {
+        f.render_widget(
+            Paragraph::new(app.hex_error.as_str()).style(Style::new().fg(Color::Red)),
+            rows[1],
+        );
+    }
+    f.render_widget(
+        Paragraph::new(" Up/Down or Tab = focus . Enter = next . Ctrl+S = save . Esc = cancel")
+            .style(Style::new().fg(Color::DarkGray)),
+        rows[2],
+    );
 }
 
 fn draw_dependency_check(f: &mut Frame, area: Rect, app: &SetupApp) {

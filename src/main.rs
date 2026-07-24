@@ -45,7 +45,11 @@ impl Drop for TerminalCleanup {
                 ct_event::DisableBracketedPaste
             );
         } else {
-            let _ = execute!(stdout, LeaveAlternateScreen);
+            let _ = execute!(
+                stdout,
+                LeaveAlternateScreen,
+                ct_event::DisableBracketedPaste
+            );
         }
     }
 }
@@ -154,20 +158,10 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if first == Some("profile") {
-        enable_raw_mode()?;
-        let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
-        let _cleanup = TerminalCleanup { mouse: false };
-        let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
-        setup::run_setup(&mut term)?;
-        return Ok(());
-    }
-
     if first == Some("settings") {
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, ct_event::EnableBracketedPaste)?;
         let _cleanup = TerminalCleanup { mouse: false };
         let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
         setup::run_settings(&mut term)?;
@@ -405,6 +399,10 @@ async fn main() -> anyhow::Result<()> {
         if ct_event::poll(std::time::Duration::from_millis(50))? {
             let event = ct_event::read()?;
 
+            if matches!(event, Event::Paste(_)) {
+                continue;
+            }
+
             if let Event::Key(k) = &event {
                 if k.kind != KeyEventKind::Press {
                     continue;
@@ -555,7 +553,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             } else if let Event::Mouse(m) = event {
                 match m.kind {
-                    MouseEventKind::Up(MouseButton::Left) => {
+                    MouseEventKind::Down(MouseButton::Left) => {
                         handle_mouse_click(
                             &mut app,
                             &cmd_tx,
@@ -576,6 +574,9 @@ async fn main() -> anyhow::Result<()> {
                     MouseEventKind::ScrollDown if !app.show_menu => {
                         handle_mouse_scroll(&mut app, m.column, m.row, 3.0)?;
                     }
+                    MouseEventKind::Down(MouseButton::Right)
+                    | MouseEventKind::Up(MouseButton::Right)
+                    | MouseEventKind::Drag(MouseButton::Right) => {}
                     _ => {}
                 }
             }
@@ -825,36 +826,6 @@ fn activate_menu_item(
                 ct_event::DisableBracketedPaste
             )?;
             let editor_result = std::process::Command::new(std::env::current_exe()?)
-                .arg("profile")
-                .status();
-            execute!(
-                std::io::stdout(),
-                EnterAlternateScreen,
-                ct_event::EnableMouseCapture,
-                ct_event::EnableBracketedPaste
-            )?;
-            enable_raw_mode()?;
-            if editor_result.is_ok_and(|status| status.success()) {
-                if let Some(profile) = starling::config::Profile::load() {
-                    apply_profile(app, &profile);
-                    let _ = cmd_tx.send(Command::UpdateProfile {
-                        name: profile.name,
-                        input_device: profile.input_device,
-                    });
-                }
-            } else {
-                app.error_message = Some("Profile editor failed".into());
-            }
-        }
-        3 => {
-            disable_raw_mode()?;
-            execute!(
-                std::io::stdout(),
-                LeaveAlternateScreen,
-                ct_event::DisableMouseCapture,
-                ct_event::DisableBracketedPaste
-            )?;
-            let editor_result = std::process::Command::new(std::env::current_exe()?)
                 .arg("settings")
                 .status();
             execute!(
@@ -876,7 +847,7 @@ fn activate_menu_item(
                 app.error_message = Some("Settings editor failed".into());
             }
         }
-        4 => {
+        3 => {
             app.quit_requested = true;
         }
         _ => {}

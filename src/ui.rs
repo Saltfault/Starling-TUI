@@ -59,7 +59,7 @@ pub struct RoostView {
     pub unread: usize,
 }
 
-pub const MENU_ITEMS: &[&str] = &["Create Room", "Join", "Profile", "Settings", "Quit"];
+pub const MENU_ITEMS: &[&str] = &["Create Room", "Join", "Settings", "Quit"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScrollPanel {
