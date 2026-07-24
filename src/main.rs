@@ -514,7 +514,7 @@ async fn main() -> anyhow::Result<()> {
                             app.menu_selection = (app.menu_selection + 1).min(MENU_ITEMS.len() - 1);
                         }
                         KeyCode::Enter => {
-                            activate_menu_item(&mut app, &cmd_tx)?;
+                            activate_menu_item(&mut app, &cmd_tx, &mut term)?;
                         }
                         KeyCode::Esc => {
                             app.show_menu = false;
@@ -696,7 +696,7 @@ fn handle_mouse_click(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
     muted_flag: &Arc<AtomicBool>,
-    _term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     col: u16,
     row: u16,
 ) -> anyhow::Result<()> {
@@ -705,7 +705,7 @@ fn handle_mouse_click(
     if app.show_menu {
         if let Some(idx) = menu_item_at_size(term_w, term_h, col, row) {
             app.menu_selection = idx;
-            activate_menu_item(app, cmd_tx)?;
+            activate_menu_item(app, cmd_tx, term)?;
         } else {
             let popup_w = 28u16.min(term_w);
             let popup_h = (MENU_ITEMS.len() as u16 + 2).min(term_h);
@@ -851,6 +851,7 @@ fn menu_item_at_size(term_w: u16, term_h: u16, col: u16, row: u16) -> Option<usi
 fn open_editor(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
+    term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     editor: &str,
 ) -> anyhow::Result<()> {
     disable_raw_mode()?;
@@ -872,6 +873,7 @@ fn open_editor(
         Print(MOUSE_TRACKING_ON)
     )?;
     enable_raw_mode()?;
+    term.clear()?;
     if result.is_ok_and(|status| status.success()) {
         if let Some(profile) = starling::config::Profile::load() {
             apply_profile(app, &profile);
@@ -890,6 +892,7 @@ fn open_editor(
 fn activate_menu_item(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
+    term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<()> {
     let i = app.menu_selection;
     if i >= MENU_ITEMS.len() {
@@ -906,8 +909,14 @@ fn activate_menu_item(
             app.join_input.clear();
             app.show_join_room = true;
         }
-        2 => open_editor(app, cmd_tx, "profile")?,
-        3 => open_editor(app, cmd_tx, "settings")?,
+        2 => {
+            open_editor(app, cmd_tx, term, "profile")?;
+            app.show_menu = true;
+        }
+        3 => {
+            open_editor(app, cmd_tx, term, "settings")?;
+            app.show_menu = true;
+        }
         4 => {
             app.quit_requested = true;
         }
