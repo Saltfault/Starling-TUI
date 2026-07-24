@@ -93,4 +93,5 @@ jobs:
             - Windows (64-bit) ............. `starling-tui-x86_64-pc-windows-msvc.exe`
             - macOS (M1–M4) ............... `starling-tui-aarch64-apple-darwin`
             - macOS (Intel) ............... `starling-tui-x86_64-apple-darwin`
-            - Linux (most) ............... `starling-tui-x86_64-unknown-linux-gnu`
+            - Linux (x64) ................. `starling-tui-x86_64-unknown-linux-gnu`
+            - Linux (ARM64 / Pi 4+) ........ `starling-tui-aarch64-unknown-linux-gnu`

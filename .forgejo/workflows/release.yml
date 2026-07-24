@@ -62,19 +62,26 @@ jobs:
 
       - name: Install media build dependencies
         run: |
+          dpkg --add-architecture arm64
+          apt-get update
           apt-get install -y \
             build-essential \
+            gcc-aarch64-linux-gnu \
             pkg-config \
             libasound2-dev \
             libpulse-dev \
             libclang-dev \
-            libv4l-dev
+            libv4l-dev \
+            libasound2-dev:arm64 \
+            libpulse-dev:arm64 \
+            libv4l-dev:arm64
 
       - name: Build all targets
         run: |
           set -e
           targets=(
             "x86_64-unknown-linux-gnu"
+            "aarch64-unknown-linux-gnu:aarch64-linux-gnu-gcc"
           )
           for entry in "${targets[@]}"; do
             IFS=':' read -r target linker <<< "$entry"
@@ -83,6 +90,13 @@ jobs:
             if [ -n "$linker" ]; then
               target_upper=$(echo "$target" | tr '[:lower:]-' '[:upper:]_')
               export "CARGO_TARGET_${target_upper}_LINKER=$linker"
+            fi
+            if [ "$target" = "aarch64-unknown-linux-gnu" ]; then
+              export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+              export PKG_CONFIG_ALLOW_CROSS=1
+              export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+            else
+              unset PKG_CONFIG_ALLOW_CROSS PKG_CONFIG_LIBDIR
             fi
             cargo build --release --target "$target" --all-features
             ext=""
@@ -160,8 +174,8 @@ jobs:
           uploaded_count=$(curl --fail --silent --show-error \
             "$API/repos/$OWNER/$REPO/releases/$release_id" \
             -H "Authorization: Bearer $FORGEJO_TOKEN" | jq '.assets | length')
-          if [ "$uploaded_count" -ne "$expected_count" ] || [ "$uploaded_count" -ne 4 ]; then
-            echo "Expected 4 release assets, uploaded $uploaded_count from $expected_count files"
+          if [ "$uploaded_count" -ne "$expected_count" ] || [ "$uploaded_count" -ne 5 ]; then
+            echo "Expected 5 release assets, uploaded $uploaded_count from $expected_count files"
             exit 1
           fi
           echo "Forgejo release $TAG created with $uploaded_count assets"
