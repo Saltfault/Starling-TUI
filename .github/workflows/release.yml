@@ -50,6 +50,10 @@ jobs:
             os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: i686-pc-windows-msvc
+            os: windows-latest
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust target
@@ -58,12 +62,15 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
       - name: Prepare binary
         shell: bash
-        run: cp "target/${{ matrix.target }}/release/starling-tui" "starling-tui-${{ matrix.target }}"
+        run: |
+          ext=""
+          [[ "${{ matrix.target }}" == *-windows-* ]] && ext=".exe"
+          cp "target/${{ matrix.target }}/release/starling-tui$ext" "starling-tui-${{ matrix.target }}$ext"
       - name: Upload binary
         uses: actions/upload-artifact@v7
         with:
           name: starling-tui-${{ matrix.target }}
-          path: starling-tui-${{ matrix.target }}
+          path: starling-tui-${{ matrix.target }}*
 
   release:
     needs: [detect, build]
