@@ -35,13 +35,24 @@ pub const MENU_ITEMS: &[&str] = &[
     "Join Roost",
     "Create Roost",
     "Invite",
-    "Toggle Mute",
-    "Toggle Video",
-    "Call / Hang Up",
     "Profile",
     "Settings",
     "Quit",
 ];
+
+#[derive(Clone, Copy)]
+pub enum ToolbarAction {
+    Create,
+    Join,
+    Menu,
+    #[cfg(feature = "audio")]
+    Call,
+    #[cfg(feature = "audio")]
+    Mute,
+    #[cfg(feature = "video")]
+    Video,
+    Quit,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Selection {
@@ -227,16 +238,44 @@ impl App {
     }
 }
 
-pub fn toolbar_buttons() -> Vec<(&'static str, u16, u16)> {
-    let labels = ["Create", "Join", "Menu", "Quit"];
-    let mut x = 0u16;
-    let mut result = Vec::new();
-    for label in labels {
-        let width = label.len() as u16 + 2;
-        result.push((label, x, width));
-        x += width + 1;
+pub fn toolbar_buttons(_app: &App) -> Vec<(ToolbarAction, &'static str, u16, u16)> {
+    let mut buttons = vec![
+        (ToolbarAction::Create, "Create"),
+        (ToolbarAction::Join, "Join"),
+        (ToolbarAction::Menu, "Menu"),
+    ];
+    #[cfg(feature = "audio")]
+    {
+        buttons.push((
+            ToolbarAction::Call,
+            if _app.in_call { "Hang up" } else { "Call" },
+        ));
+        buttons.push((
+            ToolbarAction::Mute,
+            if _app.muted { "Unmute" } else { "Mute" },
+        ));
     }
-    result
+    #[cfg(feature = "video")]
+    buttons.push((
+        ToolbarAction::Video,
+        if _app.show_video {
+            "Video off"
+        } else {
+            "Video on"
+        },
+    ));
+    buttons.push((ToolbarAction::Quit, "Quit"));
+
+    let mut x = 0u16;
+    buttons
+        .into_iter()
+        .map(|(action, label)| {
+            let width = label.len() as u16 + 2;
+            let button = (action, label, x, width);
+            x += width + 1;
+            button
+        })
+        .collect()
 }
 
 pub fn hex_to_color(hex: &str) -> Option<Color> {
@@ -524,7 +563,7 @@ fn status_text(app: &App) -> String {
 
 fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
     let mut spans = Vec::new();
-    for (label, _x, _w) in toolbar_buttons() {
+    for (_action, label, _x, _w) in toolbar_buttons(app) {
         spans.push(Span::styled("[", Style::new().fg(GREEN)));
         spans.push(Span::styled(label, Style::new().fg(GREEN)));
         spans.push(Span::styled("]", Style::new().fg(GREEN)));

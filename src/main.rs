@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use ui::{App, FlockView, MENU_ITEMS, RoostView, Selection};
+use ui::{App, FlockView, MENU_ITEMS, RoostView, Selection, ToolbarAction};
 
 struct TerminalCleanup {
     mouse: bool,
@@ -453,7 +453,7 @@ async fn main() -> anyhow::Result<()> {
                             app.menu_selection = (app.menu_selection + 1).min(MENU_ITEMS.len() - 1);
                         }
                         KeyCode::Enter => {
-                            activate_menu_item(&mut app, &cmd_tx, &muted_flag)?;
+                            activate_menu_item(&mut app, &cmd_tx)?;
                         }
                         KeyCode::Esc => {
                             app.show_menu = false;
@@ -615,7 +615,7 @@ fn handle_mouse_click(
     if app.show_menu {
         if let Some(idx) = menu_item_at_size(term_w, term_h, col, row) {
             app.menu_selection = idx;
-            activate_menu_item(app, cmd_tx, muted_flag)?;
+            activate_menu_item(app, cmd_tx)?;
         } else {
             let popup_w = 28u16.min(term_w);
             let popup_h = (MENU_ITEMS.len() as u16 + 2).min(term_h);
@@ -635,25 +635,51 @@ fn handle_mouse_click(
 
     let button_bar_y = term_h.saturating_sub(4);
     if row == button_bar_y {
-        let btns = ui::toolbar_buttons();
-        for (i, (_label, bx, bw)) in btns.iter().enumerate() {
-            if col >= *bx && col < bx + bw {
-                match i {
-                    0 => {
+        let btns = ui::toolbar_buttons(app);
+        for (action, _label, bx, bw) in btns {
+            if col >= bx && col < bx + bw {
+                match action {
+                    ToolbarAction::Create => {
                         app.show_create_room = true;
                     }
-                    1 => {
+                    ToolbarAction::Join => {
                         app.join_input.clear();
                         app.show_join_room = true;
                     }
-                    2 => {
+                    ToolbarAction::Menu => {
                         app.show_menu = true;
                         app.menu_selection = 0;
                     }
-                    3 => {
+                    #[cfg(feature = "audio")]
+                    ToolbarAction::Call => {
+                        if app.in_call {
+                            let _ = cmd_tx.send(Command::HangUp);
+                            app.in_call = false;
+                        } else if let Some(addr) = app.selected_peer_addr() {
+                            let _ = cmd_tx.send(Command::StartCall(addr));
+                            app.in_call = true;
+                        }
+                    }
+                    #[cfg(feature = "audio")]
+                    ToolbarAction::Mute => {
+                        app.muted = !app.muted;
+                        muted_flag.store(app.muted, Ordering::Relaxed);
+                    }
+                    #[cfg(feature = "video")]
+                    ToolbarAction::Video => {
+                        app.show_video = !app.show_video;
+                        match (app.show_video, app.selected_peer_addr()) {
+                            (true, Some(addr)) => {
+                                let _ = cmd_tx.send(Command::StartVideo(addr));
+                            }
+                            _ => {
+                                let _ = cmd_tx.send(Command::StopVideo);
+                            }
+                        }
+                    }
+                    ToolbarAction::Quit => {
                         app.quit_requested = true;
                     }
-                    _ => {}
                 }
                 return Ok(());
             }
@@ -727,7 +753,6 @@ fn menu_item_at_size(term_w: u16, term_h: u16, col: u16, row: u16) -> Option<usi
 fn activate_menu_item(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
-    muted_flag: &Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let i = app.menu_selection;
     if i >= MENU_ITEMS.len() {
@@ -756,39 +781,6 @@ fn activate_menu_item(
             app.show_invite = app.active_code().is_some();
         }
         5 => {
-            #[cfg(feature = "audio")]
-            {
-                app.muted = !app.muted;
-                muted_flag.store(app.muted, Ordering::Relaxed);
-            }
-        }
-        6 => {
-            #[cfg(feature = "video")]
-            {
-                app.show_video = !app.show_video;
-                match (app.show_video, app.selected_peer_addr()) {
-                    (true, Some(addr)) => {
-                        let _ = cmd_tx.send(Command::StartVideo(addr));
-                    }
-                    _ => {
-                        let _ = cmd_tx.send(Command::StopVideo);
-                    }
-                }
-            }
-        }
-        7 => {
-            #[cfg(feature = "audio")]
-            {
-                if app.in_call {
-                    let _ = cmd_tx.send(Command::HangUp);
-                    app.in_call = false;
-                } else if let Some(addr) = app.selected_peer_addr() {
-                    let _ = cmd_tx.send(Command::StartCall(addr));
-                    app.in_call = true;
-                }
-            }
-        }
-        8 => {
             disable_raw_mode()?;
             execute!(
                 std::io::stdout(),
@@ -818,7 +810,7 @@ fn activate_menu_item(
                 app.error_message = Some("Profile editor failed".into());
             }
         }
-        9 => {
+        6 => {
             disable_raw_mode()?;
             execute!(
                 std::io::stdout(),
@@ -848,7 +840,7 @@ fn activate_menu_item(
                 app.error_message = Some("Settings editor failed".into());
             }
         }
-        10 => {
+        7 => {
             app.quit_requested = true;
         }
         _ => {}
