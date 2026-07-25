@@ -5184,6 +5184,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "starling"
 version = "0.3.17"
+source = "git+https://forgejo.hearthhome.lol/Saltfault/Starling.git#ca7af987167446e10e3a5d7e21b258b38eab10f6"
 dependencies = [
  "anyhow",
  "chacha20poly1305",
@@ -5328,7 +5329,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

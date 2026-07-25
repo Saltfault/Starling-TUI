@@ -38,9 +38,6 @@ zeroize = "1.8.2"
 [dev-dependencies]
 tempfile = "3.23.0"
 
-[patch."https://forgejo.hearthhome.lol/Saltfault/Starling.git"]
-starling = { path = "../starling" }
-
 # Linux: cpal PulseAudio backend, nokhwa (V4L2 — needs libclang-dev)
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "0.18.1", features = ["pulseaudio"], optional = true }
