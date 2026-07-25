@@ -1,10 +1,15 @@
 mod call;
+mod clipboard;
 mod event;
+mod history;
+mod history_store;
 mod net;
 #[cfg(feature = "audio")]
 mod opus_ffi;
+mod persistence;
 #[cfg(feature = "audio")]
 mod playback;
+mod sanitize;
 mod setup;
 mod sync;
 mod ui;
@@ -12,6 +17,7 @@ mod video;
 #[cfg(feature = "audio")]
 mod voice;
 
+use crate::clipboard::Clipboard;
 #[allow(unused_imports)]
 use crossterm::{
     event::{
@@ -121,6 +127,21 @@ fn open_create_room(app: &mut App) {
     app.show_create_room = true;
 }
 
+fn open_edit_flock(app: &mut App) {
+    let Some(code) = app.active_code().map(str::to_owned) else {
+        app.error_message = Some("Select a flock to edit".into());
+        return;
+    };
+    app.edit_flock_code = code;
+    app.edit_flock_name = app
+        .flocks
+        .iter()
+        .find(|f| f.code == app.edit_flock_code)
+        .map(|f| f.name.clone())
+        .unwrap_or_default();
+    app.show_edit_flock = true;
+}
+
 fn merge_history(app: &mut App, flock: &str, old: Vec<starling::event::ChatMessage>) {
     let view = app
         .flocks
@@ -165,7 +186,7 @@ fn nav_items(app: &App) -> Vec<Selection> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    starling::logger::init();
+    starling::logger::init()?;
 
     let args: Vec<String> = std::env::args().collect();
     let first = args.get(1).map(String::as_str);
@@ -224,6 +245,46 @@ async fn main() -> anyhow::Result<()> {
     let _cleanup = TerminalCleanup { mouse: true };
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
+    let state_path = starling::config::Profile::config_dir()
+        .join("public")
+        .join("contexts.bin");
+    let protected_path = starling::config::Profile::config_dir()
+        .join("protected")
+        .join("credentials.bin");
+    if let Err(error) = persistence::recover(&state_path) {
+        app.error_message = Some(format!("Could not recover saved contexts: {error}"));
+    } else if state_path.exists() {
+        match persistence::load_public(&state_path) {
+            Ok(saved) => {
+                for descriptor in saved.contexts {
+                    app.insert_context(ui::ContextView {
+                        id: descriptor.space,
+                        title: descriptor.label,
+                        roost: match descriptor.space {
+                            starling::protocol::SpaceId::RoostChannel { roost, .. } => Some(roost),
+                            starling::protocol::SpaceId::Flock(_) => None,
+                        },
+                        base_invite_display: None,
+                        messages: Vec::new(),
+                        unread: 0,
+                        state: ui::ContextState::NeedsUserAction,
+                    });
+                }
+                if let Some(active) = saved.active_space {
+                    app.select_context(active);
+                }
+            }
+            Err(error) => {
+                app.error_message = Some(format!("Could not load saved contexts: {error}"));
+            }
+        }
+    }
+    if protected_path.exists()
+        && let Err(error) = persistence::load_protected(&protected_path)
+    {
+        app.error_message = Some(format!("Could not load saved credentials: {error}"));
+    }
+    let mut clipboard = clipboard::SystemClipboard::new().ok();
 
     let secret = starling::config::Profile::load_or_create_secret();
     let my_node_id: iroh::EndpointId = secret.public();
@@ -248,6 +309,7 @@ async fn main() -> anyhow::Result<()> {
     #[allow(unused)]
     let muted_flag = Arc::new(AtomicBool::new(false));
 
+    let restored_contexts = app.context_order.clone();
     let mut net_task = tokio::spawn(net::run(
         bootstrap,
         cmd_rx,
@@ -257,6 +319,9 @@ async fn main() -> anyhow::Result<()> {
         name,
         input_device,
     ));
+    if !restored_contexts.is_empty() {
+        let _ = cmd_tx.send(Command::RestoreContexts(restored_contexts));
+    }
 
     #[cfg(feature = "audio")]
     let mut playback = match crate::playback::Playback::new(output_device.as_deref()) {
@@ -290,10 +355,16 @@ async fn main() -> anyhow::Result<()> {
             bird_h.saturating_sub(2) as usize,
         );
         app.advance_scroll(dt);
+        app.expire_status_notice(Instant::now());
         term.draw(|f| ui::draw(f, &app))?;
 
         while let Ok(ev) = evt_rx.try_recv() {
             match ev {
+                AppEvent::ContextStateChanged { space, state } => {
+                    if let Some(context) = app.contexts.get_mut(&space) {
+                        context.state = state;
+                    }
+                }
                 AppEvent::Message { flock, msg } => {
                     let is_current = app.active_code().is_some_and(|code| code == flock);
                     if let Some(fv) =
@@ -381,18 +452,10 @@ async fn main() -> anyhow::Result<()> {
                         app.peers.push(id);
                     }
                 }
-                AppEvent::PeerDisconnected(id) => {
-                    app.peers.retain(|p| p != &id);
-                    app.peer_names.remove(&id);
-                    app.peer_status.remove(&id);
-                    #[cfg(feature = "video")]
-                    app.remote_video_frames.remove(&id);
-                    if !app.peers.is_empty() {
-                        app.selected_peer %= app.peers.len();
-                    } else {
-                        app.selected_peer = 0;
-                    }
+                AppEvent::PeerConnectivityHintDown(_id) => {
+                    // Signed presence leases, not transport neighbors, determine liveness.
                 }
+
                 AppEvent::PeerNamed(id, name) => {
                     if id != my_node_id && !app.peers.contains(&id) {
                         app.peers.push(id);
@@ -404,6 +467,10 @@ async fn main() -> anyhow::Result<()> {
                         app.peers.push(id);
                     }
                     app.peer_status.insert(id, s);
+                }
+                AppEvent::PresenceLease(_lease) => {
+                    // V1 membership-backed spaces project verified leases into scoped UI state.
+                    // V0 views fail closed because they do not yet carry MembershipState.
                 }
                 AppEvent::Ticket(node_id) => {
                     app.node_id = Some(node_id);
@@ -462,12 +529,32 @@ async fn main() -> anyhow::Result<()> {
         if ct_event::poll(std::time::Duration::from_millis(50))? {
             let event = ct_event::read()?;
 
-            if matches!(event, Event::Paste(_)) {
+            if let Event::Paste(raw) = &event {
+                if app.show_create_room {
+                    app.create_flock_name =
+                        sanitize::sanitize_name(&format!("{}{}", app.create_flock_name, raw));
+                    refresh_create_flock_code(&mut app);
+                } else if app.show_edit_flock {
+                    app.edit_flock_name =
+                        sanitize::sanitize_name(&format!("{}{}", app.edit_flock_name, raw));
+                } else if app.show_join_room {
+                    app.join_input = raw.trim().to_ascii_uppercase().to_string();
+                    app.error_message = None;
+                } else {
+                    app.input = sanitize::sanitize_message(&format!("{}{}", app.input, raw));
+                }
                 continue;
             }
 
             if let Event::Key(k) = &event {
                 if k.kind != KeyEventKind::Press {
+                    continue;
+                }
+                if matches!(k.code, KeyCode::Char('c' | 'C'))
+                    && k.modifiers.contains(KeyModifiers::CONTROL)
+                    && k.modifiers.contains(KeyModifiers::SHIFT)
+                {
+                    copy_active_invite(&mut app, clipboard.as_mut(), Instant::now());
                     continue;
                 }
 
@@ -480,8 +567,9 @@ async fn main() -> anyhow::Result<()> {
                             app.create_flock_secret = None;
                             app.show_create_room = false;
                         }
-                        KeyCode::Char(c) if !c.is_control() && app.create_flock_name.len() < 64 => {
-                            app.create_flock_name.push(c);
+                        KeyCode::Char(c) => {
+                            app.create_flock_name =
+                                sanitize::sanitize_name(&format!("{}{}", app.create_flock_name, c));
                             refresh_create_flock_code(&mut app);
                         }
                         KeyCode::Backspace => {
@@ -499,23 +587,58 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
-                if app.show_join_room {
+                if app.show_edit_flock {
                     match k.code {
                         KeyCode::Enter => {
-                            let code = app.join_input.trim();
-                            if starling::net::decode_typed_code(code).is_some() {
-                                let _ = cmd_tx.send(Command::Join {
-                                    code: code.to_ascii_uppercase(),
+                            let name = std::mem::take(&mut app.edit_flock_name);
+                            let code = std::mem::take(&mut app.edit_flock_code);
+                            app.show_edit_flock = false;
+                            if !name.is_empty() {
+                                let _ = cmd_tx.send(Command::UpdateProfile {
+                                    name: format!("flock:{code}:{name}"),
+                                    input_device: None,
                                 });
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            app.edit_flock_name.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.edit_flock_name =
+                                sanitize::sanitize_name(&format!("{}{}", app.edit_flock_name, c));
+                        }
+                        KeyCode::Delete => {
+                            let code = std::mem::take(&mut app.edit_flock_code);
+                            app.show_edit_flock = false;
+                            app.flocks.retain(|f| f.code != code);
+                            let _ = cmd_tx.send(Command::Leave { code });
+                        }
+                        KeyCode::Esc => {
+                            app.show_edit_flock = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                if app.show_join_room {
+                    match k.code {
+                        KeyCode::Enter => match sanitize::invite(app.join_input.trim()) {
+                            Ok(code) => {
+                                let _ = cmd_tx.send(Command::Join { code });
                                 app.join_input.clear();
                                 app.show_join_room = false;
                                 app.error_message = None;
-                            } else {
-                                app.error_message = Some("Invalid or unsupported join code".into());
                             }
-                        }
-                        KeyCode::Char(c) if !c.is_control() => {
-                            app.join_input.push(c);
+                            Err(error) => {
+                                app.error_message = Some(error.to_string());
+                            }
+                        },
+                        KeyCode::Char(c) => {
+                            let combined = format!("{}{}", app.join_input, c);
+                            if let Some(code) = sanitize::sanitize_code(&combined) {
+                                app.join_input = code;
+                            }
                         }
                         KeyCode::Backspace => {
                             app.join_input.pop();
@@ -555,13 +678,16 @@ async fn main() -> anyhow::Result<()> {
                             .or_else(|| text.strip_prefix("/join-roost "))
                         {
                             let code = code.trim();
-                            if starling::net::decode_typed_code(code).is_some() {
-                                let _ = cmd_tx.send(Command::Join {
-                                    code: code.to_ascii_uppercase(),
-                                });
-                            } else {
-                                app.error_message = Some("Invalid or unsupported join code".into());
+                            match sanitize::invite(code) {
+                                Ok(normalized) => {
+                                    let _ = cmd_tx.send(Command::Join { code: normalized });
+                                }
+                                Err(error) => {
+                                    app.error_message = Some(format!("Invalid join code: {error}"));
+                                }
                             }
+                        } else if let Some(space) = app.active {
+                            let _ = cmd_tx.send(Command::SendContextText { space, body: text });
                         } else if let Some(code) = app.active_code() {
                             let _ = cmd_tx.send(Command::SendText {
                                 flock: code.to_string(),
@@ -615,8 +741,8 @@ async fn main() -> anyhow::Result<()> {
                         app.menu_selection = 0;
                     }
 
-                    KeyCode::Char(c) if !c.is_control() => {
-                        app.input.push(c);
+                    KeyCode::Char(c) => {
+                        app.input = sanitize::sanitize_message(&format!("{}{}", app.input, c));
                     }
 
                     KeyCode::Backspace => {
@@ -636,6 +762,7 @@ async fn main() -> anyhow::Result<()> {
                             &mut app,
                             &cmd_tx,
                             &muted_flag,
+                            clipboard.as_mut(),
                             &mut term,
                             m.column,
                             m.row,
@@ -663,6 +790,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    if let Err(error) = save_context_state(&state_path, &app) {
+        starling::logger::warn(&format!("could not save contexts: {error}"));
+    }
+    let protected = persistence::ProtectedSecretState::default();
+    let _ = persistence::keyring_bytes(Vec::new());
+    if let Err(error) = persistence::save_protected(&protected_path, &protected) {
+        starling::logger::warn(&format!("could not save credentials: {error}"));
+    }
     disable_raw_mode()?;
     execute!(
         term.backend_mut(),
@@ -672,6 +807,50 @@ async fn main() -> anyhow::Result<()> {
         ct_event::DisableBracketedPaste
     )?;
     Ok(())
+}
+
+fn copy_active_invite<C: Clipboard + ?Sized>(
+    app: &mut App,
+    clipboard: Option<&mut C>,
+    now: Instant,
+) {
+    let Some(invite) = app.active_code().map(str::to_owned) else {
+        app.error_message = Some("No public invite is available for this context".into());
+        return;
+    };
+    let Some(clipboard) = clipboard else {
+        app.error_message = Some("Clipboard unavailable on this system".into());
+        return;
+    };
+    match clipboard.set_text(&invite) {
+        Ok(()) => {
+            app.error_message = None;
+            app.show_status_notice("Invite copied", now);
+        }
+        Err(error) => app.error_message = Some(error.to_string()),
+    }
+}
+
+fn save_context_state(path: &std::path::Path, app: &App) -> anyhow::Result<()> {
+    let contexts = app
+        .context_order
+        .iter()
+        .filter_map(|space| {
+            app.contexts
+                .get(space)
+                .map(|context| persistence::ContextDescriptor {
+                    space: *space,
+                    label: context.title.clone(),
+                })
+        })
+        .collect();
+    persistence::save_public(
+        path,
+        &persistence::PublicState {
+            contexts,
+            active_space: app.active,
+        },
+    )
 }
 
 fn panel_geometry(term_h: u16) -> (u16, u16, u16, u16, u16) {
@@ -719,6 +898,7 @@ fn handle_mouse_click(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
     muted_flag: &Arc<AtomicBool>,
+    clipboard: Option<&mut clipboard::SystemClipboard>,
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     col: u16,
     row: u16,
@@ -743,6 +923,23 @@ fn handle_mouse_click(
                 app.show_menu = false;
             }
         }
+        return Ok(());
+    }
+
+    if app.show_create_room {
+        return Ok(());
+    }
+
+    if app.show_edit_flock {
+        return Ok(());
+    }
+
+    if app.show_join_room {
+        return Ok(());
+    }
+
+    if row <= 1 && app.active_code().is_some() {
+        copy_active_invite(app, clipboard, Instant::now());
         return Ok(());
     }
 
@@ -802,10 +999,15 @@ fn handle_mouse_click(
     if col < 26 && row > flocks_top && row < flocks_top + flocks_h.saturating_sub(1) {
         app.scroll_focus = ScrollPanel::Flocks;
         let visible_row = (row - flocks_top - 1) as usize;
-        if let Some(idx) = app.flock_scroll.row_index(visible_row)
-            && app.flocks.get(idx).is_some()
-        {
-            app.select(Selection::Flock(idx));
+        if let Some(idx) = app.flock_scroll.row_index(visible_row) {
+            let typed_count = app.context_order.len();
+            if idx < typed_count {
+                let space = app.context_order[idx];
+                app.select_context(space);
+                let _ = cmd_tx.send(Command::SelectContext(space));
+            } else if app.flocks.get(idx - typed_count).is_some() {
+                app.select(Selection::Flock(idx - typed_count));
+            }
         }
     } else if col < 26 && row > roosts_top && row < roosts_top + roosts_h.saturating_sub(1) {
         app.scroll_focus = ScrollPanel::Roosts;
@@ -929,18 +1131,33 @@ fn activate_menu_item(
             open_create_room(app);
         }
         1 => {
+            open_edit_flock(app);
+        }
+        2 => {
             app.join_input.clear();
             app.show_join_room = true;
         }
-        2 => {
+        3 => {
             open_editor(app, cmd_tx, term, "profile")?;
             app.show_menu = true;
         }
-        3 => {
+        4 => {
             open_editor(app, cmd_tx, term, "settings")?;
             app.show_menu = true;
         }
-        4 => {
+        5 => {
+            let dir = starling::config::Profile::config_dir();
+            if dir.exists() {
+                if let Err(error) = std::fs::remove_dir_all(&dir) {
+                    app.error_message = Some(format!("Failed to delete data: {error}"));
+                } else {
+                    app.quit_requested = true;
+                }
+            } else {
+                app.quit_requested = true;
+            }
+        }
+        6 => {
             app.quit_requested = true;
         }
         _ => {}
@@ -985,8 +1202,10 @@ mod tests {
 
     #[test]
     fn create_room_generates_a_new_flock_code_each_time() {
-        let mut app = App::default();
-        app.node_id = Some(iroh::SecretKey::generate().public());
+        let mut app = App {
+            node_id: Some(iroh::SecretKey::generate().public()),
+            ..App::default()
+        };
 
         open_create_room(&mut app);
         app.create_flock_name = "Night Birds".into();

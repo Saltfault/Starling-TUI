@@ -1,5 +1,4 @@
 use crate::event::{AppEvent, Command};
-#[cfg(any(feature = "audio", feature = "video"))]
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointId, endpoint::presets, protocol::Router};
 use iroh_gossip::{
@@ -10,16 +9,327 @@ use n0_future::StreamExt;
 use starling::crypto::FlockCrypto;
 use starling::event::{ChatMessage, GossipPayload};
 use starling::roost::RoostState;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
+use tokio::time::{Duration, timeout};
+
+use zeroize::Zeroizing;
+
+const HISTORY_IO_TIMEOUT: Duration = Duration::from_secs(30);
+type HistoryAuthorizer =
+    dyn Fn(EndpointId, &starling::protocol::SpaceId) -> bool + Send + Sync + 'static;
+type HistoryChallengeCache = Arc<Mutex<HashSet<(EndpointId, [u8; 32])>>>;
+pub type HistoryStore = Arc<dyn crate::history::HistoryBackend>;
+pub type CancellationToken = tokio_util::sync::CancellationToken;
+
+#[derive(Clone)]
+struct HistoryProto {
+    store: crate::history_store::SledHistory,
+    authorize: Arc<HistoryAuthorizer>,
+    seen_challenges: HistoryChallengeCache,
+}
+
+impl std::fmt::Debug for HistoryProto {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HistoryProto")
+            .finish_non_exhaustive()
+    }
+}
+
+impl HistoryProto {
+    async fn serve(&self, conn: Connection) -> anyhow::Result<()> {
+        let remote_id = conn.remote_id();
+        let (mut send, mut recv) = timeout(HISTORY_IO_TIMEOUT, conn.accept_bi())
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out waiting for history request"))??;
+        let (header, body) = timeout(
+            HISTORY_IO_TIMEOUT,
+            starling::protocol::read_frame(&mut recv),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out reading history request"))??;
+        anyhow::ensure!(
+            header.kind == starling::history::FRAME_HISTORY_REQUEST_V1,
+            "unexpected history frame kind"
+        );
+        let signed: starling::history::SignedHistoryRequest = postcard::from_bytes(&body)
+            .map_err(|error| anyhow::anyhow!("invalid history request: {error}"))?;
+        anyhow::ensure!(
+            postcard::to_stdvec(&signed)? == body,
+            "history request is not canonical"
+        );
+        signed.verify(&remote_id)?;
+        let mut request = signed.request;
+        {
+            let mut seen = self
+                .seen_challenges
+                .lock()
+                .map_err(|_| anyhow::anyhow!("history challenge lock poisoned"))?;
+            anyhow::ensure!(
+                seen.insert((remote_id, request.challenge)),
+                "history challenge was replayed"
+            );
+            if seen.len() > starling::history::MAX_HISTORY_HASHES {
+                seen.clear();
+                seen.insert((remote_id, request.challenge));
+            }
+        }
+        anyhow::ensure!(
+            (self.authorize)(remote_id, &request.space),
+            "remote is not authorized for history space"
+        );
+
+        request.max_bytes = request
+            .max_bytes
+            .min((starling::protocol::MAX_BODY_BYTES - 4096) as u32);
+        // All synchronous store access completes before the response write awaits.
+        let response = starling::history::reconciliation_page(&self.store, &request)?;
+        let encoded = response.encode()?;
+        timeout(
+            HISTORY_IO_TIMEOUT,
+            starling::protocol::write_frame(
+                &mut send,
+                starling::history::FRAME_HISTORY_RESPONSE_V1,
+                &encoded,
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out writing history response"))??;
+        send.finish()?;
+        Ok(())
+    }
+}
+
+impl iroh::protocol::ProtocolHandler for HistoryProto {
+    async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
+        self.serve(conn).await.map_err(|error| {
+            iroh::protocol::AcceptError::from_err(std::io::Error::other(error.to_string()))
+        })
+    }
+}
 
 use iroh_gossip::api::GossipSender;
 
 struct FlockHandle {
     sender: GossipSender,
     crypto: FlockCrypto,
+    cancel: CancellationToken,
+}
+
+// V1 runtime ownership lives alongside the V0 `FlockHandle` until command and
+// event handling migrate to stable space identities.
+#[allow(dead_code)]
+pub struct NetworkRuntime {
+    endpoint: Endpoint,
+    router: Router,
+    gossip: Gossip,
+    spaces: HashMap<starling::protocol::SpaceId, SpaceHandle>,
+    roosts: HashMap<starling::protocol::RoostId, RoostHandle>,
+    calls: HashMap<starling::protocol::CallId, CallSession>,
+    cancel: CancellationToken,
+}
+
+#[allow(dead_code)]
+pub struct SpaceHandle {
+    descriptor: SpaceDescriptor,
+    sender: GossipSender,
+    keys: Keyring,
+    history: HistoryStore,
+    members: Arc<MemberDirectory>,
+    cancel: CancellationToken,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    readiness: SpaceReadiness,
+}
+
+#[allow(dead_code)]
+pub struct RoostHandle {
+    control: AuthenticatedRoostControl,
+    manifest: starling::roost::SignedManifestV1,
+    members: Arc<MemberDirectory>,
+    history: HistoryStore,
+    channels: HashMap<starling::protocol::ChannelId, SpaceHandle>,
+    readiness: SpaceReadiness,
+    cancel: CancellationToken,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+#[allow(dead_code)]
+pub enum SpaceDescriptor {
+    Flock(starling::descriptor::SignedFlockDescriptorV1),
+    RoostChannel {
+        roost: starling::protocol::RoostId,
+        channel: starling::protocol::ChannelId,
+        manifest_revision: u64,
+    },
+}
+
+#[derive(Default)]
+#[allow(dead_code)]
+pub struct Keyring {
+    current_epoch: u64,
+    keys: HashMap<u64, Zeroizing<[u8; 32]>>,
+}
+
+#[allow(dead_code)]
+impl Keyring {
+    pub fn insert(&mut self, epoch: u64, key: [u8; 32]) {
+        self.current_epoch = self.current_epoch.max(epoch);
+        self.keys.insert(epoch, Zeroizing::new(key));
+    }
+
+    pub fn get(&self, epoch: u64) -> Option<&[u8; 32]> {
+        self.keys.get(&epoch).map(|key| &**key)
+    }
+
+    pub fn retain_from(&mut self, oldest_epoch: u64) {
+        self.keys.retain(|epoch, _| *epoch >= oldest_epoch);
+    }
+}
+
+#[derive(Default)]
+#[allow(dead_code)]
+pub struct MemberDirectory {
+    members: RwLock<HashMap<EndpointId, crate::ui::MemberProfile>>,
+    ordered_ids: RwLock<Vec<EndpointId>>,
+    revision: RwLock<u64>,
+}
+
+#[allow(dead_code)]
+impl MemberDirectory {
+    pub fn replace(&self, ids: impl IntoIterator<Item = EndpointId>) {
+        let mut ids: Vec<_> = ids.into_iter().collect();
+        ids.sort_unstable();
+        ids.dedup();
+        *self.ordered_ids.write().expect("member directory poisoned") = ids;
+    }
+
+    pub fn ids(&self) -> Vec<EndpointId> {
+        self.ordered_ids
+            .read()
+            .expect("member directory poisoned")
+            .clone()
+    }
+}
+
+#[allow(dead_code)]
+pub struct AuthenticatedRoostControl {
+    pub roost: starling::protocol::RoostId,
+    pub server: EndpointId,
+    pub connection: Connection,
+    pub manifest_revision: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub enum SpaceReadiness {
+    Restored,
+    Resolving,
+    Authenticating,
+    AwaitingKeys,
+    Subscribing,
+    Reconciling,
+    Ready,
+    Revoked,
+    NeedsUserAction,
+    Retrying { attempt: u32 },
+}
+
+#[allow(dead_code)]
+pub type RoostReadiness = SpaceReadiness;
+
+#[allow(dead_code)]
+pub struct CallSession {
+    pub call: starling::protocol::CallId,
+    pub space: starling::protocol::SpaceId,
+    pub owner: EndpointId,
+    pub connections: HashMap<EndpointId, Connection>,
+    pub cancel: CancellationToken,
+    pub tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+/// Publishes presence immediately, every 20 seconds, and on profile/call changes.
+#[allow(dead_code)]
+pub async fn publish_presence(
+    sender: GossipSender,
+    crypto: FlockCrypto,
+    space: starling::protocol::SpaceId,
+    secret: iroh::SecretKey,
+    mut changes: mpsc::UnboundedReceiver<()>,
+    cancel: CancellationToken,
+) -> anyhow::Result<()> {
+    let mut sequence = 0_u64;
+    let mut interval = tokio::time::interval(Duration::from_secs(20));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => return Ok(()),
+            _ = interval.tick() => {},
+            change = changes.recv() => {
+                if change.is_none() {
+                    return Ok(());
+                }
+            }
+        }
+        let issued = chrono::Utc::now().timestamp_millis();
+        let lease = starling::presence::PresenceLeaseBodyV1 {
+            space,
+            endpoint: secret.public(),
+            sequence,
+            issued_unix_ms: issued,
+            expiry_unix_ms: issued.saturating_add(60_000),
+        }
+        .sign(&secret)?;
+        let payload = GossipPayload::Presence(lease);
+        let plaintext = postcard::to_stdvec(&payload)?;
+        sender
+            .broadcast(crypto.try_encrypt(&plaintext)?.into())
+            .await?;
+        sequence = sequence
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("presence sequence overflow"))?;
+    }
+}
+
+/// Drives one space through the explicit restore lifecycle.
+#[allow(dead_code)]
+pub async fn drive_restore(handle: &mut SpaceHandle, cancel: CancellationToken) {
+    use SpaceReadiness::*;
+    loop {
+        if cancel.is_cancelled() {
+            return;
+        }
+        handle.readiness = match handle.readiness {
+            Retrying { attempt } => {
+                let multiplier = 1_u64 << attempt.min(6);
+                let backoff = Duration::from_millis(200_u64.saturating_mul(multiplier));
+                tokio::select! {
+                    () = cancel.cancelled() => return,
+                    () = tokio::time::sleep(backoff) => Restored,
+                }
+            }
+            ref state => match advance_readiness(state) {
+                Some(next) => next,
+                None => return,
+            },
+        };
+    }
+}
+
+fn advance_readiness(state: &SpaceReadiness) -> Option<SpaceReadiness> {
+    use SpaceReadiness::*;
+    match state {
+        Restored => Some(Resolving),
+        Resolving => Some(Authenticating),
+        Authenticating => Some(AwaitingKeys),
+        AwaitingKeys => Some(Subscribing),
+        Subscribing => Some(Reconciling),
+        Reconciling => Some(Ready),
+        Ready | Revoked | NeedsUserAction | Retrying { .. } => None,
+    }
 }
 
 pub async fn run(
@@ -47,9 +357,21 @@ pub async fn run(
 
     let gossip = Gossip::builder().spawn(endpoint.clone());
     let history: starling::sync::History = Default::default();
+    let durable_history = crate::history_store::SledHistory::open(
+        starling::config::Profile::config_dir().join("history-v1"),
+    )?;
+    let history_proto = HistoryProto {
+        store: durable_history,
+        // Membership chains are not persisted by this client yet. Deny every
+        // request until a real membership-backed authorizer is installed.
+        authorize: Arc::new(|_, _| false),
+        seen_challenges: Arc::new(Mutex::new(HashSet::new())),
+    };
 
     #[allow(unused_mut)]
-    let mut builder = Router::builder(endpoint.clone()).accept(GOSSIP_ALPN, gossip.clone());
+    let mut builder = Router::builder(endpoint.clone())
+        .accept(GOSSIP_ALPN, gossip.clone())
+        .accept(starling::history::HISTORY_V1_ALPN, history_proto);
     #[cfg(feature = "audio")]
     {
         builder = builder.accept(
@@ -66,6 +388,26 @@ pub async fn run(
         builder = builder.accept(
             crate::call::VIDEO_ALPN,
             VideoProto {
+                evt_tx: evt_tx.clone(),
+            },
+        );
+    }
+    // V1 ALPNs sit alongside V0 so peers can negotiate via signed call
+    // signals (`starling::call::SignedCallSignalV1`) before opening media.
+    #[cfg(feature = "audio")]
+    {
+        builder = builder.accept(
+            crate::call::v1::VOICE_V1_ALPN,
+            VoiceV1Proto {
+                evt_tx: evt_tx.clone(),
+            },
+        );
+    }
+    #[cfg(feature = "video")]
+    {
+        builder = builder.accept(
+            crate::call::v1::VIDEO_V1_ALPN,
+            VideoV1Proto {
                 evt_tx: evt_tx.clone(),
             },
         );
@@ -108,6 +450,34 @@ pub async fn run(
             break;
         };
         match cmd {
+            Command::SendContextText { space, body } => {
+                starling::logger::warn(&format!(
+                    "V1 send not yet implemented for context {space:?}: {} bytes",
+                    body.len()
+                ));
+                let _ = evt_tx.send(AppEvent::ContextStateChanged {
+                    space,
+                    state: crate::ui::ContextState::Revoked,
+                });
+            }
+            Command::SelectContext(space) => {
+                let _ = evt_tx.send(AppEvent::ContextStateChanged {
+                    space,
+                    state: crate::ui::ContextState::Reconciling,
+                });
+                let _ = evt_tx.send(AppEvent::ContextStateChanged {
+                    space,
+                    state: crate::ui::ContextState::Ready,
+                });
+            }
+            Command::RestoreContexts(spaces) => {
+                for space in spaces {
+                    let _ = evt_tx.send(AppEvent::ContextStateChanged {
+                        space,
+                        state: crate::ui::ContextState::AwaitingKeys,
+                    });
+                }
+            }
             Command::SendText { flock, body } => {
                 if let Some(h) = flocks.get(&flock) {
                     let msg = ChatMessage {
@@ -120,7 +490,14 @@ pub async fn run(
                     h.sender
                         .broadcast(h.crypto.encrypt(&plaintext).into())
                         .await?;
-                    let _ = evt_tx.send(AppEvent::Message { flock, msg });
+                    let _ = evt_tx.send(AppEvent::Message {
+                        flock: flock.clone(),
+                        msg: msg.clone(),
+                    });
+                    let _ = evt_tx.send(AppEvent::Message {
+                        flock: flock.clone(),
+                        msg: msg.clone(),
+                    });
                 }
             }
 
@@ -220,6 +597,11 @@ pub async fn run(
             }
 
             Command::Quit => break,
+            Command::Leave { code } => {
+                if let Some(handle) = flocks.remove(&code) {
+                    handle.cancel.cancel();
+                }
+            }
         }
     }
 
@@ -265,6 +647,40 @@ struct VideoProto {
 
 #[cfg(feature = "video")]
 impl iroh::protocol::ProtocolHandler for VideoProto {
+    async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
+        let _ = crate::call::recv_video(conn, self.evt_tx.clone()).await;
+        Ok(())
+    }
+}
+
+/// V1 voice protocol handler. The V1 path negotiates via signed call signals
+/// (`crate::call::v1::SignedCallSignalV1`) and then runs a per-peer
+/// [`crate::call::v1::MediaSession`]; this handler accepts the QUIC connection
+/// and forwards datagrams to the UI while the session layer is wired up.
+#[cfg(feature = "audio")]
+#[derive(Debug)]
+struct VoiceV1Proto {
+    evt_tx: mpsc::UnboundedSender<AppEvent>,
+}
+
+#[cfg(feature = "audio")]
+impl iroh::protocol::ProtocolHandler for VoiceV1Proto {
+    async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
+        let (_mic_tx, mic_rx) = mpsc::unbounded_channel();
+        let _ = crate::call::handle_incoming(conn, mic_rx, self.evt_tx.clone()).await;
+        Ok(())
+    }
+}
+
+/// V1 video protocol handler. Mirrors V0 until per-peer video mixing lands.
+#[cfg(feature = "video")]
+#[derive(Debug)]
+struct VideoV1Proto {
+    evt_tx: mpsc::UnboundedSender<AppEvent>,
+}
+
+#[cfg(feature = "video")]
+impl iroh::protocol::ProtocolHandler for VideoV1Proto {
     async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
         let _ = crate::call::recv_video(conn, self.evt_tx.clone()).await;
         Ok(())
@@ -319,6 +735,7 @@ async fn join_by_code(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn join_flock(
     gossip: &Gossip,
     code: String,
@@ -345,9 +762,15 @@ async fn join_flock(
         my_id,
         name,
     );
+    let cancel = CancellationToken::new();
+    let task_cancel = cancel.clone();
     tokio::spawn(async move {
-        while let Some(event) = receiver.next().await {
-            match event {
+        loop {
+            tokio::select! {
+                () = task_cancel.cancelled() => break,
+                event = receiver.next() => {
+                    let Some(event) = event else { break };
+                    match event {
                 Ok(Event::Received(msg)) => {
                     if let Some(plain) = rx_crypto.decrypt(&msg.content) {
                         match postcard::from_bytes::<GossipPayload>(&plain) {
@@ -362,6 +785,9 @@ async fn join_flock(
                             }
                             Ok(GossipPayload::Status { id, status }) => {
                                 let _ = rx_tx.send(AppEvent::PeerStatus(id, status));
+                            }
+                            Ok(GossipPayload::Presence(lease)) => {
+                                let _ = rx_tx.send(AppEvent::PresenceLease(lease));
                             }
                             Err(e) => {
                                 starling::logger::error(&format!("gossip deserialize error: {e}"));
@@ -381,14 +807,23 @@ async fn join_flock(
                     }
                 }
                 Ok(Event::NeighborDown(id)) => {
-                    let _ = rx_tx.send(AppEvent::PeerDisconnected(id));
+                    let _ = rx_tx.send(AppEvent::PeerConnectivityHintDown(id));
                 }
                 _ => {}
+            }
+                }
             }
         }
     });
 
-    flocks.insert(code.clone(), FlockHandle { sender, crypto });
+    flocks.insert(
+        code.clone(),
+        FlockHandle {
+            sender,
+            crypto,
+            cancel,
+        },
+    );
     let _ = evt_tx.send(AppEvent::JoinedFlock {
         code,
         name: flock_name,
@@ -396,6 +831,7 @@ async fn join_flock(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn join_roost(
     gossip: &Gossip,
     endpoint: &Endpoint,
@@ -492,9 +928,15 @@ async fn join_roost_channel(
     let rx_tx = evt_tx.clone();
     let rx_sender = sender.clone();
 
+    let cancel = CancellationToken::new();
+    let task_cancel = cancel.clone();
     tokio::spawn(async move {
-        while let Some(event) = receiver.next().await {
-            match event {
+        loop {
+            tokio::select! {
+                () = task_cancel.cancelled() => break,
+                event = receiver.next() => {
+                    let Some(event) = event else { break };
+                    match event {
                 Ok(Event::Received(msg)) => {
                     if let Some(plain) = rx_crypto.decrypt(&msg.content) {
                         match postcard::from_bytes::<GossipPayload>(&plain) {
@@ -509,6 +951,9 @@ async fn join_roost_channel(
                             }
                             Ok(GossipPayload::Status { id, status }) => {
                                 let _ = rx_tx.send(AppEvent::PeerStatus(id, status));
+                            }
+                            Ok(GossipPayload::Presence(lease)) => {
+                                let _ = rx_tx.send(AppEvent::PresenceLease(lease));
                             }
                             Err(e) => starling::logger::warn(&format!(
                                 "roost channel deserialize error: {e}"
@@ -527,13 +972,60 @@ async fn join_roost_channel(
                     }
                 }
                 Ok(Event::NeighborDown(id)) => {
-                    let _ = rx_tx.send(AppEvent::PeerDisconnected(id));
+                    let _ = rx_tx.send(AppEvent::PeerConnectivityHintDown(id));
                 }
                 _ => {}
+            }
+                }
             }
         }
     });
 
-    flocks.insert(code, FlockHandle { sender, crypto });
+    flocks.insert(
+        code,
+        FlockHandle {
+            sender,
+            crypto,
+            cancel,
+        },
+    );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readiness_follows_the_required_restore_order() {
+        let mut state = SpaceReadiness::Restored;
+        for expected in [
+            SpaceReadiness::Resolving,
+            SpaceReadiness::Authenticating,
+            SpaceReadiness::AwaitingKeys,
+            SpaceReadiness::Subscribing,
+            SpaceReadiness::Reconciling,
+            SpaceReadiness::Ready,
+        ] {
+            state = advance_readiness(&state).expect("non-terminal transition");
+            assert_eq!(state, expected);
+        }
+        assert!(advance_readiness(&state).is_none());
+        assert!(advance_readiness(&SpaceReadiness::Revoked).is_none());
+        assert!(advance_readiness(&SpaceReadiness::NeedsUserAction).is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_backoff_is_bounded_and_cancellable() {
+        let cancel = CancellationToken::new();
+        let task_cancel = cancel.clone();
+        let task = tokio::spawn(async move {
+            tokio::select! {
+                () = task_cancel.cancelled() => true,
+                () = tokio::time::sleep(Duration::from_millis(200 * (1 << 6))) => false,
+            }
+        });
+        cancel.cancel();
+        assert!(task.await.expect("retry task panicked"));
+    }
 }

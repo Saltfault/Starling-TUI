@@ -1,6 +1,12 @@
 use iroh::EndpointId;
 
 pub enum Command {
+    SendContextText {
+        space: starling::protocol::SpaceId,
+        body: String,
+    },
+    SelectContext(starling::protocol::SpaceId),
+    RestoreContexts(Vec<starling::protocol::SpaceId>),
     SendText {
         flock: String,
         body: String,
@@ -21,10 +27,17 @@ pub enum Command {
     #[cfg(feature = "video")]
     StopVideo,
     Quit,
+    Leave {
+        code: String,
+    },
 }
 
 #[derive(Debug)]
 pub enum AppEvent {
+    ContextStateChanged {
+        space: starling::protocol::SpaceId,
+        state: crate::ui::ContextState,
+    },
     Message {
         flock: String,
         msg: starling::event::ChatMessage,
@@ -45,7 +58,8 @@ pub enum AppEvent {
         channels: Vec<String>,
     },
     PeerConnected(EndpointId),
-    PeerDisconnected(EndpointId),
+
+    PeerConnectivityHintDown(EndpointId),
     PeerNamed(EndpointId, String),
     Ticket(EndpointId),
     Error(String),
@@ -67,6 +81,7 @@ pub enum AppEvent {
     #[cfg(feature = "video")]
     RemoteVideoStopped(EndpointId),
     PeerStatus(EndpointId, starling::event::BirdStatus),
+    PresenceLease(starling::presence::SignedPresenceLeaseV1),
     HistoryChunk {
         flock: String,
         messages: Vec<starling::event::ChatMessage>,

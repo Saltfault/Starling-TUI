@@ -2,11 +2,13 @@ use image::RgbImage;
 use iroh::EndpointId;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 use sha2::{Digest, Sha256};
 use starling::event::{BirdStatus, ChatMessage};
+use starling::protocol::{RoostId, SpaceId};
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 const DEFAULT_ACCENT: Color = Color::Rgb(111, 174, 157);
 const DEFAULT_AUTHOR: Color = Color::Rgb(244, 138, 82);
@@ -43,6 +45,98 @@ impl Default for Palette {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub struct MemberProfile {
+    pub endpoint: EndpointId,
+    pub name: String,
+    pub pronouns: String,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct LiveLease {
+    pub deadline: tokio::time::Instant,
+    pub sequence: u64,
+}
+
+impl LiveLease {
+    fn is_live_at(&self, now: tokio::time::Instant) -> bool {
+        self.deadline > now
+    }
+}
+
+/// Presence for one selected space. Member profiles survive lease expiry.
+#[derive(Default)]
+#[allow(dead_code)]
+pub struct ContextPresence {
+    pub members: HashMap<EndpointId, MemberProfile>,
+    pub live: HashMap<EndpointId, LiveLease>,
+    ordered_ids: Vec<EndpointId>,
+}
+
+#[allow(dead_code)]
+impl ContextPresence {
+    pub fn set_profile(&mut self, profile: MemberProfile) {
+        self.members.insert(profile.endpoint, profile);
+    }
+
+    pub fn apply_verified_lease(
+        &mut self,
+        endpoint: EndpointId,
+        lease: LiveLease,
+        now: tokio::time::Instant,
+    ) {
+        if lease.is_live_at(now) {
+            let replace = self
+                .live
+                .get(&endpoint)
+                .is_none_or(|current| lease.sequence > current.sequence);
+            if replace {
+                self.live.insert(endpoint, lease);
+                if !self.ordered_ids.contains(&endpoint) {
+                    self.ordered_ids.push(endpoint);
+                }
+            }
+        }
+    }
+
+    pub fn live_ids(&self, now: tokio::time::Instant) -> Vec<EndpointId> {
+        self.ordered_ids
+            .iter()
+            .copied()
+            .filter(|endpoint| {
+                self.live
+                    .get(endpoint)
+                    .is_some_and(|lease| lease.is_live_at(now))
+            })
+            .collect()
+    }
+
+    pub fn expire(&mut self, now: tokio::time::Instant) {
+        self.live.retain(|_, lease| lease.is_live_at(now));
+        self.ordered_ids
+            .retain(|endpoint| self.live.contains_key(endpoint));
+    }
+}
+
+#[derive(Default)]
+#[allow(dead_code)]
+pub struct ScopedPresence {
+    pub contexts: HashMap<starling::protocol::SpaceId, ContextPresence>,
+}
+
+#[allow(dead_code)]
+impl ScopedPresence {
+    pub fn context_mut(&mut self, space: starling::protocol::SpaceId) -> &mut ContextPresence {
+        self.contexts.entry(space).or_default()
+    }
+
+    pub fn neighbor_down(&mut self, _endpoint: EndpointId) {
+        // Connectivity is only a hint. Signed leases remain authoritative.
+    }
+}
+
 #[derive(Default)]
 pub struct FlockView {
     pub code: String,
@@ -59,7 +153,44 @@ pub struct RoostView {
     pub unread: usize,
 }
 
-pub const MENU_ITEMS: &[&str] = &["Create Room", "Join", "Profile", "Settings", "Quit"];
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChatMessageView {
+    pub event_hash: [u8; 32],
+    pub sender: EndpointId,
+    pub author: String,
+    pub body: String,
+    pub ts: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContextView {
+    pub id: SpaceId,
+    pub title: String,
+    pub roost: Option<RoostId>,
+    pub base_invite_display: Option<String>,
+    pub messages: Vec<ChatMessageView>,
+    pub unread: usize,
+    pub state: ContextState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContextState {
+    AwaitingKeys,
+    Reconciling,
+    Ready,
+    Revoked,
+    NeedsUserAction,
+}
+
+pub const MENU_ITEMS: &[&str] = &[
+    "Create a Flock",
+    "Edit a Flock",
+    "Join",
+    "Profile",
+    "Settings",
+    "Delete All Data",
+    "Quit",
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScrollPanel {
@@ -139,6 +270,8 @@ impl Default for Selection {
     }
 }
 
+const NOTICE_DURATION: Duration = Duration::from_secs(4);
+
 pub struct App {
     pub name: String,
     pub pronouns: String,
@@ -156,6 +289,9 @@ pub struct App {
     pub show_create_room: bool,
     pub show_join_room: bool,
     pub join_input: String,
+    pub show_edit_flock: bool,
+    pub edit_flock_code: String,
+    pub edit_flock_name: String,
     pub in_call: bool,
     pub muted: bool,
     pub peer_names: HashMap<EndpointId, String>,
@@ -175,6 +311,12 @@ pub struct App {
     pub quit_requested: bool,
     pub error_message: Option<String>,
     pub palette: Palette,
+    pub contexts: HashMap<SpaceId, ContextView>,
+    pub context_order: Vec<SpaceId>,
+    pub active: Option<SpaceId>,
+    pub presence: HashMap<SpaceId, ContextPresence>,
+    pub status_notice: Option<String>,
+    pub status_notice_expires_at: Option<Instant>,
 }
 
 impl Default for App {
@@ -196,6 +338,9 @@ impl Default for App {
             show_create_room: false,
             show_join_room: false,
             join_input: String::new(),
+            show_edit_flock: false,
+            edit_flock_code: String::new(),
+            edit_flock_name: String::new(),
             in_call: false,
             muted: false,
             peer_names: HashMap::new(),
@@ -212,12 +357,104 @@ impl Default for App {
             quit_requested: false,
             error_message: None,
             palette: Palette::default(),
+            contexts: HashMap::new(),
+            context_order: Vec::new(),
+            active: None,
+            presence: HashMap::new(),
+            status_notice: None,
+            status_notice_expires_at: None,
         }
     }
 }
 
 impl App {
+    pub fn insert_context(&mut self, context: ContextView) {
+        let id = context.id;
+        if !self.contexts.contains_key(&id) {
+            self.context_order.push(id);
+        }
+        self.contexts.insert(id, context);
+        if self.active.is_none() {
+            self.select_context(id);
+        }
+    }
+
+    pub fn ordered_contexts(&self) -> impl Iterator<Item = &ContextView> {
+        self.context_order
+            .iter()
+            .filter_map(|id| self.contexts.get(id))
+    }
+
+    pub fn select_context(&mut self, id: SpaceId) -> bool {
+        let Some(context) = self.contexts.get_mut(&id) else {
+            return false;
+        };
+        context.unread = 0;
+        self.active = Some(id);
+        true
+    }
+
+    pub fn active_context(&self) -> Option<&ContextView> {
+        self.active.and_then(|id| self.contexts.get(&id))
+    }
+
+    pub fn active_context_messages(&self) -> Option<&[ChatMessageView]> {
+        self.active_context()
+            .map(|context| context.messages.as_slice())
+    }
+
+    pub fn active_base_invite(&self) -> Option<&str> {
+        let context = self.active_context()?;
+        if let Some(roost) = context.roost {
+            self.contexts.values().find_map(|candidate| {
+                let belongs_to_roost = candidate.roost == Some(roost)
+                    || matches!(candidate.id, SpaceId::RoostChannel { roost: id, .. } if id == roost);
+                (candidate.id != context.id && belongs_to_roost)
+                    .then_some(candidate.base_invite_display.as_deref())
+                    .flatten()
+                    .filter(|invite| !invite.is_empty() && !invite.contains('/'))
+            })
+        } else {
+            context
+                .base_invite_display
+                .as_deref()
+                .filter(|invite| !invite.is_empty() && !invite.contains('/'))
+        }
+    }
+
+    pub fn show_status_notice(&mut self, message: impl Into<String>, now: Instant) {
+        self.status_notice = Some(message.into());
+        self.status_notice_expires_at = Some(now + NOTICE_DURATION);
+    }
+
+    pub fn expire_status_notice(&mut self, now: Instant) -> bool {
+        if self
+            .status_notice_expires_at
+            .is_some_and(|expires_at| now >= expires_at)
+        {
+            self.status_notice = None;
+            self.status_notice_expires_at = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn visible_status_notice(&self, now: Instant) -> Option<&str> {
+        self.status_notice.as_deref().filter(|_| {
+            self.status_notice_expires_at
+                .is_none_or(|expires_at| now < expires_at)
+        })
+    }
+
+    pub fn live_member_count(&self, space: starling::protocol::SpaceId) -> usize {
+        self.presence.get(&space).map(|p| p.live.len()).unwrap_or(0)
+    }
+
     pub fn active_code(&self) -> Option<&str> {
+        if self.active_context().is_some() {
+            return self.active_base_invite();
+        }
         match self.selection {
             Selection::Flock(i) => self.flocks.get(i).map(|f| f.code.as_str()),
             Selection::Channel(ri, ci) => self
@@ -245,6 +482,9 @@ impl App {
     }
 
     pub fn active_title(&self) -> String {
+        if let Some(context) = self.active_context() {
+            return context.title.clone();
+        }
         match self.selection {
             Selection::Flock(i) => self
                 .flocks
@@ -265,6 +505,7 @@ impl App {
 
     pub fn select(&mut self, selection: Selection) {
         self.selection = selection;
+        self.active = None;
         match selection {
             Selection::Flock(i) => {
                 if let Some(flock) = self.flocks.get_mut(i) {
@@ -316,11 +557,11 @@ impl App {
             .iter()
             .enumerate()
             .map(|(index, roost)| {
-                1 + self
-                    .expanded
-                    .contains(&index)
-                    .then_some(roost.channels.len())
-                    .unwrap_or(0)
+                1 + if self.expanded.contains(&index) {
+                    roost.channels.len()
+                } else {
+                    0
+                }
             })
             .sum()
     }
@@ -339,8 +580,13 @@ impl App {
         roost_viewport: usize,
         bird_viewport: usize,
     ) {
+        let context_count = self
+            .context_order
+            .iter()
+            .filter(|id| self.contexts.contains_key(id))
+            .count();
         self.flock_scroll
-            .set_max(self.flocks.len().saturating_sub(flock_viewport));
+            .set_max((self.flocks.len() + context_count).saturating_sub(flock_viewport));
         self.roost_scroll
             .set_max(self.roost_row_count().saturating_sub(roost_viewport));
         self.bird_scroll
@@ -352,31 +598,52 @@ impl App {
     }
 }
 
-pub fn toolbar_buttons(_app: &App) -> Vec<(ToolbarAction, &'static str, u16, u16)> {
-    #[allow(unused_mut)]
-    let mut buttons = vec![(ToolbarAction::Menu, "Menu")];
-    #[cfg(feature = "audio")]
-    {
-        buttons.push((
-            ToolbarAction::Call,
-            if _app.in_call { "Hang up" } else { "Call" },
-        ));
-        buttons.push((
-            ToolbarAction::Mute,
-            if _app.muted { "Unmute" } else { "Mute" },
-        ));
-    }
-    #[cfg(feature = "video")]
-    buttons.push((
-        ToolbarAction::Video,
-        if _app.show_video {
-            "Video off"
-        } else {
-            "Video on"
-        },
-    ));
+pub fn toolbar_buttons(app: &App) -> Vec<(ToolbarAction, &'static str, u16, u16)> {
+    let labels: Vec<(ToolbarAction, &'static str)> = std::iter::once((
+        ToolbarAction::Menu,
+        if app.show_menu { "Close" } else { "Menu" },
+    ))
+    .chain({
+        #[cfg(feature = "audio")]
+        {
+            vec![
+                (
+                    ToolbarAction::Call,
+                    if app.in_call { "Hang up" } else { "Call" },
+                ),
+                (
+                    ToolbarAction::Mute,
+                    if app.muted { "Unmute" } else { "Mute" },
+                ),
+            ]
+            .into_iter()
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            std::iter::empty()
+        }
+    })
+    .chain({
+        #[cfg(feature = "video")]
+        {
+            vec![(
+                ToolbarAction::Video,
+                if app.show_video {
+                    "Video off"
+                } else {
+                    "Video on"
+                },
+            )]
+            .into_iter()
+        }
+        #[cfg(not(feature = "video"))]
+        {
+            std::iter::empty()
+        }
+    })
+    .collect();
     let mut x = 0u16;
-    buttons
+    labels
         .into_iter()
         .map(|(action, label)| {
             let width = label.len() as u16 + 2;
@@ -442,6 +709,8 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     if app.show_create_room {
         draw_create_room_popup(f, app);
+    } else if app.show_edit_flock {
+        draw_edit_flock_popup(f, app);
     } else if app.show_join_room {
         draw_join_room_popup(f, app);
     } else if app.show_menu {
@@ -477,39 +746,57 @@ fn window_list_items<'a>(items: Vec<ListItem<'a>>, scroll: SpringScroll) -> Vec<
 }
 
 fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
-    let items: Vec<ListItem> = app
-        .flocks
-        .iter()
-        .enumerate()
-        .map(|(i, fv)| {
-            let sel = app.selection == Selection::Flock(i);
-            let mark = if sel { "> " } else { "  " };
-            let unread = if fv.unread > 0 {
-                format!(" ({})", fv.unread)
-            } else {
-                String::new()
-            };
-            let dot = flock_dot(&fv.code, app.palette.accent);
-            let label = if fv.name.is_empty() {
-                &fv.code[..12.min(fv.code.len())]
-            } else {
-                fv.name.as_str()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(mark, Style::new().fg(app.palette.selection)),
-                Span::styled("\u{25AE} ", Style::new().fg(dot)),
-                Span::styled(
-                    label.to_string(),
-                    Style::new().fg(if sel {
-                        app.palette.selection
-                    } else {
-                        app.palette.text
-                    }),
-                ),
-                Span::styled(unread, Style::new().fg(app.palette.selection)),
-            ]))
-        })
-        .collect();
+    let typed_items = app.ordered_contexts().map(|context| {
+        let selected = app.active == Some(context.id);
+        let mark = if selected { "> " } else { "  " };
+        let unread = if context.unread > 0 {
+            format!(" ({})", context.unread)
+        } else {
+            String::new()
+        };
+        ListItem::new(Line::from(vec![
+            Span::styled(mark, Style::new().fg(app.palette.selection)),
+            Span::styled("\u{25AE} ", Style::new().fg(app.palette.accent)),
+            Span::styled(
+                context.title.clone(),
+                Style::new().fg(if selected {
+                    app.palette.selection
+                } else {
+                    app.palette.text
+                }),
+            ),
+            Span::styled(unread, Style::new().fg(app.palette.selection)),
+        ]))
+    });
+    let legacy_items = app.flocks.iter().enumerate().map(|(i, fv)| {
+        let sel = app.selection == Selection::Flock(i);
+        let mark = if sel { "> " } else { "  " };
+        let unread = if fv.unread > 0 {
+            format!(" ({})", fv.unread)
+        } else {
+            String::new()
+        };
+        let dot = flock_dot(&fv.code, app.palette.accent);
+        let label = if fv.name.is_empty() {
+            &fv.code[..12.min(fv.code.len())]
+        } else {
+            fv.name.as_str()
+        };
+        ListItem::new(Line::from(vec![
+            Span::styled(mark, Style::new().fg(app.palette.selection)),
+            Span::styled("\u{25AE} ", Style::new().fg(dot)),
+            Span::styled(
+                label.to_string(),
+                Style::new().fg(if sel {
+                    app.palette.selection
+                } else {
+                    app.palette.text
+                }),
+            ),
+            Span::styled(unread, Style::new().fg(app.palette.selection)),
+        ]))
+    });
+    let items: Vec<ListItem> = typed_items.chain(legacy_items).collect();
     let items = window_list_items(items, app.flock_scroll);
 
     f.render_widget(
@@ -518,7 +805,7 @@ fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::new().fg(app.palette.border))
                 .title(Span::styled(
-                    format!(" flocks ({}) ", app.flocks.len()),
+                    format!(" flocks ({}) ", app.flocks.len() + app.contexts.len()),
                     Style::new().fg(app.palette.accent),
                 )),
         ),
@@ -658,6 +945,34 @@ fn draw_video_grid(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+fn draw_typed_messages(f: &mut Frame, app: &App, area: Rect) -> bool {
+    let Some(messages) = app.active_context_messages() else {
+        return false;
+    };
+    let items = messages.iter().map(|message| {
+        ListItem::new(Line::from(vec![
+            Span::styled(
+                format!("{}: ", message.author),
+                Style::new()
+                    .fg(app.palette.author)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(message.body.clone(), Style::new().fg(app.palette.text)),
+        ]))
+    });
+    let title = format!(" {} . {} birds ", app.active_title(), app.bird_count());
+    f.render_widget(
+        List::new(items.collect::<Vec<_>>()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(app.palette.border))
+                .title(Span::styled(title, Style::new().fg(app.palette.text))),
+        ),
+        area,
+    );
+    true
+}
+
 fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
     #[cfg(feature = "video")]
     let area = if app.show_video || !app.remote_video_frames.is_empty() {
@@ -668,6 +983,10 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
     } else {
         area
     };
+
+    if draw_typed_messages(f, app, area) {
+        return;
+    }
 
     let items: Vec<ListItem> = app
         .active_messages()
@@ -744,8 +1063,12 @@ fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn status_text(app: &App) -> String {
-    if app.in_call {
+    if let Some(notice) = app.visible_status_notice(Instant::now()) {
+        notice.to_string()
+    } else if app.in_call {
         format!("in call{}", if app.muted { " . muted" } else { " . live" })
+    } else if let Some(active) = app.active {
+        format!("{} live", app.live_member_count(active))
     } else {
         String::new()
     }
@@ -770,7 +1093,7 @@ fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Line::from(spans), area);
 }
 
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let w = width.min(area.width);
     let h = height.min(area.height);
     Rect::new(
@@ -815,14 +1138,53 @@ fn draw_menu_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_create_room_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 72, 14);
+    let popup = centered(f.area(), 60, 8);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::new().fg(app.palette.border))
             .title(Span::styled(
-                " Create Room ",
+                " Create a Flock ",
+                Style::new().fg(app.palette.accent),
+            )),
+        popup,
+    );
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+    f.render_widget(
+        Paragraph::new("Flock name:").style(Style::new().fg(app.palette.text)),
+        rows[0],
+    );
+    f.render_widget(
+        Paragraph::new(format!(" {}_", app.create_flock_name))
+            .style(Style::new().fg(app.palette.selection)),
+        rows[1],
+    );
+    f.render_widget(
+        Paragraph::new("Press Enter to create, Esc to cancel.")
+            .style(Style::new().fg(app.palette.dim)),
+        rows[2],
+    );
+}
+
+fn draw_edit_flock_popup(f: &mut Frame, app: &App) {
+    let popup = centered(f.area(), 60, 10);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(app.palette.border))
+            .title(Span::styled(
+                " Edit Flock ",
                 Style::new().fg(app.palette.accent),
             )),
         popup,
@@ -835,39 +1197,22 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(4),
         Constraint::Min(1),
     ])
     .split(inner);
-    let invite = app
-        .create_flock_code
-        .as_deref()
-        .unwrap_or("enter a flock name to generate the invite...");
     f.render_widget(
         Paragraph::new("Flock name:").style(Style::new().fg(app.palette.text)),
         rows[0],
     );
     f.render_widget(
-        Paragraph::new(format!(" {}_", app.create_flock_name))
+        Paragraph::new(format!(" {}_", app.edit_flock_name))
             .style(Style::new().fg(app.palette.selection)),
         rows[1],
     );
     f.render_widget(
-        Paragraph::new("Invite code:").style(Style::new().fg(app.palette.text)),
-        rows[2],
-    );
-    f.render_widget(Line::from(color_swatches(invite)), rows[3]);
-    f.render_widget(
-        Paragraph::new(invite)
-            .style(Style::new().fg(app.palette.invite))
-            .wrap(Wrap { trim: false }),
-        rows[4],
-    );
-    f.render_widget(
-        Paragraph::new("Press Enter to create, Esc to cancel.")
+        Paragraph::new("Enter = save . Delete = delete flock . Esc = cancel")
             .style(Style::new().fg(app.palette.dim)),
-        rows[5],
+        rows[3],
     );
 }
 
@@ -985,6 +1330,7 @@ fn parse_color_code(code: &str) -> Vec<(u8, u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn channel_selection_uses_channel_route_and_clears_unread() {
@@ -1006,6 +1352,132 @@ mod tests {
         assert_eq!(app.active_code(), Some("roost/general"));
         assert_eq!(app.roosts[0].channels[0].unread, 0);
         assert_eq!(app.roosts[0].unread, 0);
+    }
+
+    fn context(
+        id: SpaceId,
+        title: &str,
+        base_invite: &str,
+        parent_roost: Option<RoostId>,
+    ) -> ContextView {
+        ContextView {
+            id,
+            title: title.into(),
+            roost: parent_roost,
+            base_invite_display: Some(base_invite.into()),
+            messages: Vec::new(),
+            unread: 0,
+            state: ContextState::Ready,
+        }
+    }
+
+    #[test]
+    fn typed_contexts_keep_insertion_order_when_replaced() {
+        let first = SpaceId::Flock(starling::protocol::FlockId::random());
+        let second = SpaceId::Flock(starling::protocol::FlockId::random());
+        let mut app = App::default();
+        app.insert_context(context(first, "First", "first-invite", None));
+        app.insert_context(context(second, "Second", "second-invite", None));
+        app.insert_context(context(first, "Renamed", "first-invite", None));
+
+        assert_eq!(app.context_order, vec![first, second]);
+        assert_eq!(
+            app.ordered_contexts()
+                .map(|context| context.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Renamed", "Second"]
+        );
+    }
+
+    fn append_message(app: &mut App, id: SpaceId, message: ChatMessageView) {
+        let context = app.contexts.get_mut(&id).expect("context exists");
+        context.messages.push(message);
+        if app.active != Some(id) {
+            context.unread += 1;
+        }
+    }
+
+    #[test]
+    fn switching_contexts_reuses_state_and_clears_unread() {
+        let first = SpaceId::Flock(starling::protocol::FlockId::random());
+        let second = SpaceId::Flock(starling::protocol::FlockId::random());
+        let author = iroh::SecretKey::generate().public();
+        let mut app = App::default();
+        app.insert_context(context(first, "First", "first-invite", None));
+        app.insert_context(context(second, "Second", "second-invite", None));
+        append_message(
+            &mut app,
+            second,
+            ChatMessageView {
+                event_hash: [1; 32],
+                sender: author,
+                author: "Wren".into(),
+                body: "hello".into(),
+                ts: 0,
+            },
+        );
+
+        assert_eq!(app.contexts[&second].unread, 1);
+        assert!(app.select_context(second));
+        assert_eq!(app.contexts[&second].unread, 0);
+        assert_eq!(app.contexts[&second].messages.len(), 1);
+        assert_eq!(app.context_order, vec![first, second]);
+    }
+
+    #[test]
+    fn messages_only_increment_unread_for_inactive_contexts() {
+        let active = SpaceId::Flock(starling::protocol::FlockId::random());
+        let inactive = SpaceId::Flock(starling::protocol::FlockId::random());
+        let author = iroh::SecretKey::generate().public();
+        let message = ChatMessageView {
+            event_hash: [2; 32],
+            sender: author,
+            author: "Wren".into(),
+            body: "hello".into(),
+            ts: 0,
+        };
+        let mut app = App::default();
+        app.insert_context(context(active, "Active", "active-invite", None));
+        app.insert_context(context(inactive, "Inactive", "inactive-invite", None));
+
+        append_message(&mut app, active, message.clone());
+        append_message(&mut app, inactive, message);
+
+        assert_eq!(app.contexts[&active].unread, 0);
+        assert_eq!(app.contexts[&inactive].unread, 1);
+    }
+
+    #[test]
+    fn roost_channel_uses_parent_base_invite_not_internal_route() {
+        let roost = RoostId::random();
+        let parent = SpaceId::RoostChannel {
+            roost,
+            channel: starling::protocol::ChannelId::random(),
+        };
+        let channel = SpaceId::RoostChannel {
+            roost,
+            channel: starling::protocol::ChannelId::random(),
+        };
+        let mut app = App::default();
+        app.insert_context(context(parent, "Roost", "public-roost-invite", None));
+        app.insert_context(context(channel, "general", "roost/general", Some(roost)));
+        app.select_context(channel);
+
+        assert_eq!(app.active_base_invite(), Some("public-roost-invite"));
+        assert_ne!(app.active_base_invite(), Some("roost/general"));
+    }
+
+    #[test]
+    fn status_notice_expires_at_its_deadline() {
+        let now = Instant::now();
+        let mut app = App::default();
+        app.show_status_notice("Invite copied", now);
+
+        assert_eq!(app.visible_status_notice(now), Some("Invite copied"));
+        assert!(!app.expire_status_notice(now + NOTICE_DURATION - Duration::from_millis(1)));
+        assert!(app.expire_status_notice(now + NOTICE_DURATION));
+        assert_eq!(app.visible_status_notice(now + NOTICE_DURATION), None);
+        assert_eq!(app.status_notice_expires_at, None);
     }
 
     #[test]
@@ -1044,5 +1516,83 @@ mod tests {
         assert_eq!(hex_to_color("#102030"), Some(Color::Rgb(16, 32, 48)));
         assert_eq!(hex_to_color(""), None);
         assert_eq!(hex_to_color("#GGGGGG"), None);
+    }
+
+    #[test]
+    fn presence_leases_are_isolated_by_space() {
+        let now = tokio::time::Instant::now();
+        let member = iroh::SecretKey::generate().public();
+        let first = starling::protocol::SpaceId::Flock(starling::protocol::FlockId::random());
+        let second = starling::protocol::SpaceId::Flock(starling::protocol::FlockId::random());
+        let mut presence = ScopedPresence::default();
+        presence.context_mut(first).apply_verified_lease(
+            member,
+            LiveLease {
+                deadline: now + Duration::from_secs(30),
+                sequence: 1,
+            },
+            now,
+        );
+        presence.context_mut(second).apply_verified_lease(
+            member,
+            LiveLease {
+                deadline: now + Duration::from_secs(60),
+                sequence: 1,
+            },
+            now,
+        );
+        presence
+            .context_mut(first)
+            .expire(now + Duration::from_secs(31));
+        assert!(
+            presence.contexts[&first]
+                .live_ids(now + Duration::from_secs(31))
+                .is_empty()
+        );
+        assert_eq!(presence.contexts[&second].live_ids(now), vec![member]);
+        presence.neighbor_down(member);
+        assert_eq!(presence.contexts[&second].live_ids(now), vec![member]);
+    }
+
+    #[test]
+    fn expiry_removes_live_state_but_retains_profiles_and_order() {
+        let now = tokio::time::Instant::now();
+        let first = iroh::SecretKey::generate().public();
+        let second = iroh::SecretKey::generate().public();
+        let mut presence = ContextPresence::default();
+        presence.set_profile(MemberProfile {
+            endpoint: first,
+            name: "Wren".into(),
+            pronouns: "they/them".into(),
+        });
+        presence.apply_verified_lease(
+            first,
+            LiveLease {
+                deadline: now + Duration::from_secs(1),
+                sequence: 1,
+            },
+            now,
+        );
+        presence.apply_verified_lease(
+            second,
+            LiveLease {
+                deadline: now + Duration::from_secs(10),
+                sequence: 1,
+            },
+            now,
+        );
+        assert_eq!(presence.live_ids(now), vec![first, second]);
+        presence.expire(now + Duration::from_secs(2));
+        assert_eq!(
+            presence.live_ids(now + Duration::from_secs(2)),
+            vec![second]
+        );
+        assert_eq!(
+            presence
+                .members
+                .get(&first)
+                .map(|profile| profile.name.as_str()),
+            Some("Wren")
+        );
     }
 }

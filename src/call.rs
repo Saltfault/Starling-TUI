@@ -76,6 +76,268 @@ pub async fn handle_incoming(
     Ok(())
 }
 
+// ===========================================================================
+// V1: per-peer media session
+// ===========================================================================
+//
+// V1 keeps a single [`MediaSession`] per active call. Each remote peer gets
+// its own Opus decoder so packets from different peers can be decoded
+// independently and then mixed into a single output buffer for playback.
+// Signalling (invite/accept/leave) uses [`starling::call::SignedCallSignalV1`]
+// over the V1 ALPNs; the session itself only owns the decode/mix pipeline and
+// the task lifecycle.
+
+#[cfg(feature = "audio")]
+pub mod v1 {
+    pub use starling::call::{VIDEO_V1_ALPN, VOICE_V1_ALPN};
+
+    #[cfg(test)]
+    use crate::opus_ffi::{Channels, Decoder};
+    #[cfg(test)]
+    use iroh::EndpointId;
+    #[cfg(test)]
+    use std::collections::HashMap;
+    #[cfg(test)]
+    use tokio::task::JoinHandle;
+    #[cfg(test)]
+    use tokio_util::sync::CancellationToken;
+
+    #[cfg(test)]
+    pub const SAMPLE_RATE: u32 = 48_000;
+    #[cfg(test)]
+    pub const FRAME_SIZE: usize = 960;
+    #[cfg(test)]
+    pub const MONO_FRAME_SAMPLES: usize = FRAME_SIZE;
+
+    #[cfg(test)]
+    pub struct MediaSession {
+        pub decoders: HashMap<EndpointId, Decoder>,
+        pub cancel: CancellationToken,
+        pub tasks: Vec<JoinHandle<()>>,
+    }
+
+    #[cfg(test)]
+    #[derive(Debug)]
+    pub struct DecoderError(pub crate::opus_ffi::Error);
+
+    #[cfg(test)]
+    impl std::fmt::Display for DecoderError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "opus decoder error: {}", self.0)
+        }
+    }
+
+    #[cfg(test)]
+    impl std::error::Error for DecoderError {}
+
+    #[cfg(test)]
+    impl From<crate::opus_ffi::Error> for DecoderError {
+        fn from(error: crate::opus_ffi::Error) -> Self {
+            Self(error)
+        }
+    }
+
+    #[cfg(test)]
+    impl Default for MediaSession {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    #[cfg(test)]
+    impl MediaSession {
+        /// Create an empty session with a fresh cancellation token.
+        pub fn new() -> Self {
+            Self {
+                decoders: HashMap::new(),
+                cancel: CancellationToken::new(),
+                tasks: Vec::new(),
+            }
+        }
+
+        /// Ensure a decoder exists for `peer`, creating one if needed.
+        fn ensure_decoder(&mut self, peer: EndpointId) -> Result<(), DecoderError> {
+            use std::collections::hash_map::Entry;
+            if let Entry::Vacant(e) = self.decoders.entry(peer) {
+                let decoder = Decoder::new(SAMPLE_RATE, Channels::Mono)?;
+                e.insert(decoder);
+            }
+            Ok(())
+        }
+
+        /// Decode a single Opus packet from `peer` into `output`.
+        ///
+        /// `output` must hold at least [`MONO_FRAME_SAMPLES`] samples; the
+        /// returned `usize` is the decoded sample count *per channel* as
+        /// reported by the decoder. If `decode_fec` is true the decoder will
+        /// attempt forward error correction (useful when a packet was lost).
+        pub fn decode(
+            &mut self,
+            peer: EndpointId,
+            packet: &[u8],
+            output: &mut [f32],
+            decode_fec: bool,
+        ) -> Result<usize, DecoderError> {
+            self.ensure_decoder(peer)?;
+            // Take the decoder out of the map for the &mut call, then put it
+            // back. The borrow checker can't see through the HashMap lookup
+            // while we hold a mutable borrow of `self`.
+            let mut decoder = self
+                .decoders
+                .remove(&peer)
+                .expect("decoder was just ensured");
+            let result = decoder.decode_float(packet, output, decode_fec);
+            self.decoders.insert(peer, decoder);
+            result.map_err(DecoderError)
+        }
+
+        /// Register a task spawned for this session so it can be awaited on
+        /// leave.
+        pub fn track(&mut self, handle: JoinHandle<()>) {
+            self.tasks.push(handle);
+        }
+
+        /// Leave the call: cancel every tracked task and wait for them to
+        /// finish. Consumes the session.
+        pub async fn leave(self) {
+            self.cancel.cancel();
+            for task in self.tasks {
+                // Errors here mean the task already panicked/cancelled; leave
+                // is best-effort teardown so we don't surface them.
+                let _ = task.await;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn mix(inputs: &[&[f32]], out: &mut [f32]) {
+        for sample in out.iter_mut() {
+            *sample = 0.0;
+        }
+        for input in inputs {
+            let n = input.len().min(out.len());
+            for (i, sample) in input[..n].iter().enumerate() {
+                out[i] += sample;
+            }
+        }
+        for sample in out.iter_mut() {
+            *sample = (*sample).clamp(-1.0, 1.0);
+        }
+    }
+}
+
+#[cfg(all(test, feature = "audio"))]
+mod v1_tests {
+    use super::v1::{MONO_FRAME_SAMPLES, MediaSession, mix};
+    use iroh::EndpointId;
+
+    fn peer(byte: u8) -> EndpointId {
+        // Derive a stable endpoint id for tests without touching the network.
+        let secret = iroh::SecretKey::from_bytes(&[byte; 32]);
+        secret.public()
+    }
+
+    #[test]
+    fn mix_sums_and_clips() {
+        let a = vec![0.6_f32; 4];
+        let b = vec![0.6_f32; 4];
+        let c = vec![-0.9_f32; 4];
+        let mut out = [0.0_f32; 4];
+        mix(&[&a, &b, &c], &mut out);
+        // 0.6 + 0.6 - 0.9 = 0.3 (within range; allow float rounding).
+        for s in out {
+            assert!((s - 0.3).abs() < 1e-5, "mixed sample {s} should be ~0.3");
+        }
+
+        let loud = vec![1.5_f32; 4];
+        let mut out = [0.0_f32; 4];
+        mix(&[&loud, &loud], &mut out);
+        // 1.5 + 1.5 = 3.0 -> clipped to 1.0
+        assert_eq!(out, [1.0, 1.0, 1.0, 1.0]);
+
+        let neg = vec![-1.5_f32; 4];
+        let mut out = [0.0_f32; 4];
+        mix(&[&neg, &neg], &mut out);
+        assert_eq!(out, [-1.0, -1.0, -1.0, -1.0]);
+    }
+
+    #[test]
+    fn mix_zeros_short_inputs() {
+        let short = vec![0.25_f32; 2];
+        let mut out = [0.0_f32; 4];
+        mix(&[&short], &mut out);
+        assert_eq!(out, [0.25, 0.25, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn mix_with_no_inputs_zeros_output() {
+        let mut out = [0.5_f32; 4];
+        mix(&[], &mut out);
+        assert_eq!(out, [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn media_session_starts_with_fresh_token_and_no_tasks() {
+        let session = MediaSession::new();
+        assert!(session.tasks.is_empty());
+        assert!(session.decoders.is_empty());
+        assert!(!session.cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn media_session_leave_cancels_and_awaits_tasks() {
+        let mut session = MediaSession::new();
+        let cancel = session.cancel.clone();
+        let task = tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                cancel.cancelled().await;
+            }
+        });
+        session.track(task);
+        assert!(!cancel.is_cancelled());
+        session.leave().await;
+        assert!(cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn media_session_leave_completes_even_if_task_loops() {
+        let mut session = MediaSession::new();
+        let cancel = session.cancel.clone();
+        let task = tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                // Loop until cancelled, simulating a long-lived media task.
+                loop {
+                    if cancel.is_cancelled() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                }
+            }
+        });
+        session.track(task);
+        session.leave().await;
+        assert!(cancel.is_cancelled());
+    }
+
+    #[test]
+    fn media_session_decode_creates_decoder_per_peer() {
+        let mut session = MediaSession::new();
+        let p1 = peer(1);
+        let p2 = peer(2);
+        let mut out = vec![0.0_f32; MONO_FRAME_SAMPLES];
+        // Decoding a bogus packet still inserts a decoder for the peer via
+        // `ensure_decoder`; the decode itself errors but the entry remains.
+        let _ = session.decode(p1, &[], &mut out, false);
+        assert!(session.decoders.contains_key(&p1));
+        assert!(!session.decoders.contains_key(&p2));
+        let _ = session.decode(p2, &[], &mut out, false);
+        assert!(session.decoders.contains_key(&p2));
+        assert_eq!(session.decoders.len(), 2);
+    }
+}
+
 /// Place an outgoing video call: connect to `peer` and stream JPEG frames
 /// over a unidirectional QUIC stream. Each frame is prefixed with a u32
 /// length (big-endian).
