@@ -177,6 +177,18 @@ fn merge_history(app: &mut App, flock: &str, old: Vec<starling::event::ChatMessa
 fn nav_items(app: &App) -> Vec<Selection> {
     let mut nav = Vec::new();
     for i in 0..app.flocks.len() {
+        // Skip legacy flocks that already have a typed context so
+        // keyboard navigation matches what the sidebar renders.
+        let Some(flock) = app.flocks.get(i) else {
+            continue;
+        };
+        if app
+            .contexts
+            .values()
+            .any(|ctx| ctx.secret.as_deref() == Some(flock.code.as_str()))
+        {
+            continue;
+        }
         nav.push(Selection::Flock(i));
     }
     for (ri, rv) in app.roosts.iter().enumerate() {
@@ -1303,8 +1315,24 @@ fn handle_mouse_click(
                 let space = app.context_order[idx];
                 app.select_context(space);
                 let _ = cmd_tx.send(Command::SelectContext(space));
-            } else if app.flocks.get(idx - typed_count).is_some() {
-                app.select(Selection::Flock(idx - typed_count));
+            } else {
+                // Skip legacy flocks that already have a typed context so
+                // the click target matches what draw_flocks actually renders.
+                let remaining = idx - typed_count;
+                if let Some(flock_idx) = app
+                    .flocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, fv)| {
+                        !app.contexts
+                            .values()
+                            .any(|ctx| ctx.secret.as_deref() == Some(fv.code.as_str()))
+                    })
+                    .nth(remaining)
+                    .map(|(i, _)| i)
+                {
+                    app.select(Selection::Flock(flock_idx));
+                }
             }
         }
     } else if col < 26 && row > roosts_top && row < roosts_top + roosts_h.saturating_sub(1) {

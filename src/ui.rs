@@ -683,8 +683,20 @@ impl App {
             .iter()
             .filter(|id| self.contexts.contains_key(id))
             .count();
+        // Don't count legacy flocks that already have a typed context entry
+        // so the scroll region matches what draw_flocks actually renders.
+        let deduped_flocks = self
+            .flocks
+            .iter()
+            .filter(|fv| {
+                !self
+                    .contexts
+                    .values()
+                    .any(|ctx| ctx.secret.as_deref() == Some(fv.code.as_str()))
+            })
+            .count();
         self.flock_scroll
-            .set_max((self.flocks.len() + context_count).saturating_sub(flock_viewport));
+            .set_max((deduped_flocks + context_count).saturating_sub(flock_viewport));
         self.roost_scroll
             .set_max(self.roost_row_count().saturating_sub(roost_viewport));
         self.bird_scroll
@@ -877,35 +889,48 @@ fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(unread, Style::new().fg(app.palette.selection)),
         ]))
     });
-    let legacy_items = app.flocks.iter().enumerate().map(|(i, fv)| {
-        let sel = app.selection == Selection::Flock(i);
-        let mark = if sel { "> " } else { "  " };
-        let unread = if fv.unread > 0 {
-            format!(" ({})", fv.unread)
-        } else {
-            String::new()
-        };
-        let dot = flock_dot(&fv.code, app.palette.accent);
-        let label = if fv.name.is_empty() {
-            &fv.code[..12.min(fv.code.len())]
-        } else {
-            fv.name.as_str()
-        };
-        ListItem::new(Line::from(vec![
-            Span::styled(mark, Style::new().fg(app.palette.selection)),
-            Span::styled("\u{25AE} ", Style::new().fg(dot)),
-            Span::styled(
-                label.to_string(),
-                Style::new().fg(if sel {
-                    app.palette.selection
-                } else {
-                    app.palette.text
-                }),
-            ),
-            Span::styled(unread, Style::new().fg(app.palette.selection)),
-        ]))
-    });
+    // Skip legacy flocks that already have a typed context entry so the
+    // same flock does not appear twice in the sidebar.
+    let typed_secrets: std::collections::HashSet<&str> = app
+        .contexts
+        .values()
+        .filter_map(|ctx| ctx.secret.as_deref())
+        .collect();
+    let legacy_items = app
+        .flocks
+        .iter()
+        .enumerate()
+        .filter(|(_, fv)| !typed_secrets.contains(fv.code.as_str()))
+        .map(|(i, fv)| {
+            let sel = app.selection == Selection::Flock(i);
+            let mark = if sel { "> " } else { "  " };
+            let unread = if fv.unread > 0 {
+                format!(" ({})", fv.unread)
+            } else {
+                String::new()
+            };
+            let dot = flock_dot(&fv.code, app.palette.accent);
+            let label = if fv.name.is_empty() {
+                &fv.code[..12.min(fv.code.len())]
+            } else {
+                fv.name.as_str()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(mark, Style::new().fg(app.palette.selection)),
+                Span::styled("\u{25AE} ", Style::new().fg(dot)),
+                Span::styled(
+                    label.to_string(),
+                    Style::new().fg(if sel {
+                        app.palette.selection
+                    } else {
+                        app.palette.text
+                    }),
+                ),
+                Span::styled(unread, Style::new().fg(app.palette.selection)),
+            ]))
+        });
     let items: Vec<ListItem> = typed_items.chain(legacy_items).collect();
+    let displayed_count = items.len();
     let items = window_list_items(items, app.flock_scroll);
 
     f.render_widget(
@@ -914,7 +939,7 @@ fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::new().fg(app.palette.border))
                 .title(Span::styled(
-                    format!(" flocks ({}) ", app.flocks.len() + app.contexts.len()),
+                    format!(" flocks ({}) ", displayed_count),
                     Style::new().fg(app.palette.accent),
                 )),
         ),
