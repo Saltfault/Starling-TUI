@@ -72,7 +72,10 @@ impl Playback {
             // decode_float returns samples per channel; multiply for the total.
             Ok(n) => {
                 let total = n * CHANNELS;
-                self.producer.push_slice(&pcm[..total]);
+                let pushed = self.producer.push_slice(&pcm[..total]);
+                if pushed < total {
+                    starling::logger::warn("playback: buffer full, dropping audio frame");
+                }
             }
             Err(e) => starling::logger::error(&format!("opus decode error: {e}")),
         }
