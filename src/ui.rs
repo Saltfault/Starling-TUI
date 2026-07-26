@@ -625,7 +625,6 @@ impl App {
         }
     }
 
-    #[allow(dead_code)]
     pub fn selected_peer_id(&self) -> Option<EndpointId> {
         self.peers.get(self.selected_peer).copied()
     }

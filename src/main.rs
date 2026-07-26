@@ -255,10 +255,17 @@ async fn main() -> anyhow::Result<()> {
     } else if state_path.exists() {
         match persistence::load_public(&state_path) {
             Ok(saved) => {
-                for descriptor in saved.contexts {
+                for descriptor in &saved.contexts {
+                    // Contexts that carry a join secret will be re-created
+                    // properly when the auto-rejoin fires JoinedFlock.
+                    // Inserting them now would produce a stale Restoring
+                    // placeholder that duplicates the real entry.
+                    if descriptor.secret.is_some() {
+                        continue;
+                    }
                     app.insert_context(ui::ContextView {
                         id: descriptor.space,
-                        title: descriptor.label,
+                        title: descriptor.label.clone(),
                         roost: match descriptor.space {
                             starling::protocol::SpaceId::RoostChannel { roost, .. } => Some(roost),
                             starling::protocol::SpaceId::Flock(_) => None,
@@ -267,7 +274,7 @@ async fn main() -> anyhow::Result<()> {
                         messages: Vec::new(),
                         unread: 0,
                         state: ui::ContextState::Restoring,
-                        secret: descriptor.secret,
+                        secret: descriptor.secret.clone(),
                     });
                 }
                 if let Some(active) = saved.active_space {
@@ -318,6 +325,16 @@ async fn main() -> anyhow::Result<()> {
     let restored_contexts = app.context_order.clone();
     let mut restore_codes: std::collections::HashMap<starling::protocol::SpaceId, String> =
         std::collections::HashMap::new();
+    // Build restore codes from the saved descriptors so that contexts
+    // which were skipped during restore (because they carry secrets) are
+    // still re-joined on startup.
+    if let Ok(saved) = persistence::load_public(&state_path) {
+        for descriptor in &saved.contexts {
+            if let Some(ref code) = descriptor.secret {
+                restore_codes.insert(descriptor.space, code.clone());
+            }
+        }
+    }
     for space in &restored_contexts {
         if let Some(context) = app.contexts.get(space)
             && let Some(ref code) = context.secret
@@ -435,16 +452,26 @@ async fn main() -> anyhow::Result<()> {
                             let space_id = starling::protocol::SpaceId::Flock(
                                 starling::protocol::FlockId(flock_code.secret),
                             );
-                            app.insert_context(ui::ContextView {
-                                id: space_id,
-                                title: flock_code.name.clone(),
-                                roost: None,
-                                base_invite_display: None,
-                                messages: Vec::new(),
-                                unread: 0,
-                                state: ui::ContextState::Ready,
-                                secret: Some(code.clone()),
-                            });
+                            // Update the existing context when an auto-rejoin
+                            // fires for a flock whose context was pre-loaded
+                            // from persistence (e.g. legacy contexts without
+                            // secrets that were inserted with Restoring state).
+                            if let Some(existing) = app.contexts.get_mut(&space_id) {
+                                existing.state = ui::ContextState::Ready;
+                                existing.title = flock_code.name.clone();
+                                existing.secret = Some(code.clone());
+                            } else {
+                                app.insert_context(ui::ContextView {
+                                    id: space_id,
+                                    title: flock_code.name.clone(),
+                                    roost: None,
+                                    base_invite_display: None,
+                                    messages: Vec::new(),
+                                    unread: 0,
+                                    state: ui::ContextState::Ready,
+                                    secret: Some(code.clone()),
+                                });
+                            }
                         }
                         app.flocks.push(FlockView {
                             code,
@@ -943,6 +970,19 @@ async fn main() -> anyhow::Result<()> {
                             app.menu_selection = 0;
                         }
 
+                        KeyCode::Up if !app.peers.is_empty() => {
+                            if app.selected_peer > 0 {
+                                app.selected_peer -= 1;
+                            } else {
+                                app.selected_peer = app.peers.len() - 1;
+                            }
+                            app.scroll_focus = ScrollPanel::Birds;
+                        }
+                        KeyCode::Down if !app.peers.is_empty() => {
+                            app.selected_peer = (app.selected_peer + 1) % app.peers.len();
+                            app.scroll_focus = ScrollPanel::Birds;
+                        }
+
                         KeyCode::Char('b')
                             if k.modifiers.contains(KeyModifiers::CONTROL)
                                 && app.my_perms.contains(starling::roost::perms::Perm::BAN) =>
@@ -1223,6 +1263,8 @@ fn handle_mouse_click(
                             } else {
                                 app.error_message = Some("Connecting call...".into());
                             }
+                        } else {
+                            app.error_message = Some("Select an online bird before calling".into());
                         }
                     }
                     #[cfg(feature = "audio")]
