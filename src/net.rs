@@ -341,6 +341,7 @@ fn advance_readiness(state: &SpaceReadiness) -> Option<SpaceReadiness> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     bootstrap: Option<String>,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
@@ -451,7 +452,7 @@ pub async fn run(
             },
         );
     }
-    builder
+    let _ = builder
         .accept(
             starling::sync::SYNC_ALPN,
             starling::sync::SyncProto {
@@ -743,11 +744,10 @@ pub async fn run(
                     let req = ModRequest::Ban(target);
                     let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
                     let _ = send.finish();
-                    if let Ok(bytes) = recv.read_to_end(1024).await {
-                        if let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
-                        {
-                            let _ = tx.send(AppEvent::Notice(reason));
-                        }
+                    if let Ok(bytes) = recv.read_to_end(1024).await
+                        && let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
+                    {
+                        let _ = tx.send(AppEvent::Notice(reason));
                     }
                 });
             }
@@ -765,11 +765,10 @@ pub async fn run(
                     let req = ModRequest::Kick(target);
                     let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
                     let _ = send.finish();
-                    if let Ok(bytes) = recv.read_to_end(1024).await {
-                        if let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
-                        {
-                            let _ = tx.send(AppEvent::Notice(reason));
-                        }
+                    if let Ok(bytes) = recv.read_to_end(1024).await
+                        && let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
+                    {
+                        let _ = tx.send(AppEvent::Notice(reason));
                     }
                 });
             }
