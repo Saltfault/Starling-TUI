@@ -413,6 +413,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     AppEvent::JoinedFlock { code, name } => {
+                        app.joining = None;
                         if app.flocks.iter().any(|flock| flock.code == code) {
                             continue;
                         }
@@ -429,6 +430,7 @@ async fn main() -> anyhow::Result<()> {
                         channels,
                         perms,
                     } => {
+                        app.joining = None;
                         if app.roosts.iter().any(|roost| roost.code == code) {
                             continue;
                         }
@@ -525,6 +527,7 @@ async fn main() -> anyhow::Result<()> {
                     AppEvent::Error(error) => {
                         starling::logger::warn(&error);
                         app.error_message = Some(error);
+                        app.joining = None;
                     }
                     #[cfg(feature = "audio")]
                     AppEvent::VoiceFrame(bytes) => {
@@ -620,9 +623,11 @@ async fn main() -> anyhow::Result<()> {
                                             app.error_message =
                                                 Some(format!("Failed to delete data: {error}"));
                                         } else {
+                                            app.skip_save_on_exit = true;
                                             app.quit_requested = true;
                                         }
                                     } else {
+                                        app.skip_save_on_exit = true;
                                         app.quit_requested = true;
                                     }
                                 } else {
@@ -714,7 +719,8 @@ async fn main() -> anyhow::Result<()> {
                             KeyCode::Enter => match sanitize::invite(app.join_input.trim()) {
                                 Ok(code) => {
                                     let since = app.newest_ts(&code).unwrap_or(0);
-                                    let _ = cmd_tx.send(Command::Join { code, since });
+                                    let _ = cmd_tx.send(Command::Join { code: code.clone(), since });
+                                    app.joining = Some(code);
                                     app.join_input.clear();
                                     app.show_join_room = false;
                                     app.error_message = None;
@@ -956,11 +962,13 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    if let Err(error) = save_context_state(&state_path, &app) {
-        starling::logger::warn(&format!("could not save contexts: {error}"));
-    }
-    if let Err(error) = persistence::save_protected(&protected_path, &protected_state) {
-        starling::logger::warn(&format!("could not save credentials: {error}"));
+    if !app.skip_save_on_exit {
+        if let Err(error) = save_context_state(&state_path, &app) {
+            starling::logger::warn(&format!("could not save contexts: {error}"));
+        }
+        if let Err(error) = persistence::save_protected(&protected_path, &protected_state) {
+            starling::logger::warn(&format!("could not save credentials: {error}"));
+        }
     }
     disable_raw_mode()?;
     execute!(

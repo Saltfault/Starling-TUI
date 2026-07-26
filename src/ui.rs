@@ -296,6 +296,8 @@ pub struct App {
     pub show_create_room: bool,
     pub show_join_room: bool,
     pub join_input: String,
+    #[allow(dead_code)]
+    pub joining: Option<String>,
     pub show_edit_flock: bool,
     pub edit_flock_code: String,
     pub edit_flock_name: String,
@@ -323,6 +325,7 @@ pub struct App {
     pub bird_scroll: SpringScroll,
     pub scroll_focus: ScrollPanel,
     pub quit_requested: bool,
+    pub skip_save_on_exit: bool,
     pub error_message: Option<String>,
     pub palette: Palette,
     pub contexts: HashMap<SpaceId, ContextView>,
@@ -357,6 +360,7 @@ impl Default for App {
             show_create_room: false,
             show_join_room: false,
             join_input: String::new(),
+            joining: None,
             show_edit_flock: false,
             edit_flock_code: String::new(),
             edit_flock_name: String::new(),
@@ -377,6 +381,7 @@ impl Default for App {
             bird_scroll: SpringScroll::default(),
             scroll_focus: ScrollPanel::Flocks,
             quit_requested: false,
+            skip_save_on_exit: false,
             error_message: None,
             palette: Palette::default(),
             contexts: HashMap::new(),
@@ -824,6 +829,14 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(format!(" {code}")).style(Style::new().fg(app.palette.dim)),
             header[1],
         );
+    }
+    if let Some(ref code) = app.joining {
+        let line = Line::from(vec![
+            Span::raw(" Joining "),
+            Span::styled(code.as_str(), Style::new().fg(app.palette.accent)),
+            Span::raw("..."),
+        ]);
+        f.render_widget(line, header[1]);
     }
 }
 
