@@ -21,7 +21,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: Saltfault/Starling
-          path: ../starling
+          path: starling
+      - name: Point patch to local starling
+        run: sed -i 's|path = "../starling"|path = "./starling"|' Cargo.toml
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -63,7 +65,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: Saltfault/Starling
-          path: ../starling
+          path: starling
+      - name: Point patch to local starling
+        run: sed -i 's|path = "../starling"|path = "./starling"|' Cargo.toml
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
