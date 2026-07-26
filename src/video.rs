@@ -20,7 +20,6 @@ use tokio::sync::{broadcast, mpsc};
 
 /// Convert an RGB image to terminal lines using half-block characters:
 /// each cell represents two vertical pixels (top = fg, bottom = bg).
-#[allow(dead_code)]
 pub fn frame_to_lines(img: &RgbImage, cols: u16, rows: u16) -> Vec<Line<'static>> {
     let small = image::imageops::resize(img, cols as u32, (rows * 2) as u32, FilterType::Triangle);
     (0..rows)
@@ -62,6 +61,7 @@ impl Drop for CameraHandle {
 /// Start the webcam on a background thread, sending JPEG frames to `tx`.
 #[cfg(feature = "video")]
 pub fn start_camera(
+    camera_index: u32,
     tx: broadcast::Sender<Vec<u8>>,
     evt_tx: mpsc::UnboundedSender<crate::event::AppEvent>,
 ) -> anyhow::Result<CameraHandle> {
@@ -71,7 +71,7 @@ pub fn start_camera(
     let thread_stop = stop.clone();
     let thread = std::thread::Builder::new().spawn(move || {
         let mut cam = match Camera::new(
-            CameraIndex::Index(0),
+            CameraIndex::Index(camera_index),
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate),
         ) {
             Ok(c) => c,

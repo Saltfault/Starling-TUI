@@ -31,6 +31,7 @@ enum Phase {
     PronounsEntry,
     InputDevice,
     OutputDevice,
+    CameraDevice,
     ColorText,
     ColorBg,
     ColorBorder,
@@ -51,8 +52,11 @@ struct SetupApp {
     code_input: String,
     input_devices: Vec<String>,
     output_devices: Vec<String>,
+    camera_devices: Vec<String>,
+    camera_indices: Vec<u32>,
     selected_input: usize,
     selected_output: usize,
+    selected_camera: usize,
     missing_deps: Vec<String>,
     install_cmd: Option<String>,
     install_status: String,
@@ -132,6 +136,12 @@ impl SetupApp {
             .and_then(|d| output_devices.iter().position(|x| x == d))
             .unwrap_or(0);
 
+        let (camera_devices, camera_indices) = list_cameras();
+        let selected_camera = profile
+            .camera_index
+            .and_then(|i| camera_indices.iter().position(|&idx| idx == i))
+            .unwrap_or(0);
+
         let profile_clone = profile.clone();
         Self {
             mode,
@@ -141,8 +151,11 @@ impl SetupApp {
             code_input: String::new(),
             input_devices,
             output_devices,
+            camera_devices,
+            camera_indices,
             selected_input,
             selected_output,
+            selected_camera,
             profile,
             missing_deps,
             install_cmd,
@@ -154,7 +167,18 @@ impl SetupApp {
             author_color_input: profile_clone.author_color.clone(),
             selection_color_input: profile_clone.selection_color.clone(),
             dim_color_input: profile_clone.dim_color.clone(),
-            settings_focus: if mode == Mode::Settings { 2 } else { 0 },
+            settings_focus: if mode == Mode::Settings {
+                #[cfg(feature = "audio")]
+                {
+                    2
+                }
+                #[cfg(not(feature = "audio"))]
+                {
+                    11
+                }
+            } else {
+                0
+            },
             hex_error: String::new(),
         }
     }
@@ -235,6 +259,7 @@ impl SetupApp {
         let (selected, len) = match self.settings_focus {
             2 => (&mut self.selected_input, self.input_devices.len()),
             3 => (&mut self.selected_output, self.output_devices.len()),
+            11 => (&mut self.selected_camera, self.camera_devices.len()),
             _ => return,
         };
         if len > 0 {
@@ -246,7 +271,14 @@ impl SetupApp {
         if self.mode == Mode::Profile {
             (0, 1)
         } else {
-            (2, 10)
+            #[cfg(feature = "audio")]
+            {
+                (2, 11)
+            }
+            #[cfg(not(feature = "audio"))]
+            {
+                (4, 11)
+            }
         }
     }
 
@@ -274,6 +306,8 @@ impl SetupApp {
                 (self.selected_input > 0).then(|| self.input_devices[self.selected_input].clone());
             self.profile.output_device = (self.selected_output > 0)
                 .then(|| self.output_devices[self.selected_output].clone());
+            self.profile.camera_index =
+                (self.selected_camera > 0).then(|| self.camera_indices[self.selected_camera]);
             self.finish_colors();
         } else {
             self.profile.name = self.name_input.trim().to_string();
@@ -327,7 +361,13 @@ fn check_dependencies() -> Vec<String> {
                 missing.push("libpulse-dev (PulseAudio headers)".into());
             }
             #[cfg(feature = "video")]
-            let has_libclang = command_exists("libclang")
+            let has_libclang = std::env::var_os("LIBCLANG_PATH").is_some()
+                || std::process::Command::new("llvm-config")
+                    .arg("--libdir")
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                || command_exists("libclang")
                 || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libclang.so").exists()
                 || std::path::Path::new("/usr/lib/aarch64-linux-gnu/libclang.so").exists()
                 || std::fs::read_dir("/usr/lib/llvm-")
@@ -510,6 +550,31 @@ fn list_devices(is_input: bool) -> Vec<String> {
     names
 }
 
+#[cfg(feature = "video")]
+fn list_cameras() -> (Vec<String>, Vec<u32>) {
+    let mut names = vec!["Default Camera".to_string()];
+    let mut indices = vec![0u32];
+    if let Ok(devices) = nokhwa::query(nokhwa::utils::ApiBackend::Auto) {
+        for info in devices {
+            let idx = info.index().as_index().unwrap_or(indices.len() as u32);
+            let desc = info.description();
+            let name = if desc.is_empty() {
+                format!("Camera {}", idx + 1)
+            } else {
+                desc.to_string()
+            };
+            names.push(name);
+            indices.push(idx);
+        }
+    }
+    (names, indices)
+}
+
+#[cfg(not(feature = "video"))]
+fn list_cameras() -> (Vec<String>, Vec<u32>) {
+    (vec!["Default Camera".to_string()], vec![0u32])
+}
+
 pub fn run_setup(
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<Option<Profile>> {
@@ -560,6 +625,7 @@ fn editor_mouse_at_size(
             match row.checked_sub(field_y) {
                 Some(0) => Some(2),
                 Some(1) => Some(3),
+                Some(5) => Some(11),
                 _ => None,
             }
         } else if col >= right_x && col < popup_x + width {
@@ -574,7 +640,7 @@ fn editor_mouse_at_size(
     };
     if let Some(focus) = focus {
         app.settings_focus = focus;
-        if click && matches!(focus, 2 | 3) {
+        if click && matches!(focus, 2 | 3 | 11) {
             app.cycle_settings_device(1);
         }
     }
@@ -790,7 +856,7 @@ fn run_wizard(
                         } else {
                             Some(app.output_devices[app.selected_output].clone())
                         };
-                        app.phase = Phase::ColorText;
+                        app.phase = Phase::CameraDevice;
                     }
                     KeyCode::Up => {
                         if app.selected_output > 0 {
@@ -800,6 +866,26 @@ fn run_wizard(
                     KeyCode::Down => {
                         if app.selected_output + 1 < app.output_devices.len() {
                             app.selected_output += 1;
+                        }
+                    }
+                    KeyCode::Esc => return Ok(None),
+                    _ => {}
+                },
+
+                Phase::CameraDevice => match k.code {
+                    KeyCode::Enter => {
+                        app.profile.camera_index = (app.selected_camera > 0)
+                            .then(|| app.camera_indices[app.selected_camera]);
+                        app.phase = Phase::ColorText;
+                    }
+                    KeyCode::Up => {
+                        if app.selected_camera > 0 {
+                            app.selected_camera -= 1;
+                        }
+                    }
+                    KeyCode::Down => {
+                        if app.selected_camera + 1 < app.camera_devices.len() {
+                            app.selected_camera += 1;
                         }
                     }
                     KeyCode::Esc => return Ok(None),
@@ -913,6 +999,13 @@ fn draw(f: &mut Frame, app: &SetupApp) {
             &app.output_devices,
             app.selected_output,
         ),
+        Phase::CameraDevice => draw_device_list(
+            f,
+            inner,
+            "Camera (Webcam)",
+            &app.camera_devices,
+            app.selected_camera,
+        ),
         Phase::ColorText
         | Phase::ColorBg
         | Phase::ColorBorder
@@ -955,11 +1048,13 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &SetupApp) {
     let columns =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
 
+    #[cfg(feature = "audio")]
     let input = app
         .input_devices
         .get(app.selected_input)
         .cloned()
         .unwrap_or_else(|| "System Default".into());
+    #[cfg(feature = "audio")]
     let output = app
         .output_devices
         .get(app.selected_output)
@@ -983,17 +1078,39 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &SetupApp) {
             ),
         ]
     } else {
-        vec![
-            Line::styled(" Audio", Style::new().fg(Color::Cyan).bold()),
-            Line::raw(""),
-            settings_line(app.settings_focus == 2, "Input", input, None),
-            settings_line(app.settings_focus == 3, "Output", output, None),
-            Line::raw(""),
-            Line::styled(
-                " Click or Left/Right to change",
-                Style::new().fg(Color::DarkGray),
-            ),
-        ]
+        let camera = app
+            .camera_devices
+            .get(app.selected_camera)
+            .cloned()
+            .unwrap_or_else(|| "Default Camera".into());
+        let mut left_lines = Vec::new();
+        #[cfg(feature = "audio")]
+        {
+            left_lines.push(Line::styled(" Audio", Style::new().fg(Color::Cyan).bold()));
+            left_lines.push(Line::raw(""));
+            left_lines.push(settings_line(app.settings_focus == 2, "Input", input, None));
+            left_lines.push(settings_line(
+                app.settings_focus == 3,
+                "Output",
+                output,
+                None,
+            ));
+            left_lines.push(Line::raw(""));
+        }
+        left_lines.push(Line::styled(" Video", Style::new().fg(Color::Cyan).bold()));
+        left_lines.push(Line::raw(""));
+        left_lines.push(settings_line(
+            app.settings_focus == 11,
+            "Camera",
+            camera,
+            None,
+        ));
+        left_lines.push(Line::raw(""));
+        left_lines.push(Line::styled(
+            " Click or Left/Right to change",
+            Style::new().fg(Color::DarkGray),
+        ));
+        left_lines
     };
     let right = vec![
         Line::styled(" Theme", Style::new().fg(Color::Cyan).bold()),

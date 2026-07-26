@@ -60,23 +60,6 @@ impl SledHistory {
         }
         Ok(store)
     }
-
-    #[allow(dead_code)]
-    pub fn set_membership(
-        &self,
-        space: SpaceId,
-        membership: MembershipState,
-    ) -> anyhow::Result<()> {
-        ensure!(
-            membership_matches(space, &membership),
-            "membership scope does not match space"
-        );
-        self.memberships
-            .write()
-            .map_err(|_| anyhow::anyhow!("membership cache lock poisoned"))?
-            .insert(space, membership);
-        Ok(())
-    }
 }
 
 fn encode<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
@@ -110,15 +93,6 @@ fn encode_head(head: &HistoryHead) -> anyhow::Result<Vec<u8>> {
         frontier: head.frontier.clone(),
         event_count: head.event_count,
     })
-}
-
-fn membership_matches(space: SpaceId, membership: &MembershipState) -> bool {
-    use starling::membership::MembershipScopeId;
-    match (space, membership.scope()) {
-        (SpaceId::Flock(a), MembershipScopeId::Flock(b)) => a == b,
-        (SpaceId::RoostChannel { roost: a, .. }, MembershipScopeId::Roost(b)) => a == b,
-        _ => false,
-    }
 }
 
 impl TrustedStore for SledHistory {

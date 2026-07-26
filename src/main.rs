@@ -32,7 +32,7 @@ use event::{AppEvent, Command};
 use std::sync::Arc;
 #[allow(unused_imports)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::sync::mpsc;
 use ui::{App, FlockView, MENU_ITEMS, RoostView, ScrollPanel, Selection, ToolbarAction};
 
@@ -127,10 +127,10 @@ fn open_create_room(app: &mut App) {
     app.show_create_room = true;
 }
 
-fn open_edit_flock(app: &mut App) {
+fn open_edit_flock(app: &mut App) -> bool {
     let Some(code) = app.active_code().map(str::to_owned) else {
         app.error_message = Some("Select a flock to edit".into());
-        return;
+        return false;
     };
     app.edit_flock_code = code;
     app.edit_flock_name = app
@@ -140,6 +140,7 @@ fn open_edit_flock(app: &mut App) {
         .map(|f| f.name.clone())
         .unwrap_or_default();
     app.show_edit_flock = true;
+    true
 }
 
 fn merge_history(app: &mut App, flock: &str, old: Vec<starling::event::ChatMessage>) {
@@ -300,10 +301,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let name = profile.name.clone();
-    #[allow(unused)]
+    #[cfg(feature = "audio")]
     let input_device = profile.input_device.clone();
-    #[allow(unused)]
+    #[cfg(feature = "audio")]
     let output_device = profile.output_device.clone();
+    #[allow(unused)]
+    let camera_index = profile.camera_index;
     apply_profile(&mut app, &profile);
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
@@ -320,6 +323,7 @@ async fn main() -> anyhow::Result<()> {
         my_node_id,
         name,
         input_device,
+        camera_index,
     ));
     if !restored_contexts.is_empty() {
         let _ = cmd_tx.send(Command::RestoreContexts(restored_contexts));
@@ -336,585 +340,619 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut last_frame = Instant::now();
+    let mut quit_sent = false;
     loop {
-        if net_task.is_finished() {
-            match (&mut net_task).await {
-                Ok(Ok(())) if app.quit_requested => break,
-                Ok(Ok(())) => anyhow::bail!("network task stopped unexpectedly"),
-                Ok(Err(error)) => return Err(error.context("network task failed")),
-                Err(error) => {
-                    return Err(anyhow::Error::new(error).context("network task panicked"));
-                }
-            }
-        }
-        let now = Instant::now();
-        let dt = now.duration_since(last_frame).as_secs_f32().min(0.1);
-        last_frame = now;
-        let (_, flock_h, _, roost_h, bird_h) = panel_geometry(crossterm::terminal::size()?.1);
-        app.update_scroll_bounds(
-            flock_h.saturating_sub(2) as usize,
-            roost_h.saturating_sub(2) as usize,
-            bird_h.saturating_sub(2) as usize,
-        );
-        app.advance_scroll(dt);
-        app.expire_status_notice(Instant::now());
-        term.draw(|f| ui::draw(f, &app))?;
-
-        while let Ok(ev) = evt_rx.try_recv() {
-            match ev {
-                AppEvent::ContextStateChanged { space, state } => {
-                    if let Some(context) = app.contexts.get_mut(&space) {
-                        context.state = state;
-                    }
-                }
-                AppEvent::Message {
-                    flock,
-                    msg,
-                    private,
-                } => {
-                    let is_current = app.active_code().is_some_and(|code| code == flock);
-                    if let Some(fv) =
-                        app.flocks
-                            .iter_mut()
-                            .find(|fv| fv.code == flock)
-                            .or_else(|| {
-                                app.roosts
-                                    .iter_mut()
-                                    .flat_map(|roost| roost.channels.iter_mut())
-                                    .find(|channel| channel.code == flock)
-                            })
-                    {
-                        fv.messages.push(ui::MessageView { msg, private });
-                        if !is_current {
-                            fv.unread += 1;
+        tokio::select! {
+                result = &mut net_task => {
+                    match result {
+                        Ok(Ok(())) if app.quit_requested => break,
+                        Ok(Ok(())) => anyhow::bail!("network task stopped unexpectedly"),
+                        Ok(Err(error)) => return Err(error.context("network task failed")),
+                        Err(error) => {
+                            return Err(anyhow::Error::new(error).context("network task panicked"));
                         }
                     }
-                    for roost in &mut app.roosts {
-                        roost.unread = roost.channels.iter().map(|channel| channel.unread).sum();
-                    }
                 }
-                AppEvent::DmKey { endpoint, dm_pk } => {
-                    // Only Phase 9 profile announcements ever produce this
-                    // event, and the receive loop already authenticated the
-                    // announcement's envelope, so `endpoint` is a verified
-                    // author, not a claimed id. Cache for `/chirp`.
-                    if app.peer_dm_keys.get(&endpoint) != Some(&dm_pk) {
-                        app.peer_dm_keys.insert(endpoint, dm_pk);
+                _ = std::future::ready(()) => {
+            let now = Instant::now();
+            let dt = now.duration_since(last_frame).as_secs_f32().min(0.1);
+            last_frame = now;
+            let (_, flock_h, _, roost_h, bird_h) = panel_geometry(crossterm::terminal::size()?.1);
+            app.update_scroll_bounds(
+                flock_h.saturating_sub(2) as usize,
+                roost_h.saturating_sub(2) as usize,
+                bird_h.saturating_sub(2) as usize,
+            );
+            app.advance_scroll(dt);
+            app.expire_status_notice(Instant::now());
+            for ctx in app.presence.contexts.values_mut() {
+                ctx.expire(tokio::time::Instant::now());
+            }
+            term.draw(|f| ui::draw(f, &app))?;
+
+            while let Ok(ev) = evt_rx.try_recv() {
+                match ev {
+                    AppEvent::ContextStateChanged { space, state } => {
+                        if let Some(context) = app.contexts.get_mut(&space) {
+                            context.state = state;
+                        }
                     }
-                }
-                AppEvent::JoinedFlock { code, name } => {
-                    if app.flocks.iter().any(|flock| flock.code == code) {
-                        continue;
+                    AppEvent::Message {
+                        flock,
+                        msg,
+                        private,
+                    } => {
+                        let is_current = app.active_code().is_some_and(|code| code == flock);
+                        if let Some(fv) =
+                            app.flocks
+                                .iter_mut()
+                                .find(|fv| fv.code == flock)
+                                .or_else(|| {
+                                    app.roosts
+                                        .iter_mut()
+                                        .flat_map(|roost| roost.channels.iter_mut())
+                                        .find(|channel| channel.code == flock)
+                                })
+                        {
+                            fv.messages.push(ui::MessageView { msg, private });
+                            if !is_current {
+                                fv.unread += 1;
+                            }
+                        }
+                        for roost in &mut app.roosts {
+                            roost.unread = roost.channels.iter().map(|channel| channel.unread).sum();
+                        }
                     }
-                    app.flocks.push(FlockView {
+                    AppEvent::DmKey { endpoint, dm_pk } => {
+                        // Only Phase 9 profile announcements ever produce this
+                        // event, and the receive loop already authenticated the
+                        // announcement's envelope, so `endpoint` is a verified
+                        // author, not a claimed id. Cache for `/chirp`.
+                        if app.peer_dm_keys.get(&endpoint) != Some(&dm_pk) {
+                            app.peer_dm_keys.insert(endpoint, dm_pk);
+                        }
+                    }
+                    AppEvent::JoinedFlock { code, name } => {
+                        if app.flocks.iter().any(|flock| flock.code == code) {
+                            continue;
+                        }
+                        app.flocks.push(FlockView {
+                            code,
+                            name,
+                            messages: vec![],
+                            unread: 0,
+                        });
+                    }
+                    AppEvent::JoinedRoost {
                         code,
                         name,
-                        messages: vec![],
-                        unread: 0,
-                    });
-                }
-                AppEvent::JoinedRoost {
-                    code,
-                    name,
-                    channels,
-                    perms,
-                } => {
-                    if app.roosts.iter().any(|roost| roost.code == code) {
-                        continue;
-                    }
-                    app.apply_roost_perms(&perms);
-                    app.roosts.push(RoostView {
-                        code: code.clone(),
-                        name,
-                        channels: channels
-                            .into_iter()
-                            .map(|channel| FlockView {
-                                code: format!("{code}/{channel}"),
-                                name: channel,
-                                messages: vec![],
-                                unread: 0,
-                            })
-                            .collect(),
-                        unread: 0,
-                    });
-                }
-                AppEvent::RoostUpdate {
-                    code,
-                    name,
-                    channels,
-                    perms,
-                } => {
-                    app.apply_roost_perms(&perms);
-                    if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
-                        rv.name = name;
-                        let mut previous: std::collections::HashMap<_, _> = rv
-                            .channels
-                            .drain(..)
-                            .map(|channel| (channel.name.clone(), channel))
-                            .collect();
-                        rv.channels = channels
-                            .into_iter()
-                            .map(|channel| {
-                                previous.remove(&channel).unwrap_or_else(|| FlockView {
+                        channels,
+                        perms,
+                    } => {
+                        if app.roosts.iter().any(|roost| roost.code == code) {
+                            continue;
+                        }
+                        app.apply_roost_perms(&perms);
+                        app.roosts.push(RoostView {
+                            code: code.clone(),
+                            name,
+                            channels: channels
+                                .into_iter()
+                                .map(|channel| FlockView {
                                     code: format!("{code}/{channel}"),
                                     name: channel,
                                     messages: vec![],
                                     unread: 0,
                                 })
-                            })
-                            .collect();
-                        rv.unread = rv.channels.iter().map(|channel| channel.unread).sum();
+                                .collect(),
+                            unread: 0,
+                        });
                     }
-                }
-                AppEvent::PeerConnected(id) => {
-                    if !app.peers.contains(&id) {
-                        app.peers.push(id);
+                    AppEvent::RoostUpdate {
+                        code,
+                        name,
+                        channels,
+                        perms,
+                    } => {
+                        app.apply_roost_perms(&perms);
+                        if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
+                            rv.name = name;
+                            let mut previous: std::collections::HashMap<_, _> = rv
+                                .channels
+                                .drain(..)
+                                .map(|channel| (channel.name.clone(), channel))
+                                .collect();
+                            rv.channels = channels
+                                .into_iter()
+                                .map(|channel| {
+                                    previous.remove(&channel).unwrap_or_else(|| FlockView {
+                                        code: format!("{code}/{channel}"),
+                                        name: channel,
+                                        messages: vec![],
+                                        unread: 0,
+                                    })
+                                })
+                                .collect();
+                            rv.unread = rv.channels.iter().map(|channel| channel.unread).sum();
+                        }
                     }
-                }
-                AppEvent::PeerConnectivityHintDown(_id) => {
-                    // Signed presence leases, not transport neighbors, determine liveness.
-                }
+                    AppEvent::PeerConnected(id) => {
+                        if !app.peers.contains(&id) {
+                            app.peers.push(id);
+                        }
+                    }
+                    AppEvent::PeerConnectivityHintDown(id) => {
+                        // Signed presence leases, not transport neighbors, determine liveness.
+                        app.presence.neighbor_down(id);
+                    }
 
-                AppEvent::PeerNamed(id, name) => {
-                    if id != my_node_id && !app.peers.contains(&id) {
-                        app.peers.push(id);
+                    AppEvent::PeerNamed(id, name) => {
+                        if id != my_node_id && !app.peers.contains(&id) {
+                            app.peers.push(id);
+                        }
+                        app.peer_names.insert(id, name.clone());
+                        // Track profile for presence display across all contexts.
+                        for ctx in app.presence.contexts.values_mut() {
+                            ctx.set_profile(ui::MemberProfile {
+                                endpoint: id,
+                                name: name.clone(),
+                                pronouns: String::new(),
+                            });
+                        }
                     }
-                    app.peer_names.insert(id, name);
-                }
-                AppEvent::PeerStatus(id, s) => {
-                    if id != my_node_id && !app.peers.contains(&id) {
-                        app.peers.push(id);
+                    AppEvent::PeerStatus(id, s) => {
+                        if id != my_node_id && !app.peers.contains(&id) {
+                            app.peers.push(id);
+                        }
+                        app.peer_status.insert(id, s);
                     }
-                    app.peer_status.insert(id, s);
-                }
-                AppEvent::PresenceLease(_lease) => {
-                    // V1 membership-backed spaces project verified leases into scoped UI state.
-                    // V0 views fail closed because they do not yet carry MembershipState.
-                }
-                AppEvent::Ticket(node_id) => {
-                    app.node_id = Some(node_id);
-                }
-                AppEvent::Error(error) => {
-                    starling::logger::warn(&error);
-                    app.error_message = Some(error);
-                }
-                #[cfg(feature = "audio")]
-                AppEvent::VoiceFrame(bytes) => {
-                    if let Some(p) = &mut playback {
-                        p.push_opus(&bytes);
+                    AppEvent::PresenceLease(lease) => {
+                        let remaining_ms =
+                            (lease.body.expiry_unix_ms - chrono::Utc::now().timestamp_millis()).max(0);
+                        let remaining = std::time::Duration::from_millis(remaining_ms as u64);
+                        let live_lease = ui::LiveLease {
+                            deadline: starling::presence::lease_deadline(remaining),
+                            sequence: lease.body.sequence,
+                        };
+                        let now = tokio::time::Instant::now();
+                        app.presence
+                            .context_mut(lease.body.space)
+                            .apply_verified_lease(lease.body.endpoint, live_lease, now);
                     }
-                }
-                #[cfg(feature = "audio")]
-                AppEvent::CallStarted(peer) => {
-                    if !app.peers.contains(&peer) {
-                        app.peers.push(peer);
+                    AppEvent::Ticket(node_id) => {
+                        app.node_id = Some(node_id);
                     }
-                    app.in_call = true;
-                    app.error_message = None;
-                }
-                #[cfg(feature = "audio")]
-                AppEvent::CallEnded(_peer) => {
-                    app.in_call = false;
-                }
-                #[cfg(feature = "video")]
-                AppEvent::LocalVideoFrame(jpeg) => {
-                    if let Ok(img) = image::load_from_memory(&jpeg) {
-                        app.local_video_frame = Some(img.to_rgb8());
+                    AppEvent::Error(error) => {
+                        starling::logger::warn(&error);
+                        app.error_message = Some(error);
+                    }
+                    #[cfg(feature = "audio")]
+                    AppEvent::VoiceFrame(bytes) => {
+                        if let Some(p) = &mut playback {
+                            p.push_opus(&bytes);
+                        }
+                    }
+                    #[cfg(feature = "audio")]
+                    AppEvent::CallStarted(peer) => {
+                        if !app.peers.contains(&peer) {
+                            app.peers.push(peer);
+                        }
+                        app.in_call = true;
                         app.error_message = None;
                     }
-                }
-                #[cfg(feature = "video")]
-                AppEvent::LocalVideoFailed(error) => {
-                    app.show_video = false;
-                    app.local_video_frame = None;
-                    app.error_message = Some(error);
-                }
-                #[cfg(feature = "video")]
-                AppEvent::RemoteVideoFrame { peer, jpeg } => {
-                    if let Ok(img) = image::load_from_memory(&jpeg) {
-                        app.remote_video_frames.insert(peer, img.to_rgb8());
+                    #[cfg(feature = "audio")]
+                    AppEvent::CallEnded(_peer) => {
+                        app.in_call = false;
                     }
+                    #[cfg(feature = "video")]
+                    AppEvent::LocalVideoFrame(jpeg) => {
+                        if let Ok(img) = image::load_from_memory(&jpeg) {
+                            app.local_video_frame = Some(img.to_rgb8());
+                            app.error_message = None;
+                        }
+                    }
+                    #[cfg(feature = "video")]
+                    AppEvent::LocalVideoFailed(error) => {
+                        app.show_video = false;
+                        app.local_video_frame = None;
+                        app.error_message = Some(error);
+                    }
+                    #[cfg(feature = "video")]
+                    AppEvent::RemoteVideoFrame { peer, jpeg } => {
+                        if let Ok(img) = image::load_from_memory(&jpeg) {
+                            app.remote_video_frames.insert(peer, img.to_rgb8());
+                        }
+                    }
+                    #[cfg(feature = "video")]
+                    AppEvent::RemoteVideoStopped(peer) => {
+                        app.remote_video_frames.remove(&peer);
+                    }
+                    AppEvent::HistoryChunk { flock, messages } => {
+                        merge_history(&mut app, &flock, messages);
+                    }
+                    AppEvent::Notice(text) => app.show_status_notice(text, Instant::now()),
                 }
-                #[cfg(feature = "video")]
-                AppEvent::RemoteVideoStopped(peer) => {
-                    app.remote_video_frames.remove(&peer);
-                }
-                AppEvent::HistoryChunk { flock, messages } => {
-                    merge_history(&mut app, &flock, messages);
-                }
-                AppEvent::Notice(text) => app.show_status_notice(text, Instant::now()),
-            }
-        }
-
-        if ct_event::poll(std::time::Duration::from_millis(50))? {
-            let event = ct_event::read()?;
-
-            if let Event::Paste(raw) = &event {
-                if app.show_create_room {
-                    app.create_flock_name =
-                        sanitize::sanitize_name(&format!("{}{}", app.create_flock_name, raw));
-                    refresh_create_flock_code(&mut app);
-                } else if app.show_edit_flock {
-                    app.edit_flock_name =
-                        sanitize::sanitize_name(&format!("{}{}", app.edit_flock_name, raw));
-                } else if app.show_join_room {
-                    app.join_input = raw.trim().to_ascii_uppercase().to_string();
-                    app.error_message = None;
-                } else {
-                    app.input = sanitize::sanitize_message(&format!("{}{}", app.input, raw));
-                }
-                continue;
             }
 
-            if let Event::Key(k) = &event {
-                if k.kind != KeyEventKind::Press {
-                    continue;
-                }
-                if matches!(k.code, KeyCode::Char('c' | 'C'))
-                    && k.modifiers.contains(KeyModifiers::CONTROL)
-                    && k.modifiers.contains(KeyModifiers::SHIFT)
-                {
-                    copy_active_invite(&mut app, clipboard.as_mut(), Instant::now());
+            if ct_event::poll(std::time::Duration::from_millis(50))? {
+                let event = ct_event::read()?;
+
+                if let Event::Paste(raw) = &event {
+                    if app.show_create_room {
+                        app.create_flock_name =
+                            sanitize::sanitize_name(&format!("{}{}", app.create_flock_name, raw));
+                        refresh_create_flock_code(&mut app);
+                    } else if app.show_edit_flock {
+                        app.edit_flock_name =
+                            sanitize::sanitize_name(&format!("{}{}", app.edit_flock_name, raw));
+                    } else if app.show_join_room {
+                        let combined = format!("{}{}", app.join_input, raw);
+                        if let Some(code) = sanitize::sanitize_code(&combined) {
+                            app.join_input = code;
+                        }
+                        app.error_message = None;
+                    } else {
+                        app.input = sanitize::sanitize_message(&format!("{}{}", app.input, raw));
+                    }
                     continue;
                 }
 
-                if app.show_delete_confirm {
-                    match k.code {
-                        KeyCode::Enter => {
-                            if app.delete_confirm_input.trim() == "DELETE" {
-                                app.show_delete_confirm = false;
-                                let dir = starling::config::Profile::config_dir();
-                                if dir.exists() {
-                                    if let Err(error) = std::fs::remove_dir_all(&dir) {
-                                        app.error_message =
-                                            Some(format!("Failed to delete data: {error}"));
+                if let Event::Key(k) = &event {
+                    if k.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    if matches!(k.code, KeyCode::Char('c' | 'C'))
+                        && k.modifiers.contains(KeyModifiers::CONTROL)
+                        && k.modifiers.contains(KeyModifiers::SHIFT)
+                    {
+                        copy_active_invite(&mut app, clipboard.as_mut(), Instant::now());
+                        continue;
+                    }
+
+                    if app.show_delete_confirm {
+                        match k.code {
+                            KeyCode::Enter => {
+                                if app.delete_confirm_input.trim() == "DELETE" {
+                                    app.show_delete_confirm = false;
+                                    let dir = starling::config::Profile::config_dir();
+                                    if dir.exists() {
+                                        if let Err(error) = std::fs::remove_dir_all(&dir) {
+                                            app.error_message =
+                                                Some(format!("Failed to delete data: {error}"));
+                                        } else {
+                                            app.quit_requested = true;
+                                        }
                                     } else {
                                         app.quit_requested = true;
                                     }
                                 } else {
-                                    app.quit_requested = true;
+                                    app.error_message = Some("Type DELETE to confirm".into());
                                 }
-                            } else {
-                                app.error_message = Some("Type DELETE to confirm".into());
                             }
-                        }
-                        KeyCode::Char(c) => {
-                            app.delete_confirm_input.push(c);
-                        }
-                        KeyCode::Backspace => {
-                            app.delete_confirm_input.pop();
-                        }
-                        KeyCode::Esc => {
-                            app.show_delete_confirm = false;
-                            app.delete_confirm_input.clear();
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                if app.show_create_room {
-                    match k.code {
-                        KeyCode::Enter if app.create_flock_code.is_some() => {
-                            if let Some(code) = app.create_flock_code.take() {
-                                let _ = cmd_tx.send(Command::Join { code });
+                            KeyCode::Char(c) => {
+                                app.delete_confirm_input.push(c);
                             }
-                            app.create_flock_secret = None;
-                            app.show_create_room = false;
+                            KeyCode::Backspace => {
+                                app.delete_confirm_input.pop();
+                            }
+                            KeyCode::Esc => {
+                                app.show_delete_confirm = false;
+                                app.delete_confirm_input.clear();
+                            }
+                            _ => {}
                         }
-                        KeyCode::Char(c) => {
-                            app.create_flock_name =
-                                sanitize::sanitize_name(&format!("{}{}", app.create_flock_name, c));
-                            refresh_create_flock_code(&mut app);
-                        }
-                        KeyCode::Backspace => {
-                            app.create_flock_name.pop();
-                            refresh_create_flock_code(&mut app);
-                        }
-                        KeyCode::Esc => {
-                            app.create_flock_code = None;
-                            app.create_flock_secret = None;
-                            app.create_flock_name.clear();
-                            app.show_create_room = false;
-                        }
-                        _ => {}
+                        continue;
                     }
-                    continue;
-                }
 
-                if app.show_edit_flock {
+                    if app.show_create_room {
+                        match k.code {
+                            KeyCode::Enter if app.create_flock_code.is_some() => {
+                                if let Some(code) = app.create_flock_code.take() {
+                                    let since = app.newest_ts(&code).unwrap_or(0);
+                                    let _ = cmd_tx.send(Command::Join { code, since });
+                                }
+                                app.create_flock_secret = None;
+                                app.show_create_room = false;
+                            }
+                            KeyCode::Char(c) => {
+                                app.create_flock_name =
+                                    sanitize::sanitize_name(&format!("{}{}", app.create_flock_name, c));
+                                refresh_create_flock_code(&mut app);
+                            }
+                            KeyCode::Backspace => {
+                                app.create_flock_name.pop();
+                                refresh_create_flock_code(&mut app);
+                            }
+                            KeyCode::Esc => {
+                                app.create_flock_code = None;
+                                app.create_flock_secret = None;
+                                app.create_flock_name.clear();
+                                app.show_create_room = false;
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    if app.show_edit_flock {
+                        match k.code {
+                            KeyCode::Enter => {
+                                let name = std::mem::take(&mut app.edit_flock_name);
+                                let code = std::mem::take(&mut app.edit_flock_code);
+                                app.show_edit_flock = false;
+                                if !name.is_empty() {
+                                    let _ = cmd_tx.send(Command::UpdateProfile {
+                                        name: format!("flock:{code}:{name}"),
+                                        input_device: None,
+                                        camera_index: None,
+                                    });
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                app.edit_flock_name.pop();
+                            }
+                            KeyCode::Char(c) => {
+                                app.edit_flock_name =
+                                    sanitize::sanitize_name(&format!("{}{}", app.edit_flock_name, c));
+                            }
+                            KeyCode::Delete => {
+                                let code = std::mem::take(&mut app.edit_flock_code);
+                                app.show_edit_flock = false;
+                                app.flocks.retain(|f| f.code != code);
+                                let _ = cmd_tx.send(Command::Leave { code });
+                            }
+                            KeyCode::Esc => {
+                                app.show_edit_flock = false;
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    if app.show_join_room {
+                        match k.code {
+                            KeyCode::Enter => match sanitize::invite(app.join_input.trim()) {
+                                Ok(code) => {
+                                    let since = app.newest_ts(&code).unwrap_or(0);
+                                    let _ = cmd_tx.send(Command::Join { code, since });
+                                    app.join_input.clear();
+                                    app.show_join_room = false;
+                                    app.error_message = None;
+                                }
+                                Err(error) => {
+                                    app.error_message = Some(error.to_string());
+                                }
+                            },
+                            KeyCode::Char(c) => {
+                                let combined = format!("{}{}", app.join_input, c);
+                                if let Some(code) = sanitize::sanitize_code(&combined) {
+                                    app.join_input = code;
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                app.join_input.pop();
+                            }
+                            KeyCode::Esc => {
+                                app.show_join_room = false;
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    if app.show_menu {
+                        match k.code {
+                            KeyCode::Up => {
+                                app.menu_selection = app.menu_selection.saturating_sub(1);
+                            }
+                            KeyCode::Down => {
+                                app.menu_selection = (app.menu_selection + 1).min(MENU_ITEMS.len() - 1);
+                            }
+                            KeyCode::Enter => {
+                                activate_menu_item(&mut app, &cmd_tx, &mut term)?;
+                            }
+                            KeyCode::Esc => {
+                                app.show_menu = false;
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     match k.code {
-                        KeyCode::Enter => {
-                            let name = std::mem::take(&mut app.edit_flock_name);
-                            let code = std::mem::take(&mut app.edit_flock_code);
-                            app.show_edit_flock = false;
-                            if !name.is_empty() {
-                                let _ = cmd_tx.send(Command::UpdateProfile {
-                                    name: format!("flock:{code}:{name}"),
-                                    input_device: None,
+                        KeyCode::Enter if !app.input.is_empty() => {
+                            let text = std::mem::take(&mut app.input);
+                            if let Some(code) = text
+                                .strip_prefix("/join ")
+                                .or_else(|| text.strip_prefix("/join-roost "))
+                            {
+                                let code = code.trim();
+                                match sanitize::invite(code) {
+                                    Ok(normalized) => {
+                                        let since = app.newest_ts(&normalized).unwrap_or(0);
+                                        let _ = cmd_tx.send(Command::Join { code: normalized, since });
+                                    }
+                                    Err(error) => {
+                                        app.error_message = Some(format!("Invalid join code: {error}"));
+                                    }
+                                }
+                            } else if let Some(rest) = text.strip_prefix("/chirp ") {
+                                let rest = rest.trim();
+                                let (name, body) = match rest.split_once(' ') {
+                                    Some((name, body)) if !name.is_empty() => (name.trim(), body),
+                                    _ => {
+                                        app.error_message =
+                                            Some("Usage: /chirp <name> <message>".into());
+                                        continue;
+                                    }
+                                };
+                                // Match the destination by display name (set by an
+                                // authenticated profile announcement) and resolve it
+                                // to a verified endpoint. Without the endpoint's
+                                // published DM public key, we can't seal a chirp —
+                                // the recipient hasn't yet published a Phase 9
+                                // Profile with `dm_pk`.
+                                let to = app
+                                    .peer_names
+                                    .iter()
+                                    .find(|(_, peer_name)| peer_name.trim() == name)
+                                    .and_then(|(id, _)| app.peer_dm_keys.get(id).map(|_| *id));
+                                let to = match to {
+                                    Some(to) => to,
+                                    None => {
+                                        app.error_message =
+                                            Some(format!("{name:?} hasn't published a DM key yet"));
+                                        continue;
+                                    }
+                                };
+                                let Some(code) = app.active_code() else {
+                                    app.error_message = Some("Select a flock first".into());
+                                    continue;
+                                };
+                                let their_pk = match app.peer_dm_keys.get(&to).cloned() {
+                                    Some(pk) => pk,
+                                    None => continue,
+                                };
+                                let _ = cmd_tx.send(Command::SendChirp {
+                                    flock: code.to_string(),
+                                    to,
+                                    their_pk,
+                                    body: body.to_string(),
+                                });
+                            } else if let Some(_space) = app.active {
+                                // V1 typed-context send isn't wired yet — don't revoke, don't clear input.
+                                app.input = text;
+                                app.error_message = Some("V1 messaging isn't available yet".into());
+                            } else if let Some(code) = app.active_code() {
+                                let _ = cmd_tx.send(Command::SendText {
+                                    flock: code.to_string(),
+                                    body: text,
                                 });
                             }
                         }
-                        KeyCode::Backspace => {
-                            app.edit_flock_name.pop();
+
+                        KeyCode::Up if k.modifiers.contains(KeyModifiers::ALT) => {
+                            let nav = nav_items(&app);
+                            if let Some(pos) = nav.iter().position(|s| *s == app.selection)
+                                && pos > 0
+                            {
+                                app.select(nav[pos - 1]);
+                            }
                         }
+                        KeyCode::Down if k.modifiers.contains(KeyModifiers::ALT) => {
+                            let nav = nav_items(&app);
+                            if let Some(pos) = nav.iter().position(|s| *s == app.selection)
+                                && pos + 1 < nav.len()
+                            {
+                                app.select(nav[pos + 1]);
+                            }
+                        }
+                        KeyCode::Right if k.modifiers.contains(KeyModifiers::ALT) => {
+                            match app.selection {
+                                Selection::Flock(_) => {}
+                                Selection::Channel(ri, _) => {
+                                    app.toggle_expand(ri);
+                                }
+                            }
+                        }
+                        KeyCode::Left if k.modifiers.contains(KeyModifiers::ALT) => {
+                            match app.selection {
+                                Selection::Flock(_) => {}
+                                Selection::Channel(ri, _) => {
+                                    app.toggle_expand(ri);
+                                }
+                            }
+                        }
+
+                        KeyCode::PageUp => {
+                            page_scroll(&mut app, -1.0, crossterm::terminal::size()?.1);
+                        }
+                        KeyCode::PageDown => {
+                            page_scroll(&mut app, 1.0, crossterm::terminal::size()?.1);
+                        }
+
+                        KeyCode::Esc => {
+                            app.show_menu = true;
+                            app.menu_selection = 0;
+                        }
+
+                        KeyCode::Char('b')
+                            if k.modifiers.contains(KeyModifiers::CONTROL)
+                                && app.my_perms.contains(starling::roost::perms::Perm::BAN) =>
+                        {
+                            if let (Some(roost_id), Some(target)) =
+                                (app.selected_roost_endpoint_id(), app.selected_peer_id())
+                            {
+                                let _ = cmd_tx.send(Command::Ban {
+                                    roost: roost_id,
+                                    target,
+                                });
+                            } else {
+                                app.error_message = Some("Select a bird to ban".into());
+                            }
+                        }
+
+                        KeyCode::Char('k')
+                            if k.modifiers.contains(KeyModifiers::CONTROL)
+                                && app.my_perms.contains(starling::roost::perms::Perm::KICK) =>
+                        {
+                            if let (Some(roost_id), Some(target)) =
+                                (app.selected_roost_endpoint_id(), app.selected_peer_id())
+                            {
+                                let _ = cmd_tx.send(Command::Kick {
+                                    roost: roost_id,
+                                    target,
+                                });
+                            }
+                        }
+
                         KeyCode::Char(c) => {
-                            app.edit_flock_name =
-                                sanitize::sanitize_name(&format!("{}{}", app.edit_flock_name, c));
+                            app.input = sanitize::sanitize_message(&format!("{}{}", app.input, c));
                         }
-                        KeyCode::Delete => {
-                            let code = std::mem::take(&mut app.edit_flock_code);
-                            app.show_edit_flock = false;
-                            app.flocks.retain(|f| f.code != code);
-                            let _ = cmd_tx.send(Command::Leave { code });
-                        }
-                        KeyCode::Esc => {
-                            app.show_edit_flock = false;
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
 
-                if app.show_join_room {
-                    match k.code {
-                        KeyCode::Enter => match sanitize::invite(app.join_input.trim()) {
-                            Ok(code) => {
-                                let _ = cmd_tx.send(Command::Join { code });
-                                app.join_input.clear();
-                                app.show_join_room = false;
-                                app.error_message = None;
-                            }
-                            Err(error) => {
-                                app.error_message = Some(error.to_string());
-                            }
-                        },
-                        KeyCode::Char(c) => {
-                            let combined = format!("{}{}", app.join_input, c);
-                            if let Some(code) = sanitize::sanitize_code(&combined) {
-                                app.join_input = code;
-                            }
-                        }
                         KeyCode::Backspace => {
-                            app.join_input.pop();
+                            app.input.pop();
                         }
-                        KeyCode::Esc => {
-                            app.show_join_room = false;
-                        }
+
                         _ => {}
                     }
-                    continue;
-                }
-
-                if app.show_menu {
-                    match k.code {
-                        KeyCode::Up => {
-                            app.menu_selection = app.menu_selection.saturating_sub(1);
+                } else if let Event::Mouse(m) = event {
+                    if app.show_menu {
+                        let (term_w, term_h) = crossterm::terminal::size()?;
+                        update_menu_hover(&mut app, term_w, term_h, m.column, m.row);
+                    }
+                    match m.kind {
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            handle_mouse_click(
+                                &mut app,
+                                &cmd_tx,
+                                &muted_flag,
+                                clipboard.as_mut(),
+                                &mut term,
+                                m.column,
+                                m.row,
+                            )?;
                         }
-                        KeyCode::Down => {
-                            app.menu_selection = (app.menu_selection + 1).min(MENU_ITEMS.len() - 1);
+                        MouseEventKind::Moved => {}
+                        MouseEventKind::ScrollUp if !app.show_menu => {
+                            handle_mouse_scroll(&mut app, m.column, m.row, -3.0)?;
                         }
-                        KeyCode::Enter => {
-                            activate_menu_item(&mut app, &cmd_tx, &mut term)?;
+                        MouseEventKind::ScrollDown if !app.show_menu => {
+                            handle_mouse_scroll(&mut app, m.column, m.row, 3.0)?;
                         }
-                        KeyCode::Esc => {
-                            app.show_menu = false;
-                        }
+                        MouseEventKind::Down(MouseButton::Right)
+                        | MouseEventKind::Up(MouseButton::Right)
+                        | MouseEventKind::Drag(MouseButton::Right) => {}
                         _ => {}
                     }
-                    continue;
-                }
-
-                match k.code {
-                    KeyCode::Enter if !app.input.is_empty() => {
-                        let text = std::mem::take(&mut app.input);
-                        if let Some(code) = text
-                            .strip_prefix("/join ")
-                            .or_else(|| text.strip_prefix("/join-roost "))
-                        {
-                            let code = code.trim();
-                            match sanitize::invite(code) {
-                                Ok(normalized) => {
-                                    let _ = cmd_tx.send(Command::Join { code: normalized });
-                                }
-                                Err(error) => {
-                                    app.error_message = Some(format!("Invalid join code: {error}"));
-                                }
-                            }
-                        } else if let Some(rest) = text.strip_prefix("/chirp ") {
-                            let rest = rest.trim();
-                            let (name, body) = match rest.split_once(' ') {
-                                Some((name, body)) if !name.is_empty() => (name.trim(), body),
-                                _ => {
-                                    app.error_message =
-                                        Some("Usage: /chirp <name> <message>".into());
-                                    continue;
-                                }
-                            };
-                            // Match the destination by display name (set by an
-                            // authenticated profile announcement) and resolve it
-                            // to a verified endpoint. Without the endpoint's
-                            // published DM public key, we can't seal a chirp —
-                            // the recipient hasn't yet published a Phase 9
-                            // Profile with `dm_pk`.
-                            let to = app
-                                .peer_names
-                                .iter()
-                                .find(|(_, peer_name)| peer_name.trim() == name)
-                                .and_then(|(id, _)| app.peer_dm_keys.get(id).map(|_| *id));
-                            let to = match to {
-                                Some(to) => to,
-                                None => {
-                                    app.error_message =
-                                        Some(format!("{name:?} hasn't published a DM key yet"));
-                                    continue;
-                                }
-                            };
-                            let Some(code) = app.active_code() else {
-                                app.error_message = Some("Select a flock first".into());
-                                continue;
-                            };
-                            let their_pk = match app.peer_dm_keys.get(&to).cloned() {
-                                Some(pk) => pk,
-                                None => continue,
-                            };
-                            let _ = cmd_tx.send(Command::SendChirp {
-                                flock: code.to_string(),
-                                to,
-                                their_pk,
-                                body: body.to_string(),
-                            });
-                        } else if let Some(_space) = app.active {
-                            // V1 typed-context send isn't wired yet — don't revoke, don't clear input.
-                            app.input = text;
-                            app.error_message = Some("V1 messaging isn't available yet".into());
-                        } else if let Some(code) = app.active_code() {
-                            let _ = cmd_tx.send(Command::SendText {
-                                flock: code.to_string(),
-                                body: text,
-                            });
-                        }
-                    }
-
-                    KeyCode::Up if k.modifiers.contains(KeyModifiers::ALT) => {
-                        let nav = nav_items(&app);
-                        if let Some(pos) = nav.iter().position(|s| *s == app.selection)
-                            && pos > 0
-                        {
-                            app.select(nav[pos - 1]);
-                        }
-                    }
-                    KeyCode::Down if k.modifiers.contains(KeyModifiers::ALT) => {
-                        let nav = nav_items(&app);
-                        if let Some(pos) = nav.iter().position(|s| *s == app.selection)
-                            && pos + 1 < nav.len()
-                        {
-                            app.select(nav[pos + 1]);
-                        }
-                    }
-                    KeyCode::Right if k.modifiers.contains(KeyModifiers::ALT) => {
-                        match app.selection {
-                            Selection::Flock(_) => {}
-                            Selection::Channel(ri, _) => {
-                                app.toggle_expand(ri);
-                            }
-                        }
-                    }
-                    KeyCode::Left if k.modifiers.contains(KeyModifiers::ALT) => {
-                        match app.selection {
-                            Selection::Flock(_) => {}
-                            Selection::Channel(ri, _) => {
-                                app.toggle_expand(ri);
-                            }
-                        }
-                    }
-
-                    KeyCode::PageUp => {
-                        page_scroll(&mut app, -1.0, crossterm::terminal::size()?.1);
-                    }
-                    KeyCode::PageDown => {
-                        page_scroll(&mut app, 1.0, crossterm::terminal::size()?.1);
-                    }
-
-                    KeyCode::Esc => {
-                        app.show_menu = true;
-                        app.menu_selection = 0;
-                    }
-
-                    KeyCode::Char('b')
-                        if k.modifiers.contains(KeyModifiers::CONTROL)
-                            && app.my_perms.contains(starling::roost::perms::Perm::BAN) =>
-                    {
-                        if let (Some(roost_id), Some(target)) =
-                            (app.selected_roost_endpoint_id(), app.selected_peer_id())
-                        {
-                            let _ = cmd_tx.send(Command::Ban {
-                                roost: roost_id,
-                                target,
-                            });
-                        }
-                    }
-
-                    KeyCode::Char('k')
-                        if k.modifiers.contains(KeyModifiers::CONTROL)
-                            && app.my_perms.contains(starling::roost::perms::Perm::KICK) =>
-                    {
-                        if let (Some(roost_id), Some(target)) =
-                            (app.selected_roost_endpoint_id(), app.selected_peer_id())
-                        {
-                            let _ = cmd_tx.send(Command::Kick {
-                                roost: roost_id,
-                                target,
-                            });
-                        }
-                    }
-
-                    KeyCode::Char(c) => {
-                        app.input = sanitize::sanitize_message(&format!("{}{}", app.input, c));
-                    }
-
-                    KeyCode::Backspace => {
-                        app.input.pop();
-                    }
-
-                    _ => {}
-                }
-            } else if let Event::Mouse(m) = event {
-                if app.show_menu {
-                    let (term_w, term_h) = crossterm::terminal::size()?;
-                    update_menu_hover(&mut app, term_w, term_h, m.column, m.row);
-                }
-                match m.kind {
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        handle_mouse_click(
-                            &mut app,
-                            &cmd_tx,
-                            &muted_flag,
-                            clipboard.as_mut(),
-                            &mut term,
-                            m.column,
-                            m.row,
-                        )?;
-                    }
-                    MouseEventKind::Moved => {}
-                    MouseEventKind::ScrollUp if !app.show_menu => {
-                        handle_mouse_scroll(&mut app, m.column, m.row, -3.0)?;
-                    }
-                    MouseEventKind::ScrollDown if !app.show_menu => {
-                        handle_mouse_scroll(&mut app, m.column, m.row, 3.0)?;
-                    }
-                    MouseEventKind::Down(MouseButton::Right)
-                    | MouseEventKind::Up(MouseButton::Right)
-                    | MouseEventKind::Drag(MouseButton::Right) => {}
-                    _ => {}
                 }
             }
-        }
 
-        if app.quit_requested {
-            let _ = cmd_tx.send(Command::Quit);
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            break;
+                if app.quit_requested && !quit_sent {
+                    let _ = cmd_tx.send(Command::Quit);
+                    quit_sent = true;
+                }
+            }
         }
     }
 
@@ -1115,8 +1153,6 @@ fn handle_mouse_click(
                             } else {
                                 app.error_message = Some("Connecting call...".into());
                             }
-                        } else {
-                            app.error_message = Some("Select an online bird before calling".into());
                         }
                     }
                     #[cfg(feature = "audio")]
@@ -1255,6 +1291,7 @@ fn open_editor(
             let _ = cmd_tx.send(Command::UpdateProfile {
                 name: profile.name,
                 input_device: profile.input_device,
+                camera_index: profile.camera_index,
             });
         }
     } else {
@@ -1281,7 +1318,9 @@ fn activate_menu_item(
             open_create_room(app);
         }
         1 => {
-            open_edit_flock(app);
+            if !open_edit_flock(app) {
+                app.show_menu = true;
+            }
         }
         2 => {
             app.join_input.clear();

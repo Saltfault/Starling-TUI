@@ -1,6 +1,7 @@
 use iroh::EndpointId;
 
 pub enum Command {
+    #[allow(dead_code)]
     SendContextText {
         space: starling::protocol::SpaceId,
         body: String,
@@ -25,10 +26,12 @@ pub enum Command {
     },
     Join {
         code: String,
+        since: i64,
     },
     UpdateProfile {
         name: String,
         input_device: Option<String>,
+        camera_index: Option<u32>,
     },
     #[cfg(feature = "audio")]
     StartCall(EndpointId),
@@ -85,7 +88,6 @@ pub enum AppEvent {
         channels: Vec<String>,
         perms: starling::roost::perms::PermState,
     },
-    #[allow(dead_code)]
     RoostUpdate {
         code: String,
         name: String,

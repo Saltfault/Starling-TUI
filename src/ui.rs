@@ -54,7 +54,6 @@ pub struct MemberProfile {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct LiveLease {
     pub deadline: tokio::time::Instant,
     pub sequence: u64,
@@ -68,14 +67,12 @@ impl LiveLease {
 
 /// Presence for one selected space. Member profiles survive lease expiry.
 #[derive(Default)]
-#[allow(dead_code)]
 pub struct ContextPresence {
     pub members: HashMap<EndpointId, MemberProfile>,
     pub live: HashMap<EndpointId, LiveLease>,
     ordered_ids: Vec<EndpointId>,
 }
 
-#[allow(dead_code)]
 impl ContextPresence {
     pub fn set_profile(&mut self, profile: MemberProfile) {
         self.members.insert(profile.endpoint, profile);
@@ -121,12 +118,10 @@ impl ContextPresence {
 }
 
 #[derive(Default)]
-#[allow(dead_code)]
 pub struct ScopedPresence {
     pub contexts: HashMap<starling::protocol::SpaceId, ContextPresence>,
 }
 
-#[allow(dead_code)]
 impl ScopedPresence {
     pub fn context_mut(&mut self, space: starling::protocol::SpaceId) -> &mut ContextPresence {
         self.contexts.entry(space).or_default()
@@ -189,6 +184,7 @@ pub enum ContextState {
     AwaitingKeys,
     Reconciling,
     Ready,
+    #[allow(dead_code)]
     Revoked,
     NeedsUserAction,
 }
@@ -332,7 +328,7 @@ pub struct App {
     pub contexts: HashMap<SpaceId, ContextView>,
     pub context_order: Vec<SpaceId>,
     pub active: Option<SpaceId>,
-    pub presence: HashMap<SpaceId, ContextPresence>,
+    pub presence: ScopedPresence,
     pub status_notice: Option<String>,
     pub status_notice_expires_at: Option<Instant>,
     /// The client's own effective permissions in the active roost. UX-only; the
@@ -386,7 +382,7 @@ impl Default for App {
             contexts: HashMap::new(),
             context_order: Vec::new(),
             active: None,
-            presence: HashMap::new(),
+            presence: ScopedPresence::default(),
             status_notice: None,
             status_notice_expires_at: None,
             my_perms: starling::roost::perms::Perm::empty(),
@@ -429,6 +425,32 @@ impl App {
     pub fn active_context_messages(&self) -> Option<&[ChatMessageView]> {
         self.active_context()
             .map(|context| context.messages.as_slice())
+    }
+
+    /// Returns the newest message timestamp for a flock or roost channel
+    /// identified by its display code. For roost codes (without a channel
+    /// suffix), returns the max across all channels in that roost.
+    pub fn newest_ts(&self, code: &str) -> Option<i64> {
+        for flock in &self.flocks {
+            if flock.code == code {
+                return flock.messages.iter().map(|m| m.msg.ts).max();
+            }
+        }
+        for roost in &self.roosts {
+            if roost.code == code {
+                return roost
+                    .channels
+                    .iter()
+                    .flat_map(|ch| ch.messages.iter().map(|m| m.msg.ts))
+                    .max();
+            }
+            for channel in &roost.channels {
+                if channel.code == code {
+                    return channel.messages.iter().map(|m| m.msg.ts).max();
+                }
+            }
+        }
+        None
     }
 
     pub fn active_base_invite(&self) -> Option<&str> {
@@ -497,7 +519,11 @@ impl App {
     }
 
     pub fn live_member_count(&self, space: starling::protocol::SpaceId) -> usize {
-        self.presence.get(&space).map(|p| p.live.len()).unwrap_or(0)
+        self.presence
+            .contexts
+            .get(&space)
+            .map(|p| p.live_ids(tokio::time::Instant::now()).len())
+            .unwrap_or(0)
     }
 
     pub fn active_code(&self) -> Option<&str> {
@@ -515,6 +541,9 @@ impl App {
     }
 
     pub fn active_messages(&self) -> &[MessageView] {
+        if self.active_context().is_some() {
+            return &[];
+        }
         match self.selection {
             Selection::Flock(i) => self
                 .flocks
@@ -1144,10 +1173,20 @@ fn status_text(app: &App) -> String {
 
 fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
     let mut spans = Vec::new();
-    for (_action, label, _x, _w) in toolbar_buttons(app) {
-        spans.push(Span::styled("[", Style::new().fg(app.palette.accent)));
-        spans.push(Span::styled(label, Style::new().fg(app.palette.accent)));
-        spans.push(Span::styled("]", Style::new().fg(app.palette.accent)));
+    for (action, label, _x, _w) in toolbar_buttons(app) {
+        let enabled = match action {
+            #[cfg(feature = "audio")]
+            ToolbarAction::Call => app.in_call || app.selected_peer_id().is_some(),
+            _ => true,
+        };
+        let color = if enabled {
+            app.palette.accent
+        } else {
+            app.palette.dim
+        };
+        spans.push(Span::styled("[", Style::new().fg(color)));
+        spans.push(Span::styled(label, Style::new().fg(color)));
+        spans.push(Span::styled("]", Style::new().fg(color)));
         spans.push(Span::raw(" "));
     }
     let status = app

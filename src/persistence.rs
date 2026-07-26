@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
 const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -36,12 +36,6 @@ pub struct Credential {
 #[zeroize(drop)]
 pub struct ProtectedSecretState {
     pub credentials: Vec<Credential>,
-}
-
-/// Owns bytes returned by a keyring and erases them when dropped.
-#[allow(dead_code)]
-pub fn keyring_bytes(bytes: Vec<u8>) -> Zeroizing<Vec<u8>> {
-    Zeroizing::new(bytes)
 }
 
 pub fn load_public(path: impl AsRef<Path>) -> anyhow::Result<PublicState> {
@@ -326,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_state_round_trips_and_keyring_bytes_zeroize() {
+    fn protected_state_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secrets.bin");
         let secret = ProtectedSecretState {
@@ -337,7 +331,6 @@ mod tests {
         };
         save_protected(&path, &secret).unwrap();
         assert_eq!(load_protected(&path).unwrap(), secret);
-        assert_eq!(keyring_bytes(vec![1, 2, 3]).as_slice(), &[1, 2, 3]);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

@@ -34,7 +34,10 @@ pub async fn place_call(
     let conn = endpoint
         .connect(EndpointAddr::from(peer), VOICE_ALPN)
         .await?;
-    let _ = evt_tx.send(AppEvent::CallStarted(peer));
+    let mut started = false;
+    let connect_deadline = tokio::time::sleep(std::time::Duration::from_secs(10));
+    tokio::pin!(connect_deadline);
+
     loop {
         tokio::select! {
             frame = frame_rx.recv() => {
@@ -43,11 +46,20 @@ pub async fn place_call(
             }
             datagram = conn.read_datagram() => {
                 let Ok(bytes) = datagram else { break };
+                if !started {
+                    started = true;
+                    let _ = evt_tx.send(AppEvent::CallStarted(peer));
+                }
                 let _ = evt_tx.send(AppEvent::VoiceFrame(bytes.to_vec()));
+            }
+            _ = &mut connect_deadline, if !started => {
+                break;
             }
         }
     }
-    let _ = evt_tx.send(AppEvent::CallEnded(peer));
+    if started {
+        let _ = evt_tx.send(AppEvent::CallEnded(peer));
+    }
     Ok(())
 }
 
@@ -59,7 +71,11 @@ pub async fn handle_incoming(
     evt_tx: mpsc::UnboundedSender<AppEvent>,
 ) -> anyhow::Result<()> {
     let peer = conn.remote_id();
-    let _ = evt_tx.send(AppEvent::CallStarted(peer));
+
+    let mut started = false;
+    let connect_deadline = tokio::time::sleep(std::time::Duration::from_secs(10));
+    tokio::pin!(connect_deadline);
+
     loop {
         tokio::select! {
             frame = frame_rx.recv() => {
@@ -68,11 +84,20 @@ pub async fn handle_incoming(
             }
             datagram = conn.read_datagram() => {
                 let Ok(bytes) = datagram else { break };
+                if !started {
+                    started = true;
+                    let _ = evt_tx.send(AppEvent::CallStarted(peer));
+                }
                 let _ = evt_tx.send(AppEvent::VoiceFrame(bytes.to_vec()));
+            }
+            _ = &mut connect_deadline, if !started => {
+                break;
             }
         }
     }
-    let _ = evt_tx.send(AppEvent::CallEnded(peer));
+    if started {
+        let _ = evt_tx.send(AppEvent::CallEnded(peer));
+    }
     Ok(())
 }
 

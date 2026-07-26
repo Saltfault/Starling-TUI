@@ -89,7 +89,7 @@ impl HistoryProto {
         }
         anyhow::ensure!(
             (self.authorize)(remote_id, &request.space),
-            "remote is not authorized for history space"
+            "history request denied: authorizer always rejects (membership persistence not yet implemented; see SRV-9/10)"
         );
 
         request.max_bytes = request
@@ -349,11 +349,16 @@ pub async fn run(
     my_node_id: EndpointId,
     mut name: String,
     input_device: Option<String>,
+    camera_index: Option<u32>,
 ) -> anyhow::Result<()> {
     #[cfg(feature = "audio")]
     let mut input_device = input_device;
     #[cfg(not(feature = "audio"))]
     let _ = (&muted, &input_device);
+    #[cfg(feature = "video")]
+    let mut camera_index = camera_index;
+    #[cfg(not(feature = "video"))]
+    let _ = &camera_index;
     let secret = starling::config::Profile::load_or_create_secret();
     // Phase 9: load a separate `crypto_box` DM keypair. It is kept distinct
     // from the ed25519 identity which is used only for signatures, so a
@@ -388,10 +393,14 @@ pub async fn run(
     let durable_history = crate::history_store::SledHistory::open(
         starling::config::Profile::config_dir().join("history-v1"),
     )?;
+    // Membership chains are not persisted by this client yet. Deny every
+    // history request until a real membership-backed authorizer is installed
+    // (mirrors SRV-9/10).
+    starling::logger::warn(
+        "history server authorizer: always denies — membership persistence not yet implemented",
+    );
     let history_proto = HistoryProto {
         store: durable_history,
-        // Membership chains are not persisted by this client yet. Deny every
-        // request until a real membership-backed authorizer is installed.
         authorize: Arc::new(|_, _| false),
         seen_challenges: Arc::new(Mutex::new(HashSet::new())),
     };
@@ -442,7 +451,7 @@ pub async fn run(
             },
         );
     }
-    let _router = builder
+    builder
         .accept(
             starling::sync::SYNC_ALPN,
             starling::sync::SyncProto {
@@ -458,13 +467,16 @@ pub async fn run(
         .spawn();
 
     let mut flocks: HashMap<String, FlockHandle> = HashMap::new();
+    let mut spaces: HashMap<starling::protocol::SpaceId, FlockHandle> = HashMap::new();
 
     if let Some(code) = bootstrap {
         join_by_code(
             &gossip,
             &endpoint,
             code,
+            0, // bootstrap: no app state to query newest_ts from
             &mut flocks,
+            &mut spaces,
             evt_tx.clone(),
             my_node_id,
             name.clone(),
@@ -490,11 +502,44 @@ pub async fn run(
         };
         match cmd {
             Command::SendContextText { space, body } => {
-                starling::logger::warn(&format!(
-                    "V1 send not yet implemented for context {space:?}: {} bytes",
-                    body.len()
-                ));
-                let _ = evt_tx.send(AppEvent::Notice("V1 messaging isn't available yet".into()));
+                if let Some(handle) = spaces.get(&space) {
+                    let msg = ChatMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        author: name.clone(),
+                        body,
+                        ts: chrono::Utc::now().timestamp_millis(),
+                    };
+                    starling::net::broadcast_payload(
+                        &handle.sender,
+                        &handle.crypto,
+                        &secret,
+                        &GossipPayload::Chat(msg.clone()),
+                    )
+                    .await?;
+                    let flock_label = match &space {
+                        starling::protocol::SpaceId::Flock(_) => format!("{space:?}"),
+                        starling::protocol::SpaceId::RoostChannel { roost, channel } => {
+                            let roost_code = starling::net::encode_roost_code(
+                                &iroh::EndpointId::from_bytes(&roost.0)
+                                    .ok()
+                                    .unwrap_or(my_node_id),
+                            );
+                            let channel_name = std::str::from_utf8(&channel.0)
+                                .unwrap_or("?")
+                                .trim_end_matches('\0');
+                            format!("{roost_code}/{channel_name}")
+                        }
+                    };
+                    let _ = evt_tx.send(AppEvent::Message {
+                        flock: flock_label,
+                        msg,
+                        private: false,
+                    });
+                } else {
+                    let _ = evt_tx.send(AppEvent::Notice(format!(
+                        "Context {space:?} is not connected — join the space first"
+                    )));
+                }
             }
             Command::SelectContext(space) => {
                 let _ = evt_tx.send(AppEvent::ContextStateChanged {
@@ -558,7 +603,7 @@ pub async fn run(
                     };
                     let my_dm_secret = crypto_box::SecretKey::from_bytes(dm_secret_bytes);
                     let plain = postcard::to_stdvec(&msg)?;
-                    let sealed = starling::crypto::seal_chirp(&my_dm_secret, &their_pk, &plain);
+                    let sealed = starling::crypto::seal_chirp(&my_dm_secret, &their_pk, &plain)?;
                     starling::net::broadcast_payload(
                         &h.sender,
                         &h.crypto,
@@ -574,12 +619,14 @@ pub async fn run(
                 }
             }
 
-            Command::Join { code } => {
+            Command::Join { code, since } => {
                 if let Err(error) = join_by_code(
                     &gossip,
                     &endpoint,
                     code,
+                    since,
                     &mut flocks,
+                    &mut spaces,
                     evt_tx.clone(),
                     my_node_id,
                     name.clone(),
@@ -596,6 +643,7 @@ pub async fn run(
             Command::UpdateProfile {
                 name: new_name,
                 input_device: new_input_device,
+                camera_index: new_camera_index,
             } => {
                 name = new_name;
                 #[cfg(feature = "audio")]
@@ -604,6 +652,12 @@ pub async fn run(
                 }
                 #[cfg(not(feature = "audio"))]
                 let _ = new_input_device;
+                #[cfg(feature = "video")]
+                {
+                    camera_index = new_camera_index;
+                }
+                #[cfg(not(feature = "video"))]
+                let _ = new_camera_index;
             }
 
             #[cfg(feature = "audio")]
@@ -642,7 +696,11 @@ pub async fn run(
                 _camera = None;
                 _video_tx = None;
                 let (video_tx, _) = tokio::sync::broadcast::channel(2);
-                match crate::video::start_camera(video_tx.clone(), evt_tx.clone()) {
+                match crate::video::start_camera(
+                    camera_index.unwrap_or(0),
+                    video_tx.clone(),
+                    evt_tx.clone(),
+                ) {
                     Ok(camera) => {
                         _camera = Some(camera);
                         for peer in peers {
@@ -836,7 +894,9 @@ async fn join_by_code(
     gossip: &Gossip,
     endpoint: &Endpoint,
     code: String,
+    since: i64,
     flocks: &mut HashMap<String, FlockHandle>,
+    spaces: &mut HashMap<starling::protocol::SpaceId, FlockHandle>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
     name: String,
@@ -861,6 +921,7 @@ async fn join_by_code(
                 vec![flock.opener],
                 flock.secret,
                 flocks,
+                spaces,
                 evt_tx.clone(),
                 my_id,
                 flock.name,
@@ -874,7 +935,7 @@ async fn join_by_code(
                 let (ep, tx) = (endpoint.clone(), evt_tx.clone());
                 tokio::spawn(async move {
                     if let Err(error) =
-                        crate::sync::backfill(ep, flock.opener, code, 0, tx.clone()).await
+                        crate::sync::backfill(ep, flock.opener, code, since, tx.clone()).await
                     {
                         let _ =
                             tx.send(AppEvent::Error(format!("history backfill failed: {error}")));
@@ -890,8 +951,10 @@ async fn join_by_code(
                 gossip,
                 endpoint,
                 code,
+                since,
                 opener,
                 flocks,
+                spaces,
                 evt_tx,
                 my_id,
                 name,
@@ -911,6 +974,7 @@ async fn join_flock(
     boot: Vec<EndpointId>,
     flock_secret: [u8; 32],
     flocks: &mut HashMap<String, FlockHandle>,
+    _spaces: &mut HashMap<starling::protocol::SpaceId, FlockHandle>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
     flock_name: String,
@@ -1068,8 +1132,10 @@ async fn join_roost(
     gossip: &Gossip,
     endpoint: &Endpoint,
     code: String,
+    since: i64,
     opener: EndpointId,
     flocks: &mut HashMap<String, FlockHandle>,
+    spaces: &mut HashMap<starling::protocol::SpaceId, FlockHandle>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
     name: String,
@@ -1105,7 +1171,11 @@ async fn join_roost(
 
     let control_crypto = match welcome.control_secret {
         Some(secret) => FlockCrypto::from_secret(&secret),
-        None => FlockCrypto::from_room_code(&control_key),
+        None =>
+        {
+            #[allow(deprecated)]
+            FlockCrypto::from_room_code(&control_key)
+        }
     };
 
     let topic = starling::net::topic_for(&format!("starling/roost/{control_key}"));
@@ -1133,6 +1203,7 @@ async fn join_roost(
             *channel_secret,
             opener,
             flocks,
+            spaces,
             evt_tx.clone(),
             my_id,
             name.clone(),
@@ -1152,7 +1223,7 @@ async fn join_roost(
                 opener,
                 &roost_code,
                 &channel,
-                0,
+                since,
                 tx.clone(),
             )
             .await
@@ -1202,6 +1273,7 @@ async fn join_roost_channel(
     secret: [u8; 32],
     opener: EndpointId,
     flocks: &mut HashMap<String, FlockHandle>,
+    spaces: &mut HashMap<starling::protocol::SpaceId, FlockHandle>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
     name: String,
@@ -1215,7 +1287,6 @@ async fn join_roost_channel(
     }
 
     let topic = starling::net::topic_for(&format!("starling/roost/{code}"));
-    let crypto = FlockCrypto::from_secret(&secret);
     let (sender, mut receiver) = gossip.subscribe(topic, vec![opener]).await?.split();
     let rx_crypto = FlockCrypto::from_secret(&secret);
     let rx_code = code.clone();
@@ -1323,15 +1394,35 @@ async fn join_roost_channel(
         }
     });
 
-    flocks.insert(
-        code,
+    let flock_handle = FlockHandle {
+        sender: sender.clone(),
+        crypto: FlockCrypto::from_secret(&secret),
+        cancel: cancel.clone(),
+    };
+    flocks.insert(code.clone(), flock_handle);
+    // Track the deterministic SpaceId so V1 context sends can find this handle.
+    let space_id = starling::protocol::SpaceId::RoostChannel {
+        roost: starling::protocol::RoostId(*opener.as_bytes()),
+        channel: channel_id_from_name(channel),
+    };
+    spaces.insert(
+        space_id,
         FlockHandle {
             sender,
-            crypto,
+            crypto: FlockCrypto::from_secret(&secret),
             cancel,
         },
     );
     Ok(())
+}
+
+/// Derive a deterministic [`ChannelId`] from a channel name (mirrors the server).
+fn channel_id_from_name(name: &str) -> starling::protocol::ChannelId {
+    let mut id = [0u8; 16];
+    let bytes = name.as_bytes();
+    let len = bytes.len().min(16);
+    id[..len].copy_from_slice(&bytes[..len]);
+    starling::protocol::ChannelId(id)
 }
 
 #[cfg(test)]
