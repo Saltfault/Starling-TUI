@@ -16,6 +16,8 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ContextDescriptor {
     pub space: SpaceId,
     pub label: String,
+    #[serde(default)]
+    pub secret: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -245,6 +247,7 @@ mod tests {
             contexts: vec![ContextDescriptor {
                 space: SpaceId::Flock(FlockId([value; 32])),
                 label: format!("context-{value}"),
+                secret: None,
             }],
             active_space: Some(SpaceId::Flock(FlockId([value; 32]))),
         }

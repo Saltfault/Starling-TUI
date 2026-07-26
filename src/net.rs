@@ -344,6 +344,7 @@ fn advance_readiness(state: &SpaceReadiness) -> Option<SpaceReadiness> {
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     bootstrap: Option<String>,
+    restore_codes: HashMap<starling::protocol::SpaceId, String>,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     muted: Arc<AtomicBool>,
@@ -488,6 +489,31 @@ pub async fn run(
         .await?;
     }
 
+    // Rejoin saved contexts that have persisted join codes.
+    for (_space_id, code) in restore_codes {
+        let since = 0; // Saved contexts start from scratch (history backfill handles old messages).
+        if let Err(error) = join_by_code(
+            &gossip,
+            &endpoint,
+            code,
+            since,
+            &mut flocks,
+            &mut spaces,
+            evt_tx.clone(),
+            my_node_id,
+            name.clone(),
+            secret.clone(),
+            dm_secret_bytes,
+            my_dm_public_bytes.clone(),
+        )
+        .await
+        {
+            let _ = evt_tx.send(AppEvent::Error(format!(
+                "failed to rejoin saved context: {error}"
+            )));
+        }
+    }
+
     #[cfg(feature = "audio")]
     #[allow(unused)]
     let mut _mic_stream: Option<cpal::Stream> = None;
@@ -556,7 +582,7 @@ pub async fn run(
                 for space in spaces {
                     let _ = evt_tx.send(AppEvent::ContextStateChanged {
                         space,
-                        state: crate::ui::ContextState::AwaitingKeys,
+                        state: crate::ui::ContextState::Restoring,
                     });
                 }
             }
@@ -1416,7 +1442,7 @@ async fn join_roost_channel(
 }
 
 /// Derive a deterministic [`ChannelId`] from a channel name (mirrors the server).
-fn channel_id_from_name(name: &str) -> starling::protocol::ChannelId {
+pub(crate) fn channel_id_from_name(name: &str) -> starling::protocol::ChannelId {
     let mut id = [0u8; 16];
     let bytes = name.as_bytes();
     let len = bytes.len().min(16);

@@ -177,16 +177,18 @@ pub struct ContextView {
     pub messages: Vec<ChatMessageView>,
     pub unread: usize,
     pub state: ContextState,
+    pub secret: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum ContextState {
     AwaitingKeys,
     Reconciling,
     Ready,
-    #[allow(dead_code)]
     Revoked,
     NeedsUserAction,
+    Restoring,
 }
 
 pub const MENU_ITEMS: &[&str] = &[
@@ -1532,6 +1534,7 @@ mod tests {
             messages: Vec::new(),
             unread: 0,
             state: ContextState::Ready,
+            secret: None,
         }
     }
 

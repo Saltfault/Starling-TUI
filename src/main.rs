@@ -266,7 +266,8 @@ async fn main() -> anyhow::Result<()> {
                         base_invite_display: None,
                         messages: Vec::new(),
                         unread: 0,
-                        state: ui::ContextState::NeedsUserAction,
+                        state: ui::ContextState::Restoring,
+                        secret: descriptor.secret,
                     });
                 }
                 if let Some(active) = saved.active_space {
@@ -315,8 +316,18 @@ async fn main() -> anyhow::Result<()> {
     let muted_flag = Arc::new(AtomicBool::new(false));
 
     let restored_contexts = app.context_order.clone();
+    let mut restore_codes: std::collections::HashMap<starling::protocol::SpaceId, String> =
+        std::collections::HashMap::new();
+    for space in &restored_contexts {
+        if let Some(context) = app.contexts.get(space)
+            && let Some(ref code) = context.secret
+        {
+            restore_codes.insert(*space, code.clone());
+        }
+    }
     let mut net_task = tokio::spawn(net::run(
         bootstrap,
+        restore_codes,
         cmd_rx,
         evt_tx,
         muted_flag.clone(),
@@ -417,6 +428,24 @@ async fn main() -> anyhow::Result<()> {
                         if app.flocks.iter().any(|flock| flock.code == code) {
                             continue;
                         }
+                        // Also create a ContextView for persistence and V1 tracking.
+                        if let Some(typed) = starling::net::decode_typed_code(&code)
+                            && let Some(flock_code) = starling::net::decode_flock_code(&typed)
+                        {
+                            let space_id = starling::protocol::SpaceId::Flock(
+                                starling::protocol::FlockId(flock_code.secret),
+                            );
+                            app.insert_context(ui::ContextView {
+                                id: space_id,
+                                title: flock_code.name.clone(),
+                                roost: None,
+                                base_invite_display: None,
+                                messages: Vec::new(),
+                                unread: 0,
+                                state: ui::ContextState::Ready,
+                                secret: Some(code.clone()),
+                            });
+                        }
                         app.flocks.push(FlockView {
                             code,
                             name,
@@ -435,20 +464,52 @@ async fn main() -> anyhow::Result<()> {
                             continue;
                         }
                         app.apply_roost_perms(&perms);
+                        let roost_channels: Vec<(String, String)> = channels
+                            .into_iter()
+                            .map(|channel| {
+                                let channel_code = format!("{code}/{channel}");
+                                (channel, channel_code)
+                            })
+                            .collect();
                         app.roosts.push(RoostView {
                             code: code.clone(),
                             name,
-                            channels: channels
-                                .into_iter()
-                                .map(|channel| FlockView {
-                                    code: format!("{code}/{channel}"),
-                                    name: channel,
+                            channels: roost_channels
+                                .iter()
+                                .map(|(name, code)| FlockView {
+                                    code: code.clone(),
+                                    name: name.clone(),
                                     messages: vec![],
                                     unread: 0,
                                 })
                                 .collect(),
                             unread: 0,
                         });
+                        // Create ContextViews for each roost channel (V1 tracking).
+                        if let Some(typed) = starling::net::decode_typed_code(&code)
+                            && let Some(node_id) = starling::net::typed_code_node_id(&typed)
+                        {
+                            let roost_id = starling::protocol::RoostId(*node_id.as_bytes());
+                            for (channel_name, _) in &roost_channels {
+                                let space_id =
+                                    starling::protocol::SpaceId::RoostChannel {
+                                        roost: roost_id,
+                                        channel: crate::net::channel_id_from_name(
+                                            channel_name,
+                                        ),
+                                    };
+                                app.insert_context(ui::ContextView {
+                                    id: space_id,
+                                    title: format!("{code}/{channel_name}"),
+                                    roost: Some(roost_id),
+                                    base_invite_display: None,
+                                    messages: Vec::new(),
+                                    unread: 0,
+                                    state: ui::ContextState::Ready,
+                                    secret: Some(code.clone()),
+                                });
+                            }
+                        }
                     }
                     AppEvent::RoostUpdate {
                         code,
@@ -1037,6 +1098,7 @@ fn save_context_state(path: &std::path::Path, app: &App) -> anyhow::Result<()> {
                 .map(|context| persistence::ContextDescriptor {
                     space: *space,
                     label: context.title.clone(),
+                    secret: context.secret.clone(),
                 })
         })
         .collect();
