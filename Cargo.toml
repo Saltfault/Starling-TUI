@@ -18,6 +18,7 @@ arboard = "=3.6.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 cpal = { version = "0.18.1", optional = true }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
+crypto_box = { version = "0.9.1", features = ["chacha20"] }
 image = "0.25.10"
 iroh = "1.0.3"
 iroh-gossip = "0.101.0"
@@ -34,6 +35,9 @@ tokio = { version = "1.53.1", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
 zeroize = "1.8.2"
+
+[patch."https://forgejo.hearthhome.lol/Saltfault/Starling.git"]
+starling = { path = "../starling" }
 
 [dev-dependencies]
 tempfile = "3.23.0"

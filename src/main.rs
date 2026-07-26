@@ -157,14 +157,18 @@ fn merge_history(app: &mut App, flock: &str, old: Vec<starling::event::ChatMessa
         let known: std::collections::HashSet<_> = view
             .messages
             .iter()
-            .map(|message| message.id.clone())
+            .map(|message| message.msg.id.clone())
             .collect();
         let mut fresh: Vec<_> = old
             .into_iter()
             .filter(|message| !known.contains(&message.id))
+            .map(|message| ui::MessageView {
+                msg: message,
+                private: false,
+            })
             .collect();
         fresh.extend(std::mem::take(&mut view.messages));
-        fresh.sort_by_key(|message| message.ts);
+        fresh.sort_by_key(|message| message.msg.ts);
         view.messages = fresh;
     }
 }
@@ -216,19 +220,13 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let bootstrap = match first {
-        Some("join") => {
-            let Some(code) = args.get(2).map(|code| code.trim()) else {
-                eprintln!("Usage: starling-tui join <code>");
-                return Ok(());
-            };
-            if starling::net::decode_typed_code(code).is_none() {
-                eprintln!("Invalid or unsupported join code.");
-                return Ok(());
-            }
-            Some(code.to_ascii_uppercase())
+    let bootstrap = match parse_join_arg(&args) {
+        Ok(Some(code)) => Some(code),
+        Ok(None) => None,
+        Err(usage) => {
+            eprintln!("{usage}");
+            return Ok(());
         }
-        _ => None,
     };
 
     let profile = starling::config::Profile::load();
@@ -279,10 +277,14 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-    if protected_path.exists()
-        && let Err(error) = persistence::load_protected(&protected_path)
-    {
-        app.error_message = Some(format!("Could not load saved credentials: {error}"));
+    let mut protected_state = persistence::ProtectedSecretState::default();
+    if protected_path.exists() {
+        match persistence::load_protected(&protected_path) {
+            Ok(loaded) => protected_state = loaded,
+            Err(error) => {
+                app.error_message = Some(format!("Could not load saved credentials: {error}"));
+            }
+        }
     }
     let mut clipboard = clipboard::SystemClipboard::new().ok();
 
@@ -365,7 +367,11 @@ async fn main() -> anyhow::Result<()> {
                         context.state = state;
                     }
                 }
-                AppEvent::Message { flock, msg } => {
+                AppEvent::Message {
+                    flock,
+                    msg,
+                    private,
+                } => {
                     let is_current = app.active_code().is_some_and(|code| code == flock);
                     if let Some(fv) =
                         app.flocks
@@ -378,13 +384,22 @@ async fn main() -> anyhow::Result<()> {
                                     .find(|channel| channel.code == flock)
                             })
                     {
-                        fv.messages.push(msg);
+                        fv.messages.push(ui::MessageView { msg, private });
                         if !is_current {
                             fv.unread += 1;
                         }
                     }
                     for roost in &mut app.roosts {
                         roost.unread = roost.channels.iter().map(|channel| channel.unread).sum();
+                    }
+                }
+                AppEvent::DmKey { endpoint, dm_pk } => {
+                    // Only Phase 9 profile announcements ever produce this
+                    // event, and the receive loop already authenticated the
+                    // announcement's envelope, so `endpoint` is a verified
+                    // author, not a claimed id. Cache for `/chirp`.
+                    if app.peer_dm_keys.get(&endpoint) != Some(&dm_pk) {
+                        app.peer_dm_keys.insert(endpoint, dm_pk);
                     }
                 }
                 AppEvent::JoinedFlock { code, name } => {
@@ -402,10 +417,12 @@ async fn main() -> anyhow::Result<()> {
                     code,
                     name,
                     channels,
+                    perms,
                 } => {
                     if app.roosts.iter().any(|roost| roost.code == code) {
                         continue;
                     }
+                    app.apply_roost_perms(&perms);
                     app.roosts.push(RoostView {
                         code: code.clone(),
                         name,
@@ -425,7 +442,9 @@ async fn main() -> anyhow::Result<()> {
                     code,
                     name,
                     channels,
+                    perms,
                 } => {
+                    app.apply_roost_perms(&perms);
                     if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
                         rv.name = name;
                         let mut previous: std::collections::HashMap<_, _> = rv
@@ -523,6 +542,7 @@ async fn main() -> anyhow::Result<()> {
                 AppEvent::HistoryChunk { flock, messages } => {
                     merge_history(&mut app, &flock, messages);
                 }
+                AppEvent::Notice(text) => app.show_status_notice(text, Instant::now()),
             }
         }
 
@@ -555,6 +575,41 @@ async fn main() -> anyhow::Result<()> {
                     && k.modifiers.contains(KeyModifiers::SHIFT)
                 {
                     copy_active_invite(&mut app, clipboard.as_mut(), Instant::now());
+                    continue;
+                }
+
+                if app.show_delete_confirm {
+                    match k.code {
+                        KeyCode::Enter => {
+                            if app.delete_confirm_input.trim() == "DELETE" {
+                                app.show_delete_confirm = false;
+                                let dir = starling::config::Profile::config_dir();
+                                if dir.exists() {
+                                    if let Err(error) = std::fs::remove_dir_all(&dir) {
+                                        app.error_message =
+                                            Some(format!("Failed to delete data: {error}"));
+                                    } else {
+                                        app.quit_requested = true;
+                                    }
+                                } else {
+                                    app.quit_requested = true;
+                                }
+                            } else {
+                                app.error_message = Some("Type DELETE to confirm".into());
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            app.delete_confirm_input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            app.delete_confirm_input.pop();
+                        }
+                        KeyCode::Esc => {
+                            app.show_delete_confirm = false;
+                            app.delete_confirm_input.clear();
+                        }
+                        _ => {}
+                    }
                     continue;
                 }
 
@@ -686,8 +741,53 @@ async fn main() -> anyhow::Result<()> {
                                     app.error_message = Some(format!("Invalid join code: {error}"));
                                 }
                             }
-                        } else if let Some(space) = app.active {
-                            let _ = cmd_tx.send(Command::SendContextText { space, body: text });
+                        } else if let Some(rest) = text.strip_prefix("/chirp ") {
+                            let rest = rest.trim();
+                            let (name, body) = match rest.split_once(' ') {
+                                Some((name, body)) if !name.is_empty() => (name.trim(), body),
+                                _ => {
+                                    app.error_message =
+                                        Some("Usage: /chirp <name> <message>".into());
+                                    continue;
+                                }
+                            };
+                            // Match the destination by display name (set by an
+                            // authenticated profile announcement) and resolve it
+                            // to a verified endpoint. Without the endpoint's
+                            // published DM public key, we can't seal a chirp —
+                            // the recipient hasn't yet published a Phase 9
+                            // Profile with `dm_pk`.
+                            let to = app
+                                .peer_names
+                                .iter()
+                                .find(|(_, peer_name)| peer_name.trim() == name)
+                                .and_then(|(id, _)| app.peer_dm_keys.get(id).map(|_| *id));
+                            let to = match to {
+                                Some(to) => to,
+                                None => {
+                                    app.error_message =
+                                        Some(format!("{name:?} hasn't published a DM key yet"));
+                                    continue;
+                                }
+                            };
+                            let Some(code) = app.active_code() else {
+                                app.error_message = Some("Select a flock first".into());
+                                continue;
+                            };
+                            let their_pk = match app.peer_dm_keys.get(&to).cloned() {
+                                Some(pk) => pk,
+                                None => continue,
+                            };
+                            let _ = cmd_tx.send(Command::SendChirp {
+                                flock: code.to_string(),
+                                to,
+                                their_pk,
+                                body: body.to_string(),
+                            });
+                        } else if let Some(_space) = app.active {
+                            // V1 typed-context send isn't wired yet — don't revoke, don't clear input.
+                            app.input = text;
+                            app.error_message = Some("V1 messaging isn't available yet".into());
                         } else if let Some(code) = app.active_code() {
                             let _ = cmd_tx.send(Command::SendText {
                                 flock: code.to_string(),
@@ -739,6 +839,34 @@ async fn main() -> anyhow::Result<()> {
                     KeyCode::Esc => {
                         app.show_menu = true;
                         app.menu_selection = 0;
+                    }
+
+                    KeyCode::Char('b')
+                        if k.modifiers.contains(KeyModifiers::CONTROL)
+                            && app.my_perms.contains(starling::roost::perms::Perm::BAN) =>
+                    {
+                        if let (Some(roost_id), Some(target)) =
+                            (app.selected_roost_endpoint_id(), app.selected_peer_id())
+                        {
+                            let _ = cmd_tx.send(Command::Ban {
+                                roost: roost_id,
+                                target,
+                            });
+                        }
+                    }
+
+                    KeyCode::Char('k')
+                        if k.modifiers.contains(KeyModifiers::CONTROL)
+                            && app.my_perms.contains(starling::roost::perms::Perm::KICK) =>
+                    {
+                        if let (Some(roost_id), Some(target)) =
+                            (app.selected_roost_endpoint_id(), app.selected_peer_id())
+                        {
+                            let _ = cmd_tx.send(Command::Kick {
+                                roost: roost_id,
+                                target,
+                            });
+                        }
                     }
 
                     KeyCode::Char(c) => {
@@ -793,9 +921,7 @@ async fn main() -> anyhow::Result<()> {
     if let Err(error) = save_context_state(&state_path, &app) {
         starling::logger::warn(&format!("could not save contexts: {error}"));
     }
-    let protected = persistence::ProtectedSecretState::default();
-    let _ = persistence::keyring_bytes(Vec::new());
-    if let Err(error) = persistence::save_protected(&protected_path, &protected) {
+    if let Err(error) = persistence::save_protected(&protected_path, &protected_state) {
         starling::logger::warn(&format!("could not save credentials: {error}"));
     }
     disable_raw_mode()?;
@@ -807,6 +933,30 @@ async fn main() -> anyhow::Result<()> {
         ct_event::DisableBracketedPaste
     )?;
     Ok(())
+}
+
+fn parse_join_arg(args: &[String]) -> Result<Option<String>, &'static str> {
+    let Some(first) = args.get(1).map(String::as_str) else {
+        return Ok(None);
+    };
+    // Deep link: the OS hands us the whole `starling://join/<code>` URL as a
+    // single argument. Strip the scheme prefix and route the remainder through
+    // the same validation path as `starling-tui join <code>`.
+    let code = if let Some(rest) = first.strip_prefix("starling://join/") {
+        rest
+    } else if first == "join" {
+        match args.get(2).map(|code| code.trim()) {
+            Some(code) => code,
+            None => return Err("Usage: starling-tui join <code>"),
+        }
+    } else {
+        return Ok(None);
+    };
+    let code = code.trim();
+    if starling::net::decode_typed_code(code).is_none() {
+        return Err("Invalid or unsupported join code.");
+    }
+    Ok(Some(code.to_ascii_uppercase()))
 }
 
 fn copy_active_invite<C: Clipboard + ?Sized>(
@@ -1146,16 +1296,9 @@ fn activate_menu_item(
             app.show_menu = true;
         }
         5 => {
-            let dir = starling::config::Profile::config_dir();
-            if dir.exists() {
-                if let Err(error) = std::fs::remove_dir_all(&dir) {
-                    app.error_message = Some(format!("Failed to delete data: {error}"));
-                } else {
-                    app.quit_requested = true;
-                }
-            } else {
-                app.quit_requested = true;
-            }
+            app.show_menu = false;
+            app.show_delete_confirm = true;
+            app.delete_confirm_input.clear();
         }
         6 => {
             app.quit_requested = true;
@@ -1169,8 +1312,8 @@ fn activate_menu_item(
 #[cfg(test)]
 mod tests {
     use super::{
-        App, MENU_ITEMS, menu_item_at_size, open_create_room, refresh_create_flock_code,
-        update_menu_hover,
+        App, MENU_ITEMS, menu_item_at_size, open_create_room, parse_join_arg,
+        refresh_create_flock_code, update_menu_hover,
     };
 
     #[test]
@@ -1221,5 +1364,52 @@ mod tests {
             starling::net::decode_typed_code(&first).map(|code| code.code_type),
             Some(starling::net::CodeType::Flock)
         );
+    }
+
+    fn sample_join_code() -> String {
+        let mut app = App {
+            node_id: Some(iroh::SecretKey::generate().public()),
+            ..App::default()
+        };
+        open_create_room(&mut app);
+        app.create_flock_name = "Night Birds".into();
+        refresh_create_flock_code(&mut app);
+        app.create_flock_code.expect("a flock code")
+    }
+
+    #[test]
+    fn join_subcommand_accepts_bare_code() {
+        let code = sample_join_code();
+        let args = ["starling-tui".into(), "join".into(), code.clone()];
+        assert_eq!(parse_join_arg(&args).unwrap(), Some(code));
+    }
+
+    #[test]
+    fn join_subcommand_without_code_reports_usage() {
+        let args = ["starling-tui".into(), "join".into()];
+        assert_eq!(
+            parse_join_arg(&args).unwrap_err(),
+            "Usage: starling-tui join <code>"
+        );
+    }
+
+    #[test]
+    fn deep_link_strips_scheme_and_routes_to_join() {
+        let code = sample_join_code();
+        let url = format!("starling://join/{code}");
+        let args = ["starling-tui".into(), url];
+        assert_eq!(parse_join_arg(&args).unwrap(), Some(code));
+    }
+
+    #[test]
+    fn deep_link_with_invalid_code_is_rejected() {
+        let args = ["starling-tui".into(), "starling://join/NOT-A-CODE".into()];
+        assert!(parse_join_arg(&args).is_err());
+    }
+
+    #[test]
+    fn unrelated_first_argument_returns_none() {
+        let args = ["starling-tui".into(), "--version".into()];
+        assert_eq!(parse_join_arg(&args).unwrap(), None);
     }
 }

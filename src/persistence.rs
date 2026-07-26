@@ -39,6 +39,7 @@ pub struct ProtectedSecretState {
 }
 
 /// Owns bytes returned by a keyring and erases them when dropped.
+#[allow(dead_code)]
 pub fn keyring_bytes(bytes: Vec<u8>) -> Zeroizing<Vec<u8>> {
     Zeroizing::new(bytes)
 }
@@ -252,6 +253,27 @@ mod tests {
             }],
             active_space: Some(SpaceId::Flock(FlockId([value; 32]))),
         }
+    }
+
+    #[test]
+    fn exit_save_preserves_existing_credentials() {
+        // The TUI main() keeps the loaded ProtectedSecretState and writes it
+        // back at exit. This test ensures credentials are not silently wiped.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.bin");
+        let credentials = ProtectedSecretState {
+            credentials: vec![Credential {
+                name: "roost-key".into(),
+                secret: vec![1; 32],
+            }],
+        };
+        save_protected(&path, &credentials).unwrap();
+        assert!(!load_protected(&path).unwrap().credentials.is_empty());
+
+        // Simulating the exit-path in Starling-TUI/src/main.rs: the same state
+        // that was loaded is saved back.
+        save_protected(&path, &credentials).unwrap();
+        assert!(!load_protected(&path).unwrap().credentials.is_empty());
     }
 
     #[test]

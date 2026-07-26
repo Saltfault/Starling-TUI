@@ -11,6 +11,18 @@ pub enum Command {
         flock: String,
         body: String,
     },
+    /// Send a sealed 1:1 chirp through a shared flock. The body is encrypted
+    /// to `to`'s published DM public key with `crypto_box`; the flock relays
+    /// opaque bytes it can't read, and only the addressee's DM private key
+    /// opens it. `their_pk` is looked up from the local copy of peers'
+    /// profile-announced DM public keys, populated by the typed-chat [
+    /// `AppEvent::DmKey`] handler.
+    SendChirp {
+        flock: String,
+        to: EndpointId,
+        their_pk: Vec<u8>,
+        body: String,
+    },
     Join {
         code: String,
     },
@@ -30,6 +42,14 @@ pub enum Command {
     Leave {
         code: String,
     },
+    Ban {
+        roost: EndpointId,
+        target: EndpointId,
+    },
+    Kick {
+        roost: EndpointId,
+        target: EndpointId,
+    },
 }
 
 #[derive(Debug)]
@@ -41,6 +61,19 @@ pub enum AppEvent {
     Message {
         flock: String,
         msg: starling::event::ChatMessage,
+        /// `true` when the message was delivered as a sealed chirp and the
+        /// body was decrypted to its addressee — rendered with a 🔒 to make
+        /// the difference between a public broadcast and a private chirp
+        /// obvious at a glance.
+        private: bool,
+    },
+    /// A peer published a [`GossipPayload::Profile`] carrying their `crypto_box`
+    /// DM public key. The endpoint is already authenticated as the signed
+    /// envelope author by the receive loop, so main.rs can store this
+    /// `Vec<u8>` directly without verifying a `claimed id` against a name.
+    DmKey {
+        endpoint: EndpointId,
+        dm_pk: Vec<u8>,
     },
     JoinedFlock {
         code: String,
@@ -50,12 +83,14 @@ pub enum AppEvent {
         code: String,
         name: String,
         channels: Vec<String>,
+        perms: starling::roost::perms::PermState,
     },
     #[allow(dead_code)]
     RoostUpdate {
         code: String,
         name: String,
         channels: Vec<String>,
+        perms: starling::roost::perms::PermState,
     },
     PeerConnected(EndpointId),
 
@@ -86,4 +121,6 @@ pub enum AppEvent {
         flock: String,
         messages: Vec<starling::event::ChatMessage>,
     },
+    /// A short status-line flash for moderation verdicts / join refusals.
+    Notice(String),
 }

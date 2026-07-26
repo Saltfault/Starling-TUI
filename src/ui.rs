@@ -141,7 +141,9 @@ impl ScopedPresence {
 pub struct FlockView {
     pub code: String,
     pub name: String,
-    pub messages: Vec<ChatMessage>,
+    /// `private` marks sealed 1:1 chirps so the renderer can prepend a 🔒;
+    /// legacy broadcasts and history backfill come through as `private = false`.
+    pub messages: Vec<MessageView>,
     pub unread: usize,
 }
 
@@ -160,6 +162,15 @@ pub struct ChatMessageView {
     pub author: String,
     pub body: String,
     pub ts: i64,
+}
+
+/// A chat message ready to render in a flock view, optionally flagged as a
+/// private chirp so the renderer can mark it with a 🔒. Private chirps live
+/// in the same logical thread so the reader can see them in order.
+#[derive(Clone, Debug)]
+pub struct MessageView {
+    pub msg: ChatMessage,
+    pub private: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -296,6 +307,11 @@ pub struct App {
     pub muted: bool,
     pub peer_names: HashMap<EndpointId, String>,
     pub peer_status: HashMap<EndpointId, BirdStatus>,
+    /// Received `crypto_box` DM public keys, keyed by their authenticated
+    /// endpoint id (the [`Signed::author`] of the profile announcement, not
+    /// the untrusted `id` field inside the payload). `/chirp` looks up the
+    /// recipient through this table; main() feeds it from `AppEvent::DmKey`.
+    pub peer_dm_keys: HashMap<EndpointId, Vec<u8>>,
     #[allow(dead_code)]
     pub local_video_frame: Option<RgbImage>,
     #[allow(dead_code)]
@@ -304,6 +320,8 @@ pub struct App {
     pub show_video: bool,
     pub show_menu: bool,
     pub menu_selection: usize,
+    pub show_delete_confirm: bool,
+    pub delete_confirm_input: String,
     pub flock_scroll: SpringScroll,
     pub roost_scroll: SpringScroll,
     pub bird_scroll: SpringScroll,
@@ -317,6 +335,11 @@ pub struct App {
     pub presence: HashMap<SpaceId, ContextPresence>,
     pub status_notice: Option<String>,
     pub status_notice_expires_at: Option<Instant>,
+    /// The client's own effective permissions in the active roost. UX-only; the
+    /// roost re-checks every privileged action.
+    pub my_perms: starling::roost::perms::Perm,
+    /// Peer endpoint id -> top role color, for coloring names in the bird list.
+    pub peer_roles: HashMap<EndpointId, (u8, u8, u8)>,
 }
 
 impl Default for App {
@@ -345,11 +368,14 @@ impl Default for App {
             muted: false,
             peer_names: HashMap::new(),
             peer_status: HashMap::new(),
+            peer_dm_keys: HashMap::new(),
             local_video_frame: None,
             remote_video_frames: HashMap::new(),
             show_video: false,
             show_menu: false,
             menu_selection: 0,
+            show_delete_confirm: false,
+            delete_confirm_input: String::new(),
             flock_scroll: SpringScroll::default(),
             roost_scroll: SpringScroll::default(),
             bird_scroll: SpringScroll::default(),
@@ -363,6 +389,8 @@ impl Default for App {
             presence: HashMap::new(),
             status_notice: None,
             status_notice_expires_at: None,
+            my_perms: starling::roost::perms::Perm::empty(),
+            peer_roles: HashMap::new(),
         }
     }
 }
@@ -427,6 +455,27 @@ impl App {
         self.status_notice_expires_at = Some(now + NOTICE_DURATION);
     }
 
+    /// Refresh the client's view of its own permissions and peer role colors
+    /// from a roost's `PermState`. UX-only; the roost re-checks every action.
+    pub fn apply_roost_perms(&mut self, perms: &starling::roost::perms::PermState) {
+        if let Some(my_id) = self.node_id {
+            self.my_perms = perms.effective(&my_id);
+        }
+        self.peer_roles.clear();
+        for (&id, role_indices) in &perms.members {
+            let color = role_indices
+                .iter()
+                .filter_map(|&i| perms.roles.get(i))
+                .max_by_key(|role| role.position)
+                .map(|role| role.color)
+                .unwrap_or((150, 150, 150));
+            self.peer_roles.insert(id, color);
+        }
+        if let Some(owner) = perms.owner {
+            self.peer_roles.insert(owner, (255, 215, 0));
+        }
+    }
+
     pub fn expire_status_notice(&mut self, now: Instant) -> bool {
         if self
             .status_notice_expires_at
@@ -465,7 +514,7 @@ impl App {
         }
     }
 
-    pub fn active_messages(&self) -> &[ChatMessage] {
+    pub fn active_messages(&self) -> &[MessageView] {
         match self.selection {
             Selection::Flock(i) => self
                 .flocks
@@ -543,6 +592,20 @@ impl App {
     #[allow(dead_code)]
     pub fn selected_peer_id(&self) -> Option<EndpointId> {
         self.peers.get(self.selected_peer).copied()
+    }
+
+    /// Decode the currently-selected roost's invite code into its opener
+    /// `EndpointId`. Used to route moderation commands to the right roost.
+    /// Returns `None` when a flock (not a roost) is selected or the code is
+    /// not a valid roost code.
+    pub fn selected_roost_endpoint_id(&self) -> Option<EndpointId> {
+        let ri = match self.selection {
+            Selection::Channel(ri, _) => ri,
+            Selection::Flock(_) => return None,
+        };
+        let roost = self.roosts.get(ri)?;
+        let decoded = starling::net::decode_typed_code(&roost.code)?;
+        starling::net::typed_code_node_id(&decoded)
     }
 
     pub fn peer_display_name(&self, id: &EndpointId) -> String {
@@ -713,6 +776,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_edit_flock_popup(f, app);
     } else if app.show_join_room {
         draw_join_room_popup(f, app);
+    } else if app.show_delete_confirm {
+        draw_delete_confirm_popup(f, app);
     } else if app.show_menu {
         draw_menu_popup(f, app);
     }
@@ -994,12 +1059,16 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
         .map(|m| {
             ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!("{}: ", m.author),
+                    if m.private { "⚷ " } else { "" },
+                    Style::new().fg(app.palette.selection),
+                ),
+                Span::styled(
+                    format!("{}: ", m.msg.author),
                     Style::new()
                         .fg(app.palette.author)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(m.body.clone(), Style::new().fg(app.palette.text)),
+                Span::styled(m.msg.body.clone(), Style::new().fg(app.palette.text)),
             ]))
         })
         .collect();
@@ -1036,17 +1105,16 @@ fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
             Some(BirdStatus::Idle) => ("-", app.palette.dim),
             _ => ("o", app.palette.accent),
         };
+        let (r, g, b) = app.peer_roles.get(id).copied().unwrap_or((150, 150, 150));
+        let name_color = if sel {
+            app.palette.selection
+        } else {
+            Color::Rgb(r, g, b)
+        };
         items.push(ListItem::new(Line::from(vec![
             Span::styled(mark, Style::new().fg(app.palette.selection)),
             Span::styled(format!("{glyph} "), Style::new().fg(gc)),
-            Span::styled(
-                app.peer_display_name(id),
-                Style::new().fg(if sel {
-                    app.palette.selection
-                } else {
-                    app.palette.text
-                }),
-            ),
+            Span::styled(app.peer_display_name(id), Style::new().fg(name_color)),
         ])));
     }
 
@@ -1224,6 +1292,50 @@ fn draw_join_room_popup(f: &mut Frame, app: &App) {
         &app.join_input,
         " Enter = join . Esc = cancel",
         app,
+    );
+}
+
+fn draw_delete_confirm_popup(f: &mut Frame, app: &App) {
+    let popup = centered(f.area(), 60, 8);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(app.palette.border))
+            .title(Span::styled(
+                " Delete all data ",
+                Style::new().fg(app.palette.accent),
+            )),
+        popup,
+    );
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+    f.render_widget(
+        Paragraph::new("This will erase your identity, profile, roosts, and history.")
+            .style(Style::new().fg(app.palette.text)),
+        rows[0],
+    );
+    f.render_widget(
+        Paragraph::new("Type DELETE to confirm:").style(Style::new().fg(app.palette.text)),
+        rows[1],
+    );
+    f.render_widget(
+        Paragraph::new(format!(" {}_", app.delete_confirm_input))
+            .style(Style::new().fg(app.palette.selection)),
+        rows[2],
+    );
+    f.render_widget(
+        Paragraph::new(" Enter = confirm . Esc = cancel").style(Style::new().fg(app.palette.dim)),
+        rows[3],
     );
 }
 
