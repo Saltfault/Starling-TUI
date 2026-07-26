@@ -1,6 +1,8 @@
 use crate::event::{AppEvent, Command};
 use iroh::endpoint::Connection;
-use iroh::{Endpoint, EndpointId, endpoint::presets, protocol::Router};
+use iroh::{
+    Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, endpoint::presets, protocol::Router,
+};
 use iroh_gossip::{
     api::Event,
     net::{GOSSIP_ALPN, Gossip},
@@ -8,7 +10,7 @@ use iroh_gossip::{
 use n0_future::StreamExt;
 use starling::crypto::FlockCrypto;
 use starling::event::{ChatMessage, GossipPayload};
-use starling::roost::RoostState;
+use starling::roost::{ModRequest, RoostState, RoostWelcome};
 use std::collections::{HashMap, HashSet};
 
 use std::sync::atomic::AtomicBool;
@@ -19,6 +21,13 @@ use tokio::time::{Duration, timeout};
 use zeroize::Zeroizing;
 
 const HISTORY_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Moderation protocol ALPN: bi-stream where the client sends a `ModRequest`
+/// and the roost replies `Result<(), String>`.
+const MOD_ALPN: &[u8] = b"starling/mod/0";
+/// Join handshake ALPN: the roost opens a uni stream and writes
+/// `Result<RoostWelcome, String>`; the client accepts and reads.
+const ROOST_JOIN_ALPN: &[u8] = b"starling/roost-join/0";
 type HistoryAuthorizer =
     dyn Fn(EndpointId, &starling::protocol::SpaceId) -> bool + Send + Sync + 'static;
 type HistoryChallengeCache = Arc<Mutex<HashSet<(EndpointId, [u8; 32])>>>;
@@ -346,14 +355,33 @@ pub async fn run(
     #[cfg(not(feature = "audio"))]
     let _ = (&muted, &input_device);
     let secret = starling::config::Profile::load_or_create_secret();
-    let endpoint = Endpoint::builder(presets::N0)
-        .secret_key(secret)
-        .bind()
-        .await?;
+    // Phase 9: load a separate `crypto_box` DM keypair. It is kept distinct
+    // from the ed25519 identity which is used only for signatures, so a
+    // compromise-future work on the DM path never touches the permanent
+    // identity key. The bytes published to peers on every profile broadcast.
+    let dm_secret_bytes = starling::config::Profile::load_or_create_dm_secret_bytes();
+    let my_dm_public_bytes = crypto_box::SecretKey::from_bytes(dm_secret_bytes)
+        .public_key()
+        .to_bytes()
+        .to_vec();
+    let mut builder = Endpoint::builder(presets::N0).secret_key(secret.clone());
+    // Allow a community to point its endpoints at a self-hosted iroh-relay
+    // (run beside their roost) without rebuilding. Relays only forward
+    // ciphertext the E2E crypto has already sealed, so this drops the last
+    // centralized dependency in the flight path.
+    if let Ok(url) = std::env::var("STARLING_RELAY") {
+        let relay: RelayUrl = url.parse()?;
+        builder = builder.relay_mode(RelayMode::Custom(relay.into()));
+    }
+    let endpoint = builder.bind().await?;
     endpoint.online().await;
 
     starling::logger::warn(&format!("endpoint bound: node_id={my_node_id}"));
     let _ = evt_tx.send(AppEvent::Ticket(my_node_id));
+    let _ = evt_tx.send(AppEvent::DmKey {
+        endpoint: my_node_id,
+        dm_pk: my_dm_public_bytes.clone(),
+    });
 
     let gossip = Gossip::builder().spawn(endpoint.clone());
     let history: starling::sync::History = Default::default();
@@ -417,6 +445,12 @@ pub async fn run(
             starling::sync::SYNC_ALPN,
             starling::sync::SyncProto {
                 history: history.clone(),
+                members: Arc::new(Mutex::new(starling::membership::MembershipState::genesis(
+                    starling::membership::MembershipScopeId::Flock(starling::protocol::FlockId(
+                        [0; 32],
+                    )),
+                    my_node_id,
+                ))),
             },
         )
         .spawn();
@@ -432,6 +466,9 @@ pub async fn run(
             evt_tx.clone(),
             my_node_id,
             name.clone(),
+            secret.clone(),
+            dm_secret_bytes,
+            my_dm_public_bytes.clone(),
         )
         .await?;
     }
@@ -486,17 +523,54 @@ pub async fn run(
                         body,
                         ts: chrono::Utc::now().timestamp_millis(),
                     };
-                    let plaintext = postcard::to_stdvec(&GossipPayload::Chat(msg.clone()))?;
-                    h.sender
-                        .broadcast(h.crypto.encrypt(&plaintext).into())
-                        .await?;
+                    starling::net::broadcast_payload(
+                        &h.sender,
+                        &h.crypto,
+                        &secret,
+                        &GossipPayload::Chat(msg.clone()),
+                    )
+                    .await?;
                     let _ = evt_tx.send(AppEvent::Message {
                         flock: flock.clone(),
-                        msg: msg.clone(),
+                        msg,
+                        private: false,
                     });
+                }
+            }
+
+            Command::SendChirp {
+                flock,
+                to,
+                their_pk,
+                body,
+            } => {
+                if let Some(h) = flocks.get(&flock) {
+                    let Ok(their_pk) = crypto_box::PublicKey::try_from(their_pk.as_slice()) else {
+                        let _ = evt_tx.send(AppEvent::Error(
+                            "could not seal chirp: unknown DM public key".into(),
+                        ));
+                        continue;
+                    };
+                    let msg = ChatMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        author: name.clone(),
+                        body: body.clone(),
+                        ts: chrono::Utc::now().timestamp_millis(),
+                    };
+                    let my_dm_secret = crypto_box::SecretKey::from_bytes(dm_secret_bytes);
+                    let plain = postcard::to_stdvec(&msg)?;
+                    let sealed = starling::crypto::seal_chirp(&my_dm_secret, &their_pk, &plain);
+                    starling::net::broadcast_payload(
+                        &h.sender,
+                        &h.crypto,
+                        &secret,
+                        &GossipPayload::Chirp { to, sealed },
+                    )
+                    .await?;
                     let _ = evt_tx.send(AppEvent::Message {
                         flock: flock.clone(),
-                        msg: msg.clone(),
+                        msg,
+                        private: true,
                     });
                 }
             }
@@ -510,6 +584,9 @@ pub async fn run(
                     evt_tx.clone(),
                     my_node_id,
                     name.clone(),
+                    secret.clone(),
+                    dm_secret_bytes,
+                    my_dm_public_bytes.clone(),
                 )
                 .await
                 {
@@ -596,11 +673,63 @@ pub async fn run(
                 _video_tx = None;
             }
 
+            Command::Ban { roost, target } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(conn) = ep.connect(EndpointAddr::from(roost), MOD_ALPN).await else {
+                        return;
+                    };
+                    let Ok((mut send, mut recv)) = conn.open_bi().await else {
+                        return;
+                    };
+                    let req = ModRequest::Ban(target);
+                    let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
+                    let _ = send.finish();
+                    if let Ok(bytes) = recv.read_to_end(1024).await {
+                        if let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
+                        {
+                            let _ = tx.send(AppEvent::Notice(reason));
+                        }
+                    }
+                });
+            }
+
+            Command::Kick { roost, target } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(conn) = ep.connect(EndpointAddr::from(roost), MOD_ALPN).await else {
+                        return;
+                    };
+                    let Ok((mut send, mut recv)) = conn.open_bi().await else {
+                        return;
+                    };
+                    let req = ModRequest::Kick(target);
+                    let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
+                    let _ = send.finish();
+                    if let Ok(bytes) = recv.read_to_end(1024).await {
+                        if let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
+                        {
+                            let _ = tx.send(AppEvent::Notice(reason));
+                        }
+                    }
+                });
+            }
+
             Command::Quit => break,
             Command::Leave { code } => {
-                if let Some(handle) = flocks.remove(&code) {
-                    handle.cancel.cancel();
-                }
+                // Remove the top-level handle and any derived roost channel
+                // handles (keys of the form "{code}/{channel}").
+                let prefix = format!("{code}/");
+                flocks.retain(|key, handle| {
+                    if key == &code || key.starts_with(&prefix) {
+                        handle.cancel.cancel();
+                        false
+                    } else {
+                        true
+                    }
+                });
             }
         }
     }
@@ -696,6 +825,9 @@ async fn join_by_code(
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
     name: String,
+    secret: iroh::SecretKey,
+    dm_secret_bytes: [u8; 32],
+    my_dm_public_bytes: Vec<u8>,
 ) -> anyhow::Result<()> {
     let decoded = starling::net::decode_typed_code(&code)
         .ok_or_else(|| anyhow::anyhow!("invalid or unsupported typed code"))?;
@@ -703,15 +835,24 @@ async fn join_by_code(
         starling::net::CodeType::Flock => {
             let flock = starling::net::decode_flock_code(&decoded)
                 .ok_or_else(|| anyhow::anyhow!("flock code has an invalid payload"))?;
+            // Phase 9: high-entropy flock keys. The flock cipher is derived
+            // from the 32-byte secret inside the typed code, NOT from the
+            // displayed code's characters. The displayed code still binds the
+            // gossip topic (so peers with the right code find each other),
+            // but a peer who can guess the topic cannot read the bytes.
             join_flock(
                 gossip,
                 code.clone(),
                 vec![flock.opener],
+                flock.secret,
                 flocks,
                 evt_tx.clone(),
                 my_id,
                 flock.name,
                 name,
+                secret.clone(),
+                dm_secret_bytes,
+                my_dm_public_bytes.clone(),
             )
             .await?;
             if flock.opener != my_id {
@@ -730,7 +871,20 @@ async fn join_by_code(
         starling::net::CodeType::Roost => {
             let opener = starling::net::typed_code_node_id(&decoded)
                 .ok_or_else(|| anyhow::anyhow!("roost code has an invalid endpoint payload"))?;
-            join_roost(gossip, endpoint, code, opener, flocks, evt_tx, my_id, name).await
+            join_roost(
+                gossip,
+                endpoint,
+                code,
+                opener,
+                flocks,
+                evt_tx,
+                my_id,
+                name,
+                secret,
+                dm_secret_bytes,
+                my_dm_public_bytes,
+            )
+            .await
         }
     }
 }
@@ -740,31 +894,50 @@ async fn join_flock(
     gossip: &Gossip,
     code: String,
     boot: Vec<EndpointId>,
+    flock_secret: [u8; 32],
     flocks: &mut HashMap<String, FlockHandle>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
     flock_name: String,
     name: String,
+    secret: iroh::SecretKey,
+    dm_secret_bytes: [u8; 32],
+    my_dm_public_bytes: Vec<u8>,
 ) -> anyhow::Result<()> {
     if flocks.contains_key(&code) {
         return Ok(());
     }
 
     let topic = starling::net::topic_for(&format!("starling/flock/{code}"));
-    let crypto = FlockCrypto::from_room_code(&code);
+    let crypto = FlockCrypto::from_secret(&flock_secret);
     let (sender, mut receiver) = gossip.subscribe(topic, boot).await?.split();
 
-    let (rx_crypto, rx_code, rx_tx, rx_sender, rx_my_id, rx_name) = (
-        FlockCrypto::from_room_code(&code),
+    let (
+        rx_crypto,
+        rx_code,
+        rx_tx,
+        rx_sender,
+        rx_my_id,
+        rx_name,
+        rx_secret,
+        rx_dm_secret,
+        rx_dm_pk,
+    ) = (
+        FlockCrypto::from_secret(&flock_secret),
         code.clone(),
         evt_tx.clone(),
         sender.clone(),
         my_id,
         name,
+        secret,
+        dm_secret_bytes,
+        my_dm_public_bytes,
     );
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     tokio::spawn(async move {
+        let mut dm_pks: HashMap<EndpointId, Vec<u8>> = HashMap::new();
+        let my_dm_secret = crypto_box::SecretKey::from_bytes(rx_dm_secret);
         loop {
             tokio::select! {
                 () = task_cancel.cancelled() => break,
@@ -772,26 +945,65 @@ async fn join_flock(
                     let Some(event) = event else { break };
                     match event {
                 Ok(Event::Received(msg)) => {
-                    if let Some(plain) = rx_crypto.decrypt(&msg.content) {
-                        match postcard::from_bytes::<GossipPayload>(&plain) {
-                            Ok(GossipPayload::Chat(m)) => {
+                    let Some(envelope) = starling::net::receive_payload(&rx_crypto, &msg.content)
+                        .ok()
+                        .flatten() else { continue };
+                    match envelope.payload {
+                        GossipPayload::Chat(m) => {
+                            let _ = rx_tx.send(AppEvent::Message {
+                                flock: rx_code.clone(),
+                                msg: m,
+                                private: false,
+                            });
+                        }
+                        GossipPayload::Profile { id, name, dm_pk } => {
+                            if id != envelope.author {
+                                starling::logger::warn(&format!(
+                                    "dropped spoofed profile: \
+                                     claimed id {id} does not match verified author {}",
+                                     envelope.author
+                                ));
+                                continue;
+                            }
+                            let _ = rx_tx.send(AppEvent::PeerNamed(id, name));
+                            if !dm_pk.is_empty() {
+                                dm_pks.insert(id, dm_pk.clone());
+                                let _ = rx_tx.send(AppEvent::DmKey {
+                                    endpoint: id,
+                                    dm_pk,
+                                });
+                            }
+                        }
+                        GossipPayload::Status { id, status } => {
+                            if id != envelope.author {
+                                continue;
+                            }
+                            let _ = rx_tx.send(AppEvent::PeerStatus(id, status));
+                        }
+                        GossipPayload::Presence(lease) => {
+                            let _ = rx_tx.send(AppEvent::PresenceLease(lease));
+                        }
+                        GossipPayload::Chirp { to, sealed } if to == rx_my_id => {
+                            let Ok(their_pk) = crypto_box::PublicKey::try_from(
+                                dm_pks.get(&envelope.author).cloned().unwrap_or_default().as_slice()
+                            ) else { continue };
+                            let Some(plain) = starling::crypto::open_chirp(
+                                &my_dm_secret,
+                                &their_pk,
+                                &sealed,
+                            ) else { continue };
+                            if let Ok(m) = postcard::from_bytes::<ChatMessage>(&plain) {
                                 let _ = rx_tx.send(AppEvent::Message {
                                     flock: rx_code.clone(),
                                     msg: m,
+                                    private: true,
                                 });
+                            } else {
+                                starling::logger::warn("dropped chirp: could not decode sealed body");
                             }
-                            Ok(GossipPayload::Profile { id, name }) => {
-                                let _ = rx_tx.send(AppEvent::PeerNamed(id, name));
-                            }
-                            Ok(GossipPayload::Status { id, status }) => {
-                                let _ = rx_tx.send(AppEvent::PeerStatus(id, status));
-                            }
-                            Ok(GossipPayload::Presence(lease)) => {
-                                let _ = rx_tx.send(AppEvent::PresenceLease(lease));
-                            }
-                            Err(e) => {
-                                starling::logger::error(&format!("gossip deserialize error: {e}"));
-                            }
+                        }
+                        GossipPayload::Chirp { .. } => {
+                            // Not addressed to us; relay only, cannot open.
                         }
                     }
                 }
@@ -801,10 +1013,15 @@ async fn join_flock(
                     let payload = GossipPayload::Profile {
                         id: rx_my_id,
                         name: rx_name.clone(),
+                        dm_pk: rx_dm_pk.clone(),
                     };
-                    if let Ok(plain) = postcard::to_stdvec(&payload) {
-                        let _ = rx_sender.broadcast(rx_crypto.encrypt(&plain).into()).await;
-                    }
+                    let _ = starling::net::broadcast_payload(
+                        &rx_sender,
+                        &rx_crypto,
+                        &rx_secret,
+                        &payload,
+                    )
+                    .await;
                 }
                 Ok(Event::NeighborDown(id)) => {
                     let _ = rx_tx.send(AppEvent::PeerConnectivityHintDown(id));
@@ -841,16 +1058,48 @@ async fn join_roost(
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
     name: String,
+    secret: iroh::SecretKey,
+    dm_secret_bytes: [u8; 32],
+    my_dm_public_bytes: Vec<u8>,
 ) -> anyhow::Result<()> {
     let control_key = format!("{code}/_control");
+
+    // Phase 9: get the control channel secret from the join handshake BEFORE
+    // subscribing, so the control channel can be encrypted with a high-entropy
+    // secret rather than a public-derivable room code. A non-member who knows
+    // the roost code can find the topic but cannot decrypt the member/ban list
+    // that travels on it. Fall back to `from_room_code` for old servers that
+    // don't include `control_secret` in the welcome.
+    //
+    // Identity-gated join handshake: the roost re-checks membership before
+    // releasing per-channel secrets. Non-members never receive a welcome.
+    let conn = endpoint
+        .connect(EndpointAddr::from(opener), ROOST_JOIN_ALPN)
+        .await?;
+    let mut recv = conn.accept_uni().await?;
+    let bytes = recv.read_to_end(65_536).await?;
+    let welcome: Result<RoostWelcome, String> = postcard::from_bytes(&bytes)?;
+
+    let welcome = match welcome {
+        Ok(welcome) => welcome,
+        Err(reason) => {
+            let _ = evt_tx.send(AppEvent::Notice(format!("roost refused: {reason}")));
+            return Ok(());
+        }
+    };
+
+    let control_crypto = match welcome.control_secret {
+        Some(secret) => FlockCrypto::from_secret(&secret),
+        None => FlockCrypto::from_room_code(&control_key),
+    };
+
     let topic = starling::net::topic_for(&format!("starling/roost/{control_key}"));
-    let crypto = FlockCrypto::from_room_code(&control_key);
     let (_sender, mut receiver) = gossip.subscribe(topic, vec![opener]).await?.split();
 
     let state = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while let Some(event) = receiver.next().await {
             if let Ok(Event::Received(msg)) = event
-                && let Some(plain) = crypto.decrypt(&msg.content)
+                && let Some(plain) = control_crypto.decrypt(&msg.content)
                 && let Ok(state) = postcard::from_bytes::<RoostState>(&plain)
             {
                 return Ok(state);
@@ -861,16 +1110,20 @@ async fn join_roost(
     .await
     .map_err(|_| anyhow::anyhow!("roost server did not answer within 10 seconds"))??;
 
-    for channel in &state.channels {
+    for (channel, channel_secret) in &welcome.channels {
         join_roost_channel(
             gossip,
             &code,
             channel,
+            *channel_secret,
             opener,
             flocks,
             evt_tx.clone(),
             my_id,
             name.clone(),
+            secret.clone(),
+            dm_secret_bytes,
+            my_dm_public_bytes.clone(),
         )
         .await?;
 
@@ -896,10 +1149,32 @@ async fn join_roost(
         });
     }
 
+    // Keep the control channel alive for ongoing RoostState broadcasts so the
+    // TUI can refresh its view of permissions and roles as the roost mutates.
+    let ctl_crypto = control_crypto;
+    let ctl_code = code.clone();
+    let ctl_tx = evt_tx.clone();
+    tokio::spawn(async move {
+        while let Some(event) = receiver.next().await {
+            if let Ok(Event::Received(msg)) = event
+                && let Some(plain) = ctl_crypto.decrypt(&msg.content)
+                && let Ok(state) = postcard::from_bytes::<RoostState>(&plain)
+            {
+                let _ = ctl_tx.send(AppEvent::RoostUpdate {
+                    code: ctl_code.clone(),
+                    name: state.name,
+                    channels: state.channels,
+                    perms: state.perms,
+                });
+            }
+        }
+    });
+
     let _ = evt_tx.send(AppEvent::JoinedRoost {
         code,
-        name: state.name,
-        channels: state.channels,
+        name: welcome.name,
+        channels: welcome.channels.iter().map(|(c, _)| c.clone()).collect(),
+        perms: state.perms,
     });
     Ok(())
 }
@@ -909,11 +1184,15 @@ async fn join_roost_channel(
     gossip: &Gossip,
     roost_code: &str,
     channel: &str,
+    secret: [u8; 32],
     opener: EndpointId,
     flocks: &mut HashMap<String, FlockHandle>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     my_id: EndpointId,
     name: String,
+    identity_secret: iroh::SecretKey,
+    dm_secret_bytes: [u8; 32],
+    my_dm_public_bytes: Vec<u8>,
 ) -> anyhow::Result<()> {
     let code = format!("{roost_code}/{channel}");
     if flocks.contains_key(&code) {
@@ -921,16 +1200,20 @@ async fn join_roost_channel(
     }
 
     let topic = starling::net::topic_for(&format!("starling/roost/{code}"));
-    let crypto = FlockCrypto::from_room_code(&code);
+    let crypto = FlockCrypto::from_secret(&secret);
     let (sender, mut receiver) = gossip.subscribe(topic, vec![opener]).await?.split();
-    let rx_crypto = FlockCrypto::from_room_code(&code);
+    let rx_crypto = FlockCrypto::from_secret(&secret);
     let rx_code = code.clone();
     let rx_tx = evt_tx.clone();
     let rx_sender = sender.clone();
+    let rx_my_id = my_id;
+    let rx_name = name.clone();
 
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     tokio::spawn(async move {
+        let mut dm_pks: HashMap<EndpointId, Vec<u8>> = HashMap::new();
+        let my_dm_secret = crypto_box::SecretKey::from_bytes(dm_secret_bytes);
         loop {
             tokio::select! {
                 () = task_cancel.cancelled() => break,
@@ -938,38 +1221,82 @@ async fn join_roost_channel(
                     let Some(event) = event else { break };
                     match event {
                 Ok(Event::Received(msg)) => {
-                    if let Some(plain) = rx_crypto.decrypt(&msg.content) {
-                        match postcard::from_bytes::<GossipPayload>(&plain) {
-                            Ok(GossipPayload::Chat(msg)) => {
-                                let _ = rx_tx.send(AppEvent::Message {
-                                    flock: rx_code.clone(),
-                                    msg,
+                    let Some(envelope) = starling::net::receive_payload(&rx_crypto, &msg.content)
+                        .ok()
+                        .flatten() else { continue };
+                    match envelope.payload {
+                        GossipPayload::Chat(m) => {
+                            let _ = rx_tx.send(AppEvent::Message {
+                                flock: rx_code.clone(),
+                                msg: m,
+                                private: false,
+                            });
+                        }
+                        GossipPayload::Profile { id, name, dm_pk } => {
+                            if id != envelope.author {
+                                starling::logger::warn(&format!(
+                                    "roost channel: dropped spoofed profile \
+                                     from claimed id {id} (verified {})",
+                                     envelope.author
+                                ));
+                                continue;
+                            }
+                            let _ = rx_tx.send(AppEvent::PeerNamed(id, name));
+                            if !dm_pk.is_empty() {
+                                dm_pks.insert(id, dm_pk.clone());
+                                let _ = rx_tx.send(AppEvent::DmKey {
+                                    endpoint: id,
+                                    dm_pk,
                                 });
                             }
-                            Ok(GossipPayload::Profile { id, name }) => {
-                                let _ = rx_tx.send(AppEvent::PeerNamed(id, name));
+                        }
+                        GossipPayload::Status { id, status } => {
+                            if id != envelope.author {
+                                continue;
                             }
-                            Ok(GossipPayload::Status { id, status }) => {
-                                let _ = rx_tx.send(AppEvent::PeerStatus(id, status));
+                            let _ = rx_tx.send(AppEvent::PeerStatus(id, status));
+                        }
+                        GossipPayload::Presence(lease) => {
+                            let _ = rx_tx.send(AppEvent::PresenceLease(lease));
+                        }
+                        GossipPayload::Chirp { to, sealed } if to == rx_my_id => {
+                            let Ok(their_pk) = crypto_box::PublicKey::try_from(
+                                dm_pks.get(&envelope.author).cloned().unwrap_or_default().as_slice()
+                            ) else { continue };
+                            let Some(plain) =
+                                starling::crypto::open_chirp(&my_dm_secret, &their_pk, &sealed)
+                            else { continue };
+                            if let Ok(m) = postcard::from_bytes::<ChatMessage>(&plain) {
+                                let _ = rx_tx.send(AppEvent::Message {
+                                    flock: rx_code.clone(),
+                                    msg: m,
+                                    private: true,
+                                });
+                            } else {
+                                starling::logger::warn(
+                                    "dropped chirp: could not decode sealed body",
+                                );
                             }
-                            Ok(GossipPayload::Presence(lease)) => {
-                                let _ = rx_tx.send(AppEvent::PresenceLease(lease));
-                            }
-                            Err(e) => starling::logger::warn(&format!(
-                                "roost channel deserialize error: {e}"
-                            )),
+                        }
+                        GossipPayload::Chirp { .. } => {
+                            // Not addressed to us; relay-only.
                         }
                     }
                 }
                 Ok(Event::NeighborUp(id)) => {
                     let _ = rx_tx.send(AppEvent::PeerConnected(id));
                     let payload = GossipPayload::Profile {
-                        id: my_id,
-                        name: name.clone(),
+                        id: rx_my_id,
+                        name: rx_name.clone(),
+                        dm_pk: my_dm_public_bytes.clone(),
                     };
-                    if let Ok(plain) = postcard::to_stdvec(&payload) {
-                        let _ = rx_sender.broadcast(rx_crypto.encrypt(&plain).into()).await;
-                    }
+                    let _ = starling::net::broadcast_payload(
+                        &rx_sender,
+                        &rx_crypto,
+                        &identity_secret,
+                        &payload,
+                    )
+                    .await;
                 }
                 Ok(Event::NeighborDown(id)) => {
                     let _ = rx_tx.send(AppEvent::PeerConnectivityHintDown(id));
