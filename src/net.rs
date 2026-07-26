@@ -428,6 +428,8 @@ pub async fn run(
             crate::call::v1::VOICE_V1_ALPN,
             VoiceV1Proto {
                 evt_tx: evt_tx.clone(),
+                muted: muted.clone(),
+                input_device: input_device.clone(),
             },
         );
     }
@@ -492,10 +494,7 @@ pub async fn run(
                     "V1 send not yet implemented for context {space:?}: {} bytes",
                     body.len()
                 ));
-                let _ = evt_tx.send(AppEvent::ContextStateChanged {
-                    space,
-                    state: crate::ui::ContextState::Revoked,
-                });
+                let _ = evt_tx.send(AppEvent::Notice("V1 messaging isn't available yet".into()));
             }
             Command::SelectContext(space) => {
                 let _ = evt_tx.send(AppEvent::ContextStateChanged {
@@ -790,12 +789,28 @@ impl iroh::protocol::ProtocolHandler for VideoProto {
 #[derive(Debug)]
 struct VoiceV1Proto {
     evt_tx: mpsc::UnboundedSender<AppEvent>,
+    muted: Arc<AtomicBool>,
+    input_device: Option<String>,
 }
 
 #[cfg(feature = "audio")]
 impl iroh::protocol::ProtocolHandler for VoiceV1Proto {
     async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
-        let (_mic_tx, mic_rx) = mpsc::unbounded_channel();
+        let (mic_tx, mic_rx) = mpsc::unbounded_channel();
+        let stream = match crate::voice::start_capture(
+            mic_tx,
+            self.muted.clone(),
+            self.input_device.as_deref(),
+        ) {
+            Ok(stream) => stream,
+            Err(error) => {
+                let _ = self
+                    .evt_tx
+                    .send(AppEvent::Error(format!("could not answer call: {error}")));
+                return Ok(());
+            }
+        };
+        let _stream = stream;
         let _ = crate::call::handle_incoming(conn, mic_rx, self.evt_tx.clone()).await;
         Ok(())
     }
