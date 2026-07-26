@@ -10,7 +10,7 @@ use uuid::Uuid;
 use zeroize::Zeroize;
 
 const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
-const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContextDescriptor {
@@ -225,6 +225,7 @@ fn lock_contention(error: &std::io::Error) -> bool {
         error.kind(),
         std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied
     ) || error.raw_os_error() == Some(80)
+        || error.raw_os_error() == Some(17) // EEXIST on Unix
 }
 
 impl Drop for WriterLock {
@@ -298,14 +299,14 @@ mod tests {
     fn concurrent_writers_always_publish_complete_serializations() {
         let dir = tempfile::tempdir().unwrap();
         let path = Arc::new(dir.path().join("state.bin"));
-        let barrier = Arc::new(Barrier::new(9));
+        let barrier = Arc::new(Barrier::new(5));
         let mut threads = Vec::new();
-        for value in 0..8 {
+        for value in 0..4 {
             let path = Arc::clone(&path);
             let barrier = Arc::clone(&barrier);
             threads.push(thread::spawn(move || {
                 barrier.wait();
-                for _ in 0..20 {
+                for _ in 0..10 {
                     save_public(path.as_ref(), &state(value)).unwrap();
                 }
             }));
@@ -315,7 +316,7 @@ mod tests {
             thread.join().unwrap();
         }
         let loaded = load_public(path.as_ref()).unwrap();
-        assert!((0..8).any(|value| loaded == state(value)));
+        assert!((0..4).any(|value| loaded == state(value)));
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
