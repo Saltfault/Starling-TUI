@@ -374,14 +374,14 @@ fn check_dependencies() -> Vec<String> {
                     .map(|mut d| {
                         d.any(|e| {
                             e.ok()
-                                .map_or(false, |f| f.path().join("lib/libclang.so").exists())
+                                .is_some_and(|f| f.path().join("lib/libclang.so").exists())
                         })
                     })
                     .unwrap_or(false)
                 || std::fs::read_dir("/usr/lib")
                     .map(|mut d| {
                         d.any(|e| {
-                            e.ok().map_or(false, |f| {
+                            e.ok().is_some_and(|f| {
                                 f.file_name().to_string_lossy().starts_with("libclang.so")
                             })
                         })
@@ -406,7 +406,7 @@ fn check_dependencies() -> Vec<String> {
                 && !std::fs::read_dir("/dev")
                     .map(|mut d| {
                         d.any(|e| {
-                            e.ok().map_or(false, |f| {
+                            e.ok().is_some_and(|f| {
                                 f.file_name().to_string_lossy().starts_with("video")
                             })
                         })
