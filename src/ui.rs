@@ -828,7 +828,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     }
     if !code.is_empty() {
         f.render_widget(
-            Paragraph::new(format!(" {code}")).style(Style::new().fg(app.palette.dim)),
+            Paragraph::new(format!(" starling://join/{code}"))
+                .style(Style::new().fg(app.palette.invite)),
             header[1],
         );
     }

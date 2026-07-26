@@ -1079,7 +1079,7 @@ fn copy_active_invite<C: Clipboard + ?Sized>(
         app.error_message = Some("Clipboard unavailable on this system".into());
         return;
     };
-    match clipboard.set_text(&invite) {
+    match clipboard.set_text(&format!("starling://join/{invite}")) {
         Ok(()) => {
             app.error_message = None;
             app.show_status_notice("Invite copied", now);
