@@ -69,7 +69,15 @@ jobs:
       - name: Checkout starling core
         run: git clone https://forgejo.hearthhome.lol/Saltfault/Starling.git starling
       - name: Point patch to local starling
+        if: runner.os != 'Windows'
         run: sed -i.bak 's|path = "../starling"|path = "./starling"|' Cargo.toml && rm -f Cargo.toml.bak
+      - name: Point patch to local starling
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $c = Get-Content Cargo.toml -Raw
+          $c = $c -replace 'path = "\.\.\/starling"', 'path = "./starling"'
+          [IO.File]::WriteAllText("$pwd\Cargo.toml", $c)
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
       - name: Install Opus for Intel macOS
