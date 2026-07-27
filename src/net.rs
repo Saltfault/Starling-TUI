@@ -1016,6 +1016,7 @@ async fn join_flock(
     let crypto = FlockCrypto::from_secret(&flock_secret);
     let (sender, mut receiver) = gossip.subscribe(topic, boot).await?.split();
 
+    let rx_space = starling::protocol::SpaceId::Flock(starling::protocol::FlockId(flock_secret));
     let (
         rx_crypto,
         rx_code,
@@ -1069,7 +1070,11 @@ async fn join_flock(
                                 ));
                                 continue;
                             }
-                            let _ = rx_tx.send(AppEvent::PeerNamed(id, name));
+                            let _ = rx_tx.send(AppEvent::PeerNamed {
+                                space: rx_space,
+                                id,
+                                name,
+                            });
                             if !dm_pk.is_empty() {
                                 dm_pks.insert(id, dm_pk.clone());
                                 let _ = rx_tx.send(AppEvent::DmKey {
@@ -1113,7 +1118,10 @@ async fn join_flock(
                 }
 
                 Ok(Event::NeighborUp(id)) => {
-                    let _ = rx_tx.send(AppEvent::PeerConnected(id));
+                    let _ = rx_tx.send(AppEvent::PeerConnected {
+                        space: rx_space,
+                        id,
+                    });
                     let payload = GossipPayload::Profile {
                         id: rx_my_id,
                         name: rx_name.clone(),
@@ -1319,12 +1327,18 @@ async fn join_roost_channel(
     let rx_sender = sender.clone();
     let rx_my_id = my_id;
     let rx_name = name.clone();
+    let rx_dm_secret = dm_secret_bytes;
+    let space_id = starling::protocol::SpaceId::RoostChannel {
+        roost: starling::protocol::RoostId(*opener.as_bytes()),
+        channel: channel_id_from_name(channel),
+    };
 
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     tokio::spawn(async move {
+        let rx_space = space_id;
         let mut dm_pks: HashMap<EndpointId, Vec<u8>> = HashMap::new();
-        let my_dm_secret = crypto_box::SecretKey::from_bytes(dm_secret_bytes);
+        let my_dm_secret = crypto_box::SecretKey::from_bytes(rx_dm_secret);
         loop {
             tokio::select! {
                 () = task_cancel.cancelled() => break,
@@ -1352,7 +1366,11 @@ async fn join_roost_channel(
                                 ));
                                 continue;
                             }
-                            let _ = rx_tx.send(AppEvent::PeerNamed(id, name));
+                            let _ = rx_tx.send(AppEvent::PeerNamed {
+                                space: rx_space,
+                                id,
+                                name,
+                            });
                             if !dm_pk.is_empty() {
                                 dm_pks.insert(id, dm_pk.clone());
                                 let _ = rx_tx.send(AppEvent::DmKey {
@@ -1395,7 +1413,10 @@ async fn join_roost_channel(
                     }
                 }
                 Ok(Event::NeighborUp(id)) => {
-                    let _ = rx_tx.send(AppEvent::PeerConnected(id));
+                    let _ = rx_tx.send(AppEvent::PeerConnected {
+                        space: rx_space,
+                        id,
+                    });
                     let payload = GossipPayload::Profile {
                         id: rx_my_id,
                         name: rx_name.clone(),
@@ -1426,10 +1447,6 @@ async fn join_roost_channel(
     };
     flocks.insert(code.clone(), flock_handle);
     // Track the deterministic SpaceId so V1 context sends can find this handle.
-    let space_id = starling::protocol::SpaceId::RoostChannel {
-        roost: starling::protocol::RoostId(*opener.as_bytes()),
-        channel: channel_id_from_name(channel),
-    };
     spaces.insert(
         space_id,
         FlockHandle {

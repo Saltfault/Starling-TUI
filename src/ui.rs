@@ -70,7 +70,7 @@ impl LiveLease {
 pub struct ContextPresence {
     pub members: HashMap<EndpointId, MemberProfile>,
     pub live: HashMap<EndpointId, LiveLease>,
-    ordered_ids: Vec<EndpointId>,
+    pub ordered_ids: Vec<EndpointId>,
 }
 
 impl ContextPresence {
@@ -631,19 +631,27 @@ impl App {
         }
     }
 
+    pub fn active_peers(&self) -> Vec<EndpointId> {
+        self.active_context()
+            .and_then(|ctx| self.presence.contexts.get(&ctx.id))
+            .map(|presence| presence.ordered_ids.clone())
+            .unwrap_or_default()
+    }
+
     pub fn bird_count(&self) -> usize {
-        self.peers.len() + 1
+        self.active_peers().len() + 1
     }
 
     #[allow(dead_code)]
     pub fn select_next_peer(&mut self) {
-        if !self.peers.is_empty() {
-            self.selected_peer = (self.selected_peer + 1) % self.peers.len();
+        let peers = self.active_peers();
+        if !peers.is_empty() {
+            self.selected_peer = (self.selected_peer + 1) % peers.len();
         }
     }
 
     pub fn selected_peer_id(&self) -> Option<EndpointId> {
-        self.peers.get(self.selected_peer).copied()
+        self.active_peers().get(self.selected_peer).copied()
     }
 
     /// Decode the currently-selected roost's invite code into its opener
@@ -1183,7 +1191,9 @@ fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
         ),
     ])));
 
-    for (i, id) in app.peers.iter().enumerate() {
+    let active_peers = app.active_peers();
+
+    for (i, id) in active_peers.iter().enumerate() {
         let sel = i == app.selected_peer;
         let mark = if sel { "> " } else { "  " };
         let (glyph, gc) = match app.peer_status.get(id) {

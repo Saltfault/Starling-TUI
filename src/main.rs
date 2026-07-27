@@ -219,6 +219,10 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if first == Some("leave") {
+        return run_leave(&args);
+    }
+
     if matches!(first, Some("profile" | "settings")) {
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
@@ -585,9 +589,17 @@ async fn main() -> anyhow::Result<()> {
                             rv.unread = rv.channels.iter().map(|channel| channel.unread).sum();
                         }
                     }
-                    AppEvent::PeerConnected(id) => {
-                        if !app.peers.contains(&id) {
-                            app.peers.push(id);
+                    AppEvent::PeerConnected { space, id } => {
+                        let ctx = app.presence.context_mut(space);
+                        ctx.members
+                            .entry(id)
+                            .or_insert_with(|| ui::MemberProfile {
+                                endpoint: id,
+                                name: String::new(),
+                                pronouns: String::new(),
+                            });
+                        if !ctx.ordered_ids.contains(&id) {
+                            ctx.ordered_ids.push(id);
                         }
                     }
                     AppEvent::PeerConnectivityHintDown(id) => {
@@ -595,25 +607,22 @@ async fn main() -> anyhow::Result<()> {
                         app.presence.neighbor_down(id);
                     }
 
-                    AppEvent::PeerNamed(id, name) => {
-                        if id != my_node_id && !app.peers.contains(&id) {
-                            app.peers.push(id);
-                        }
-                        app.peer_names.insert(id, name.clone());
-                        // Track profile for presence display across all contexts.
-                        for ctx in app.presence.contexts.values_mut() {
+                    AppEvent::PeerNamed { space, id, name } => {
+                        if id != my_node_id {
+                            let ctx = app.presence.context_mut(space);
                             ctx.set_profile(ui::MemberProfile {
                                 endpoint: id,
                                 name: name.clone(),
                                 pronouns: String::new(),
                             });
+                            if !ctx.ordered_ids.contains(&id) {
+                                ctx.ordered_ids.push(id);
+                            }
                         }
+                        app.peer_names.insert(id, name);
                     }
-                    AppEvent::PeerStatus(id, s) => {
-                        if id != my_node_id && !app.peers.contains(&id) {
-                            app.peers.push(id);
-                        }
-                        app.peer_status.insert(id, s);
+                    AppEvent::PeerStatus(id, status) => {
+                        app.peer_status.insert(id, status);
                     }
                     AppEvent::PresenceLease(lease) => {
                         let remaining_ms =
@@ -1135,6 +1144,96 @@ fn parse_join_arg(args: &[String]) -> Result<Option<String>, &'static str> {
     Ok(Some(code.to_ascii_uppercase()))
 }
 
+/// Validate and normalize a leave code exactly the way [`parse_join_arg`]
+/// normalizes a join code, so the value we match against persisted
+/// `ContextDescriptor::secret` values is comparable. Returns the uppercased
+/// code when valid, `None` when the code is not a recognized typed code.
+fn normalize_leave_code(raw: &str) -> Option<String> {
+    let code = raw.trim();
+    if starling::net::decode_typed_code(code).is_none() {
+        return None;
+    }
+    Some(code.to_ascii_uppercase())
+}
+
+/// Headless `starling-tui leave <code>` entry point. Removes every persisted
+/// flock/roost context whose stored join secret matches `code` (a roost stores
+/// one context per channel, all keyed by the same roost code, so a single leave
+/// drops the whole roost) and drops any credential keyed by the same code.
+///
+/// This operates only on the on-disk state files. If the TUI is currently
+/// running it will overwrite these files on exit, so close the TUI first.
+fn run_leave(args: &[String]) -> anyhow::Result<()> {
+    let raw = args.get(2).map(String::as_str).unwrap_or_else(|| {
+        eprintln!("Usage: starling-tui leave <code>");
+        std::process::exit(1);
+    });
+    let code = normalize_leave_code(raw).unwrap_or_else(|| {
+        eprintln!("Invalid or unsupported join code.");
+        std::process::exit(1);
+    });
+    let config_dir = starling::config::Profile::config_dir();
+    let state_path = config_dir.join("public").join("contexts.bin");
+    let protected_path = config_dir.join("protected").join("credentials.bin");
+    let report = leave_context(&state_path, &protected_path, &code)?;
+    if report.removed == 0 {
+        println!("No saved flock or roost matched that code.");
+    } else {
+        println!(
+            "✓ Left {} saved context(s) matching that code.",
+            report.removed
+        );
+    }
+    Ok(())
+}
+
+struct LeaveReport {
+    removed: usize,
+}
+
+/// Remove persisted contexts and credentials matching `code`. Pure and
+/// path-parameterized so it can be unit-tested without touching the real
+/// config directory.
+fn leave_context(
+    state_path: &std::path::Path,
+    protected_path: &std::path::Path,
+    code: &str,
+) -> anyhow::Result<LeaveReport> {
+    let mut removed = 0;
+    if state_path.exists() {
+        let mut state = persistence::load_public(state_path)?;
+        let removed_spaces: Vec<starling::protocol::SpaceId> = state
+            .contexts
+            .iter()
+            .filter(|ctx| ctx.secret.as_deref() == Some(code))
+            .map(|ctx| ctx.space)
+            .collect();
+        removed = removed_spaces.len();
+        if removed > 0 {
+            state
+                .contexts
+                .retain(|ctx| ctx.secret.as_deref() != Some(code));
+            if let Some(active) = state.active_space
+                && removed_spaces.contains(&active)
+            {
+                state.active_space = None;
+            }
+            persistence::save_public(state_path, &state)?;
+        }
+    }
+    if protected_path.exists() {
+        let mut protected = persistence::load_protected(protected_path)?;
+        let before = protected.credentials.len();
+        protected
+            .credentials
+            .retain(|credential| credential.name != code);
+        if protected.credentials.len() != before {
+            persistence::save_protected(protected_path, &protected)?;
+        }
+    }
+    Ok(LeaveReport { removed })
+}
+
 fn copy_active_invite<C: Clipboard + ?Sized>(
     app: &mut App,
     clipboard: Option<&mut C>,
@@ -1510,8 +1609,8 @@ fn activate_menu_item(
 #[cfg(test)]
 mod tests {
     use super::{
-        App, MENU_ITEMS, menu_item_at_size, open_create_room, parse_join_arg,
-        refresh_create_flock_code, update_menu_hover,
+        App, MENU_ITEMS, leave_context, menu_item_at_size, normalize_leave_code, open_create_room,
+        parse_join_arg, refresh_create_flock_code, update_menu_hover,
     };
 
     #[test]
@@ -1609,5 +1708,128 @@ mod tests {
     fn unrelated_first_argument_returns_none() {
         let args = ["starling-tui".into(), "--version".into()];
         assert_eq!(parse_join_arg(&args).unwrap(), None);
+    }
+
+    #[test]
+    fn leave_code_normalizes_like_a_join_code() {
+        let code = sample_join_code();
+        // Same uppercased form that `parse_join_arg` produces and that the TUI
+        // stores as `ContextDescriptor::secret`.
+        assert_eq!(normalize_leave_code(&code), Some(code.clone()));
+        assert_eq!(normalize_leave_code(&code.to_lowercase()), Some(code));
+        assert_eq!(normalize_leave_code("NOT-A-CODE"), None);
+        assert_eq!(normalize_leave_code(""), None);
+    }
+
+    #[test]
+    fn leave_removes_matching_contexts_and_clears_active_space() {
+        use crate::persistence::{ContextDescriptor, PublicState, save_public};
+        use starling::protocol::{FlockId, SpaceId};
+
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("contexts.bin");
+        let protected_path = dir.path().join("credentials.bin");
+
+        let code = sample_join_code();
+        let other_code = sample_join_code();
+        let leaving_space = SpaceId::Flock(FlockId([1; 32]));
+        let second_leaving_space = SpaceId::Flock(FlockId([2; 32]));
+        let kept_space = SpaceId::Flock(FlockId([3; 32]));
+
+        // Two contexts share the same join code (e.g. a roost's channels), one
+        // carries a different code, and one legacy context has no secret.
+        save_public(
+            &state_path,
+            &PublicState {
+                contexts: vec![
+                    ContextDescriptor {
+                        space: leaving_space,
+                        label: "leaving-a".into(),
+                        secret: Some(code.clone()),
+                    },
+                    ContextDescriptor {
+                        space: second_leaving_space,
+                        label: "leaving-b".into(),
+                        secret: Some(code.clone()),
+                    },
+                    ContextDescriptor {
+                        space: kept_space,
+                        label: "kept".into(),
+                        secret: Some(other_code.clone()),
+                    },
+                    ContextDescriptor {
+                        space: SpaceId::Flock(FlockId([4; 32])),
+                        label: "legacy".into(),
+                        secret: None,
+                    },
+                ],
+                active_space: Some(leaving_space),
+            },
+        )
+        .unwrap();
+
+        let report = leave_context(&state_path, &protected_path, &code).unwrap();
+        assert_eq!(report.removed, 2);
+
+        let after = crate::persistence::load_public(&state_path).unwrap();
+        assert_eq!(after.contexts.len(), 2);
+        assert!(
+            after
+                .contexts
+                .iter()
+                .all(|ctx| ctx.secret.as_deref() != Some(code.as_str()))
+        );
+        assert!(after.contexts.iter().any(
+            |ctx| ctx.space == kept_space && ctx.secret.as_deref() == Some(other_code.as_str())
+        ));
+        // active_space pointed at a removed context and must be cleared.
+        assert_eq!(after.active_space, None);
+    }
+
+    #[test]
+    fn leave_with_no_state_file_reports_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("contexts.bin");
+        let protected_path = dir.path().join("credentials.bin");
+        let code = sample_join_code();
+
+        let report = leave_context(&state_path, &protected_path, &code).unwrap();
+        assert_eq!(report.removed, 0);
+        assert!(!state_path.exists());
+    }
+
+    #[test]
+    fn leave_drops_credentials_keyed_by_the_code() {
+        use crate::persistence::{
+            Credential, ProtectedSecretState, load_protected, save_protected,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("contexts.bin");
+        let protected_path = dir.path().join("credentials.bin");
+        let code = sample_join_code();
+
+        save_protected(
+            &protected_path,
+            &ProtectedSecretState {
+                credentials: vec![
+                    Credential {
+                        name: code.clone(),
+                        secret: vec![1; 32],
+                    },
+                    Credential {
+                        name: "unrelated".into(),
+                        secret: vec![2; 32],
+                    },
+                ],
+            },
+        )
+        .unwrap();
+
+        leave_context(&state_path, &protected_path, &code).unwrap();
+
+        let after = load_protected(&protected_path).unwrap();
+        assert_eq!(after.credentials.len(), 1);
+        assert_eq!(after.credentials[0].name, "unrelated");
     }
 }

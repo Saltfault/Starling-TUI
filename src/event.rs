@@ -94,10 +94,17 @@ pub enum AppEvent {
         channels: Vec<String>,
         perms: starling::roost::perms::PermState,
     },
-    PeerConnected(EndpointId),
+    PeerConnected {
+        space: starling::protocol::SpaceId,
+        id: EndpointId,
+    },
 
     PeerConnectivityHintDown(EndpointId),
-    PeerNamed(EndpointId, String),
+    PeerNamed {
+        space: starling::protocol::SpaceId,
+        id: EndpointId,
+        name: String,
+    },
     Ticket(EndpointId),
     Error(String),
     #[cfg(feature = "audio")]
