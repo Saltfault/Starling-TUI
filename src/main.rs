@@ -129,7 +129,7 @@ fn open_create_room(app: &mut App) {
 
 fn open_edit_flock(app: &mut App) -> bool {
     let Some(code) = app.active_code().map(str::to_owned) else {
-        app.error_message = Some("Select a flock to edit".into());
+        app.error_message = Some("Select a flock or roost to edit".into());
         return false;
     };
     app.edit_flock_code = code;
@@ -138,6 +138,12 @@ fn open_edit_flock(app: &mut App) -> bool {
         .iter()
         .find(|f| f.code == app.edit_flock_code)
         .map(|f| f.name.clone())
+        .or_else(|| {
+            app.roosts
+                .iter()
+                .find(|r| r.code == app.edit_flock_code)
+                .map(|r| r.name.clone())
+        })
         .unwrap_or_default();
     app.show_edit_flock = true;
     true
@@ -787,11 +793,18 @@ async fn main() -> anyhow::Result<()> {
                                 let code = std::mem::take(&mut app.edit_flock_code);
                                 app.show_edit_flock = false;
                                 if !name.is_empty() {
-                                    let _ = cmd_tx.send(Command::UpdateProfile {
-                                        name: format!("flock:{code}:{name}"),
-                                        input_device: None,
-                                        camera_index: None,
-                                    });
+                                    // Update the legacy FlockView name
+                                    if let Some(fv) = app.flocks.iter_mut().find(|f| f.code == code) {
+                                        fv.name = name.clone();
+                                    }
+                                    // Update the typed ContextView title
+                                    if let Some(ctx) = app.contexts.values_mut().find(|c| c.secret.as_deref() == Some(&code)) {
+                                        ctx.title = name.clone();
+                                    }
+                                    // Update roost name if this code belongs to a roost
+                                    if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
+                                        rv.name = name.clone();
+                                    }
                                 }
                             }
                             KeyCode::Backspace => {
