@@ -472,12 +472,13 @@ async fn main() -> anyhow::Result<()> {
                                 existing.state = ui::ContextState::Ready;
                                 existing.title = flock_code.name.clone();
                                 existing.secret = Some(code.clone());
+                                existing.base_invite_display = Some(code.clone());
                             } else {
                                 app.insert_context(ui::ContextView {
                                     id: space_id,
                                     title: flock_code.name.clone(),
                                     roost: None,
-                                    base_invite_display: None,
+                                    base_invite_display: Some(code.clone()),
                                     messages: Vec::new(),
                                     unread: 0,
                                     state: ui::ContextState::Ready,
@@ -541,7 +542,7 @@ async fn main() -> anyhow::Result<()> {
                                     id: space_id,
                                     title: format!("{code}/{channel_name}"),
                                     roost: Some(roost_id),
-                                    base_invite_display: None,
+                                    base_invite_display: Some(code.clone()),
                                     messages: Vec::new(),
                                     unread: 0,
                                     state: ui::ContextState::Ready,
