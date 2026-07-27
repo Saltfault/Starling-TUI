@@ -259,6 +259,7 @@ impl SpringScroll {
 #[derive(Clone, Copy)]
 pub enum ToolbarAction {
     Menu,
+    Leave,
     #[cfg(feature = "audio")]
     Call,
     #[cfg(feature = "audio")]
@@ -423,6 +424,42 @@ impl App {
         context.unread = 0;
         self.active = Some(id);
         true
+    }
+
+    /// Remove the active flock/roost from the in-memory state. Returns the
+    /// base join code (so the caller can send [`Command::Leave`] to tear down
+    /// the gossip subscription) and a display title for a status message, or
+    /// `None` when no context is active or it has no join code to leave by.
+    pub fn leave_active_context(&mut self) -> Option<(String, String)> {
+        let active = self.active?;
+        let context = self.contexts.get(&active)?;
+        let code = context.base_invite_display.clone()?;
+        let title = context.title.clone();
+        let is_roost = context.roost.is_some();
+
+        // Remove every context sharing this base join code: a roost stores
+        // one context per channel, all keyed by the same roost code.
+        let leaving: Vec<SpaceId> = self
+            .contexts
+            .iter()
+            .filter(|(_, c)| c.base_invite_display.as_deref() == Some(code.as_str()))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &leaving {
+            self.context_order.retain(|x| x != id);
+            self.contexts.remove(id);
+            self.presence.contexts.remove(id);
+        }
+        if is_roost {
+            self.roosts.retain(|r| r.code != code);
+        } else {
+            self.flocks.retain(|f| f.code != code);
+        }
+
+        // Move the active selection to the next remaining context, if any.
+        self.active = self.context_order.first().copied();
+        self.selection = Selection::default();
+        Some((code, title))
     }
 
     pub fn active_context(&self) -> Option<&ContextView> {
@@ -738,6 +775,7 @@ pub fn toolbar_buttons(app: &App) -> Vec<(ToolbarAction, &'static str, u16, u16)
         ToolbarAction::Menu,
         if app.show_menu { "Close" } else { "Menu" },
     ))
+    .chain(std::iter::once((ToolbarAction::Leave, "Leave")))
     .chain({
         #[cfg(feature = "audio")]
         {
@@ -1242,6 +1280,7 @@ fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
     let mut spans = Vec::new();
     for (action, label, _x, _w) in toolbar_buttons(app) {
         let enabled = match action {
+            ToolbarAction::Leave => app.active_context().is_some(),
             #[cfg(feature = "audio")]
             ToolbarAction::Call => app.in_call || app.selected_peer_id().is_some(),
             _ => true,
@@ -1606,6 +1645,95 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Renamed", "Second"]
         );
+    }
+
+    #[test]
+    fn leave_active_context_drops_context_and_flock_view() {
+        let flock_id = SpaceId::Flock(starling::protocol::FlockId::random());
+        let other_id = SpaceId::Flock(starling::protocol::FlockId::random());
+        let mut app = App::default();
+        app.insert_context(context(flock_id, "Night Birds", "NIGHT-CODE", None));
+        app.insert_context(context(other_id, "Day Birds", "DAY-CODE", None));
+        app.flocks.push(FlockView {
+            code: "NIGHT-CODE".into(),
+            name: "Night Birds".into(),
+            messages: vec![],
+            unread: 0,
+        });
+        app.flocks.push(FlockView {
+            code: "DAY-CODE".into(),
+            name: "Day Birds".into(),
+            messages: vec![],
+            unread: 0,
+        });
+        assert!(app.select_context(flock_id));
+
+        let (code, title) = app.leave_active_context().expect("active context leaves");
+        assert_eq!(code, "NIGHT-CODE");
+        assert_eq!(title, "Night Birds");
+
+        // The flock's context and view are gone; the other flock remains and
+        // is now active.
+        assert!(!app.contexts.contains_key(&flock_id));
+        assert!(!app.context_order.contains(&flock_id));
+        assert!(app.contexts.contains_key(&other_id));
+        assert_eq!(app.active, Some(other_id));
+        assert!(app.flocks.iter().all(|f| f.code != "NIGHT-CODE"));
+        assert!(app.flocks.iter().any(|f| f.code == "DAY-CODE"));
+    }
+
+    #[test]
+    fn leave_active_context_removes_every_roost_channel() {
+        let roost = starling::protocol::RoostId::random();
+        let general = SpaceId::RoostChannel {
+            roost,
+            channel: starling::protocol::ChannelId::random(),
+        };
+        let random_ch = SpaceId::RoostChannel {
+            roost,
+            channel: starling::protocol::ChannelId::random(),
+        };
+        let mut app = App::default();
+        app.insert_context(context(general, "Nest/general", "NEST-CODE", Some(roost)));
+        app.insert_context(context(random_ch, "Nest/random", "NEST-CODE", Some(roost)));
+        app.roosts.push(RoostView {
+            code: "NEST-CODE".into(),
+            name: "Nest".into(),
+            channels: vec![
+                FlockView {
+                    code: "NEST-CODE/general".into(),
+                    name: "general".into(),
+                    messages: vec![],
+                    unread: 0,
+                },
+                FlockView {
+                    code: "NEST-CODE/random".into(),
+                    name: "random".into(),
+                    messages: vec![],
+                    unread: 0,
+                },
+            ],
+            unread: 0,
+        });
+        assert!(app.select_context(general));
+
+        let (code, title) = app.leave_active_context().expect("roost leaves");
+        assert_eq!(code, "NEST-CODE");
+        assert_eq!(title, "Nest/general");
+
+        // Both channel contexts and the roost view are removed; nothing stays
+        // active.
+        assert!(!app.contexts.contains_key(&general));
+        assert!(!app.contexts.contains_key(&random_ch));
+        assert!(app.context_order.is_empty());
+        assert!(app.roosts.is_empty());
+        assert_eq!(app.active, None);
+    }
+
+    #[test]
+    fn leave_active_context_returns_none_without_an_active_context() {
+        let mut app = App::default();
+        assert!(app.leave_active_context().is_none());
     }
 
     fn append_message(app: &mut App, id: SpaceId, message: ChatMessageView) {

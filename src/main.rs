@@ -1379,6 +1379,14 @@ fn handle_mouse_click(
                         app.show_menu = true;
                         app.menu_selection = 0;
                     }
+                    ToolbarAction::Leave => {
+                        if let Some((code, title)) = app.leave_active_context() {
+                            let _ = cmd_tx.send(Command::Leave { code });
+                            app.error_message = Some(format!("Left {title}"));
+                        } else {
+                            app.error_message = Some("No active flock or roost to leave".into());
+                        }
+                    }
                     #[cfg(feature = "audio")]
                     ToolbarAction::Call => {
                         if app.in_call {
