@@ -926,9 +926,12 @@ async fn main() -> anyhow::Result<()> {
                                     body: body.to_string(),
                                 });
                             } else if let Some(_space) = app.active {
-                                // V1 typed-context send isn't wired yet — don't revoke, don't clear input.
-                                app.input = text;
-                                app.error_message = Some("V1 messaging isn't available yet".into());
+                                if let Some(code) = app.active_code() {
+                                    let _ = cmd_tx.send(Command::SendText {
+                                        flock: code.to_string(),
+                                        body: text,
+                                    });
+                                }
                             } else if let Some(code) = app.active_code() {
                                 let _ = cmd_tx.send(Command::SendText {
                                     flock: code.to_string(),
