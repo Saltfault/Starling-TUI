@@ -399,7 +399,40 @@ impl Default for App {
     }
 }
 
+/// Which popup currently owns the keyboard, in the same priority order as the
+/// `if app.show_*` guard chain in the event loop. `None` means normal-mode
+/// key handling applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Popup {
+    DeleteConfirm,
+    CreateRoom,
+    EditFlock,
+    JoinRoom,
+    Menu,
+    None,
+}
+
 impl App {
+    /// Resolve the single active popup using the same precedence as the old
+    /// `if`-cascade: delete-confirm wins over create-room, which wins over
+    /// edit-flock, join-room, and the menu, in that order. Only the highest-
+    /// precedence open popup receives keys; the rest are masked.
+    pub fn active_popup(&self) -> Popup {
+        if self.show_delete_confirm {
+            Popup::DeleteConfirm
+        } else if self.show_create_room {
+            Popup::CreateRoom
+        } else if self.show_edit_flock {
+            Popup::EditFlock
+        } else if self.show_join_room {
+            Popup::JoinRoom
+        } else if self.show_menu {
+            Popup::Menu
+        } else {
+            Popup::None
+        }
+    }
+
     pub fn insert_context(&mut self, context: ContextView) {
         let id = context.id;
         if !self.contexts.contains_key(&id) {
