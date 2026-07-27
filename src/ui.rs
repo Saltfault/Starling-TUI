@@ -2055,4 +2055,82 @@ mod tests {
             Some("Wren")
         );
     }
+
+    #[test]
+    fn roost_channels_render_under_roosts_not_in_flocks() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let roost = starling::protocol::RoostId::random();
+        let chan = crate::net::channel_id_from_name("general");
+        let space = SpaceId::RoostChannel {
+            roost,
+            channel: chan,
+        };
+        let mut app = App::default();
+        app.roosts.push(RoostView {
+            code: "ROOST-CODE".into(),
+            name: "Nest".into(),
+            channels: vec![FlockView {
+                code: "ROOST-CODE/general".into(),
+                name: "general".into(),
+                messages: vec![],
+                unread: 0,
+            }],
+            unread: 0,
+        });
+        app.insert_context(ContextView {
+            id: space,
+            title: "ROOST-CODE/general".into(),
+            roost: Some(roost),
+            base_invite_display: Some("ROOST-CODE".into()),
+            messages: Vec::new(),
+            unread: 0,
+            state: ContextState::Ready,
+            secret: Some("ROOST-CODE".into()),
+        });
+        app.expanded.insert(0);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let area = buf.area();
+        let cells = buf.content();
+        let full_width = area.width as usize;
+        // The sidebar (flocks + roosts panels) is the leftmost 26 columns; the
+        // message panel sits to its right and would otherwise leak "general"
+        // (the active title) into a naive substring search.
+        let sidebar_width = 26usize;
+        let rows: Vec<String> = (0..area.height as usize)
+            .map(|y| {
+                (0..sidebar_width)
+                    .map(|x| cells[y * full_width + x].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect();
+        let flocks_row = rows
+            .iter()
+            .position(|r| r.contains("flocks"))
+            .expect("flocks panel title rendered");
+        let roosts_row = rows
+            .iter()
+            .position(|r| r.contains("roosts"))
+            .expect("roosts panel title rendered");
+        // The flocks panel body is strictly between its title and the roosts
+        // panel title; it must NOT contain the roost channel.
+        for row in rows.iter().take(roosts_row).skip(flocks_row + 1) {
+            assert!(
+                !row.contains("general"),
+                "roost channel leaked into the flocks panel: {:?}",
+                row
+            );
+        }
+        // The roosts panel body must render the channel under the roost.
+        let rendered_under_roosts = ((roosts_row + 1)..rows.len())
+            .any(|y| rows[y].contains("#") && rows[y].contains("general"));
+        assert!(
+            rendered_under_roosts,
+            "roost channel was not rendered under the roosts panel"
+        );
+    }
 }
