@@ -1081,7 +1081,7 @@ fn handle_normal_key(
         }
 
         KeyCode::Up if k.modifiers.contains(KeyModifiers::ALT) => {
-            let nav = nav_items(&app);
+            let nav = nav_items(app);
             if let Some(pos) = nav.iter().position(|s| *s == app.selection)
                 && pos > 0
             {
@@ -1089,7 +1089,7 @@ fn handle_normal_key(
             }
         }
         KeyCode::Down if k.modifiers.contains(KeyModifiers::ALT) => {
-            let nav = nav_items(&app);
+            let nav = nav_items(app);
             if let Some(pos) = nav.iter().position(|s| *s == app.selection)
                 && pos + 1 < nav.len()
             {
