@@ -432,7 +432,7 @@ async fn main() -> anyhow::Result<()> {
                         msg,
                         private,
                     } => {
-                        let is_current = app.active_code().is_some_and(|code| code == flock);
+                        let is_current = app.active_send_code().is_some_and(|code| code == flock);
                         if let Some(fv) =
                             app.flocks
                                 .iter_mut()
@@ -934,7 +934,7 @@ async fn main() -> anyhow::Result<()> {
                                         continue;
                                     }
                                 };
-                                let Some(code) = app.active_code() else {
+                                let Some(code) = app.active_send_code() else {
                                     app.error_message = Some("Select a flock first".into());
                                     continue;
                                 };
@@ -943,13 +943,13 @@ async fn main() -> anyhow::Result<()> {
                                     None => continue,
                                 };
                                 let _ = cmd_tx.send(Command::SendChirp {
-                                    flock: code.to_string(),
+                                    flock: code,
                                     to,
                                     their_pk,
                                     body: body.to_string(),
                                 });
                             } else if let Some(_space) = app.active {
-                                if let Some(code) = app.active_code() {
+                                if let Some(code) = app.active_send_code() {
                                     let _ = cmd_tx.send(Command::SendText {
                                         flock: code.to_string(),
                                         body: text,

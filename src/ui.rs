@@ -585,6 +585,22 @@ impl App {
         }
     }
 
+    /// The `flocks` routing key to send to for the active context. This differs
+    /// from [`active_code`] (which returns the base invite for display/copy):
+    /// a roost channel routes on its full `{roost_code}/{channel}` key, which
+    /// the net layer stores under the same string, while a flock routes on its
+    /// join code. Using `active_code()` for a roost channel returns the base
+    /// roost code, which is not a `flocks` key, so the send would be silently
+    /// dropped and the outgoing message would never be echoed back for display.
+    pub fn active_send_code(&self) -> Option<String> {
+        let context = self.active_context()?;
+        if context.roost.is_some() {
+            Some(context.title.clone())
+        } else {
+            context.base_invite_display.clone()
+        }
+    }
+
     pub fn active_messages(&self) -> &[MessageView] {
         // For typed contexts, delegate to the legacy FlockView where
         // messages are actually stored (roost channels live in
@@ -622,6 +638,24 @@ impl App {
 
     pub fn active_title(&self) -> String {
         if let Some(context) = self.active_context() {
+            if context.roost.is_some() {
+                // Render roost channels as "RoostName #channel" rather than the
+                // raw `{roost_code}/{channel}` routing key, so a channel does
+                // not look like a flock-code entry in the message header.
+                if let Some(roost_code) = context.base_invite_display.as_deref()
+                    && let Some(rv) = self.roosts.iter().find(|r| r.code == roost_code)
+                {
+                    let rn = if rv.name.is_empty() {
+                        &rv.code
+                    } else {
+                        &rv.name
+                    };
+                    if let Some(ch) = rv.channels.iter().find(|c| c.code == context.title) {
+                        return format!("{rn} #{}", ch.name);
+                    }
+                    return format!("{rn} #{}", context.title);
+                }
+            }
             return context.title.clone();
         }
         match self.selection {
@@ -1734,6 +1768,85 @@ mod tests {
     fn leave_active_context_returns_none_without_an_active_context() {
         let mut app = App::default();
         assert!(app.leave_active_context().is_none());
+    }
+
+    #[test]
+    fn active_send_code_routes_roost_channels_on_the_full_channel_key() {
+        let roost = starling::protocol::RoostId::random();
+        let chan = starling::protocol::ChannelId::random();
+        let space = SpaceId::RoostChannel {
+            roost,
+            channel: chan,
+        };
+        let mut app = App::default();
+        app.insert_context(ContextView {
+            id: space,
+            title: "ROOST-CODE/general".into(),
+            roost: Some(roost),
+            base_invite_display: Some("ROOST-CODE".into()),
+            messages: Vec::new(),
+            unread: 0,
+            state: ContextState::Ready,
+            secret: Some("ROOST-CODE".into()),
+        });
+        app.active = Some(space);
+        // Roost channels route on the full "{roost}/{channel}" key (the title),
+        // not the base roost code that active_code() returns.
+        assert_eq!(
+            app.active_send_code().as_deref(),
+            Some("ROOST-CODE/general")
+        );
+        let _base_invite = app.active_code();
+
+        // Flocks route on their join code (the base invite).
+        let flock = SpaceId::Flock(starling::protocol::FlockId::random());
+        app.insert_context(ContextView {
+            id: flock,
+            title: "Night Birds".into(),
+            roost: None,
+            base_invite_display: Some("FLOCK-CODE".into()),
+            messages: Vec::new(),
+            unread: 0,
+            state: ContextState::Ready,
+            secret: Some("FLOCK-CODE".into()),
+        });
+        app.active = Some(flock);
+        assert_eq!(app.active_send_code().as_deref(), Some("FLOCK-CODE"));
+    }
+
+    #[test]
+    fn active_title_renders_roost_channels_as_roost_name_hash_channel() {
+        let roost = starling::protocol::RoostId::random();
+        let chan = starling::protocol::ChannelId::random();
+        let space = SpaceId::RoostChannel {
+            roost,
+            channel: chan,
+        };
+        let mut app = App::default();
+        app.insert_context(ContextView {
+            id: space,
+            title: "ROOST-CODE/general".into(),
+            roost: Some(roost),
+            base_invite_display: Some("ROOST-CODE".into()),
+            messages: Vec::new(),
+            unread: 0,
+            state: ContextState::Ready,
+            secret: Some("ROOST-CODE".into()),
+        });
+        app.roosts.push(RoostView {
+            code: "ROOST-CODE".into(),
+            name: "Nest".into(),
+            channels: vec![FlockView {
+                code: "ROOST-CODE/general".into(),
+                name: "general".into(),
+                messages: vec![],
+                unread: 0,
+            }],
+            unread: 0,
+        });
+        app.active = Some(space);
+        // The message header shows "Nest #general", not the raw routing key.
+        assert_eq!(app.active_title(), "Nest #general");
     }
 
     fn append_message(app: &mut App, id: SpaceId, message: ChatMessageView) {
