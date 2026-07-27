@@ -429,6 +429,7 @@ impl App {
         self.active.and_then(|id| self.contexts.get(&id))
     }
 
+    #[allow(dead_code)]
     pub fn active_context_messages(&self) -> Option<&[ChatMessageView]> {
         self.active_context()
             .map(|context| context.messages.as_slice())
@@ -1098,6 +1099,7 @@ fn draw_video_grid(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+#[allow(dead_code)]
 fn draw_typed_messages(f: &mut Frame, app: &App, area: Rect) -> bool {
     let Some(messages) = app.active_context_messages() else {
         return false;
@@ -1136,10 +1138,6 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
     } else {
         area
     };
-
-    if draw_typed_messages(f, app, area) {
-        return;
-    }
 
     let items: Vec<ListItem> = app
         .active_messages()
