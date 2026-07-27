@@ -1150,9 +1150,7 @@ fn parse_join_arg(args: &[String]) -> Result<Option<String>, &'static str> {
 /// code when valid, `None` when the code is not a recognized typed code.
 fn normalize_leave_code(raw: &str) -> Option<String> {
     let code = raw.trim();
-    if starling::net::decode_typed_code(code).is_none() {
-        return None;
-    }
+    starling::net::decode_typed_code(code)?;
     Some(code.to_ascii_uppercase())
 }
 
