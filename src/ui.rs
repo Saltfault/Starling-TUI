@@ -548,7 +548,23 @@ impl App {
     }
 
     pub fn active_messages(&self) -> &[MessageView] {
-        if self.active_context().is_some() {
+        // For typed contexts, delegate to the legacy FlockView where
+        // messages are actually stored (roost channels live in
+        // roosts[].channels; flocks live in flocks).
+        if let Some(ctx) = self.active_context() {
+            if ctx.roost.is_some() {
+                for rv in &self.roosts {
+                    for ch in &rv.channels {
+                        if ch.code == ctx.title {
+                            return &ch.messages;
+                        }
+                    }
+                }
+            } else if let Some(secret) = &ctx.secret
+                && let Some(fv) = self.flocks.iter().find(|f| f.code == *secret)
+            {
+                return &fv.messages;
+            }
             return &[];
         }
         match self.selection {
@@ -867,28 +883,31 @@ fn window_list_items<'a>(items: Vec<ListItem<'a>>, scroll: SpringScroll) -> Vec<
 }
 
 fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
-    let typed_items = app.ordered_contexts().map(|context| {
-        let selected = app.active == Some(context.id);
-        let mark = if selected { "> " } else { "  " };
-        let unread = if context.unread > 0 {
-            format!(" ({})", context.unread)
-        } else {
-            String::new()
-        };
-        ListItem::new(Line::from(vec![
-            Span::styled(mark, Style::new().fg(app.palette.selection)),
-            Span::styled("\u{25AE} ", Style::new().fg(app.palette.accent)),
-            Span::styled(
-                context.title.clone(),
-                Style::new().fg(if selected {
-                    app.palette.selection
-                } else {
-                    app.palette.text
-                }),
-            ),
-            Span::styled(unread, Style::new().fg(app.palette.selection)),
-        ]))
-    });
+    let typed_items = app
+        .ordered_contexts()
+        .filter(|context| context.roost.is_none())
+        .map(|context| {
+            let selected = app.active == Some(context.id);
+            let mark = if selected { "> " } else { "  " };
+            let unread = if context.unread > 0 {
+                format!(" ({})", context.unread)
+            } else {
+                String::new()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(mark, Style::new().fg(app.palette.selection)),
+                Span::styled("\u{25AE} ", Style::new().fg(app.palette.accent)),
+                Span::styled(
+                    context.title.clone(),
+                    Style::new().fg(if selected {
+                        app.palette.selection
+                    } else {
+                        app.palette.text
+                    }),
+                ),
+                Span::styled(unread, Style::new().fg(app.palette.selection)),
+            ]))
+        });
     // Skip legacy flocks that already have a typed context entry so the
     // same flock does not appear twice in the sidebar.
     let typed_secrets: std::collections::HashSet<&str> = app
