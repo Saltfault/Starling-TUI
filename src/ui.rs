@@ -820,7 +820,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     ])
     .split(chunks[1]);
 
-    let rail = Layout::vertical([Constraint::Percentage(33), Constraint::Min(1)]).split(middle[0]);
+    let rail = Layout::vertical([Constraint::Percentage(33), Constraint::Min(3)]).split(middle[0]);
     draw_flocks(f, app, rail[0]);
     draw_roosts(f, app, rail[1]);
 

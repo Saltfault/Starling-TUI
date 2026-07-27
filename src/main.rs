@@ -1183,9 +1183,11 @@ fn save_context_state(path: &std::path::Path, app: &App) -> anyhow::Result<()> {
 fn panel_geometry(term_h: u16) -> (u16, u16, u16, u16, u16) {
     let body_top = 2;
     let body_h = term_h.saturating_sub(6);
-    let flocks_h = (body_h * 33) / 100;
+    let flocks_pct = (body_h * 33) / 100;
+    // Roosts uses Min(3) so it always gets at least 1 content row + 2 border rows.
+    let roosts_h = (body_h.saturating_sub(flocks_pct)).max(3);
+    let flocks_h = body_h.saturating_sub(roosts_h);
     let roosts_top = body_top + flocks_h;
-    let roosts_h = body_h.saturating_sub(flocks_h);
     (body_top, flocks_h, roosts_top, roosts_h, body_h)
 }
 
