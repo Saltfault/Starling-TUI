@@ -34,7 +34,7 @@ pub enum Command {
         camera_index: Option<u32>,
     },
     #[cfg(feature = "audio")]
-    StartCall(EndpointId),
+    StartCall(Vec<EndpointId>),
     #[cfg(feature = "audio")]
     HangUp,
     #[cfg(feature = "video")]

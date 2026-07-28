@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::{Duration, timeout};
 
 use zeroize::Zeroizing;
@@ -691,22 +691,38 @@ pub async fn run(
             }
 
             #[cfg(feature = "audio")]
-            Command::StartCall(peer) => {
-                let (mic_tx, mic_rx) = mpsc::unbounded_channel();
+            Command::StartCall(peers) => {
+                if peers.is_empty() {
+                    continue;
+                }
+                let (mic_tx, mut mic_rx) = mpsc::unbounded_channel();
                 match crate::voice::start_capture(mic_tx, muted.clone(), input_device.as_deref()) {
                     Ok(stream) => {
                         _mic_stream = Some(stream);
                         let ep = endpoint.clone();
                         let tx = evt_tx.clone();
+                        // Fan out mic frames to every peer in the call.
+                        let (fan_tx, _) = broadcast::channel::<Vec<u8>>(16);
+                        let forwarder_tx = fan_tx.clone();
                         tokio::spawn(async move {
-                            if let Err(error) =
-                                crate::call::place_call(ep, peer, mic_rx, tx.clone()).await
-                            {
-                                let _ = tx.send(AppEvent::Error(format!(
-                                    "could not start call: {error}"
-                                )));
+                            while let Some(frame) = mic_rx.recv().await {
+                                let _ = forwarder_tx.send(frame);
                             }
                         });
+                        for peer in peers {
+                            let ep = ep.clone();
+                            let tx = tx.clone();
+                            let fan_rx = fan_tx.subscribe();
+                            tokio::spawn(async move {
+                                if let Err(error) =
+                                    crate::call::place_call(ep, peer, fan_rx, tx.clone()).await
+                                {
+                                    let _ = tx.send(AppEvent::Error(format!(
+                                        "could not start call: {error}"
+                                    )));
+                                }
+                            });
+                        }
                     }
                     Err(error) => {
                         let _ = evt_tx.send(AppEvent::Error(format!(

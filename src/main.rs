@@ -30,6 +30,8 @@ use crossterm::{
 };
 use event::{AppEvent, Command};
 #[allow(unused_imports)]
+use iroh::EndpointId;
+#[allow(unused_imports)]
 use std::sync::Arc;
 #[allow(unused_imports)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1450,14 +1452,24 @@ fn handle_mouse_click(
                             if cmd_tx.send(Command::HangUp).is_ok() {
                                 app.in_call = false;
                             }
-                        } else if let Some(peer) = app.selected_peer_id() {
-                            if cmd_tx.send(Command::StartCall(peer)).is_err() {
+                        } else {
+                            let targets: Vec<EndpointId> =
+                                if let Some(peer) = app.selected_peer_id() {
+                                    vec![peer]
+                                } else {
+                                    let peers = app.active_peers();
+                                    if peers.is_empty() {
+                                        app.error_message =
+                                            Some("No one is online in this context".into());
+                                        return Ok(());
+                                    }
+                                    peers
+                                };
+                            if cmd_tx.send(Command::StartCall(targets)).is_err() {
                                 app.error_message = Some("Call service is unavailable".into());
                             } else {
                                 app.error_message = Some("Connecting call...".into());
                             }
-                        } else {
-                            app.error_message = Some("Select an online bird before calling".into());
                         }
                     }
                     #[cfg(feature = "audio")]

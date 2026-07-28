@@ -28,7 +28,7 @@ pub const VIDEO_ALPN: &[u8] = b"starling/video/0";
 pub async fn place_call(
     endpoint: Endpoint,
     peer: EndpointId,
-    mut frame_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut frame_rx: broadcast::Receiver<Vec<u8>>,
     evt_tx: mpsc::UnboundedSender<AppEvent>,
 ) -> anyhow::Result<()> {
     let conn = endpoint
@@ -41,7 +41,7 @@ pub async fn place_call(
     loop {
         tokio::select! {
             frame = frame_rx.recv() => {
-                let Some(frame) = frame else { break };
+                let Ok(frame) = frame else { break };
                 let _ = conn.send_datagram(frame.into());
             }
             datagram = conn.read_datagram() => {
