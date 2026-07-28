@@ -453,7 +453,10 @@ pub async fn run(
             },
         );
     }
-    let _ = builder
+    // Keep the Router alive for the lifetime of the network task. Dropping it
+    // would unregister all ALPN handlers and break incoming connections, which
+    // also prevents outbound joins from negotiating an ALPN with the roost.
+    let _router = builder
         .accept(
             starling::sync::SYNC_ALPN,
             starling::sync::SyncProto {

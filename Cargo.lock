@@ -5310,6 +5310,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "starling"
 version = "0.4.2"
+source = "git+https://forgejo.hearthhome.lol/Saltfault/Starling.git?tag=v0.4.2#64bd56329e4062672b83d669c7d9e1e252849981"
 dependencies = [
  "anyhow",
  "argon2",
