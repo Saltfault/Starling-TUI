@@ -1190,6 +1190,10 @@ async fn join_roost(
     //
     // Identity-gated join handshake: the roost re-checks membership before
     // releasing per-channel secrets. Non-members never receive a welcome.
+    starling::logger::warn(&format!(
+        "join_roost: connecting to {opener} with ALPN {}",
+        String::from_utf8_lossy(ROOST_JOIN_ALPN)
+    ));
     let conn = endpoint
         .connect(EndpointAddr::from(opener), ROOST_JOIN_ALPN)
         .await?;
