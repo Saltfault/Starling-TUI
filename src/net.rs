@@ -1343,6 +1343,9 @@ async fn join_roost_channel(
     }
 
     let topic = starling::net::topic_for(&format!("starling/roost/{code}"));
+    starling::logger::info(&format!(
+        "join_roost_channel: subscribing to '{code}' with bootstrap {opener}"
+    ));
     let (sender, mut receiver) = gossip.subscribe(topic, vec![opener]).await?.split();
     let rx_crypto = FlockCrypto::from_secret(&secret);
     let rx_code = code.clone();
@@ -1436,6 +1439,9 @@ async fn join_roost_channel(
                     }
                 }
                 Ok(Event::NeighborUp(id)) => {
+                    starling::logger::info(&format!(
+                        "roost channel '{rx_code}': peer up {id}"
+                    ));
                     let _ = rx_tx.send(AppEvent::PeerConnected {
                         space: rx_space,
                         id,
@@ -1454,6 +1460,9 @@ async fn join_roost_channel(
                     .await;
                 }
                 Ok(Event::NeighborDown(id)) => {
+                    starling::logger::info(&format!(
+                        "roost channel '{rx_code}': peer down {id}"
+                    ));
                     let _ = rx_tx.send(AppEvent::PeerConnectivityHintDown(id));
                 }
                 _ => {}
