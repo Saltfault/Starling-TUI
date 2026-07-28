@@ -412,3 +412,163 @@ pub async fn recv_video(
     let _ = evt_tx.send(AppEvent::RemoteVideoStopped(peer));
     result
 }
+
+#[cfg(test)]
+#[cfg(feature = "audio")]
+mod voice_tests {
+    use super::*;
+    use iroh::{
+        Endpoint, SecretKey,
+        endpoint::{Connection, presets},
+        protocol::{AcceptError, ProtocolHandler, Router},
+    };
+
+    /// Two endpoints connect via VOICE_ALPN, one sends datagrams (simulating
+    /// Opus frames), the other receives them — end-to-end voice flow.
+    #[tokio::test]
+    async fn voice_datagram_flow() {
+        let secret1 = SecretKey::generate();
+        let secret2 = SecretKey::generate();
+        let ep1 = Endpoint::builder(presets::Minimal)
+            .secret_key(secret1)
+            .alpns(vec![VOICE_ALPN.to_vec()])
+            .ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify())
+            .bind()
+            .await
+            .unwrap();
+        let ep2 = Endpoint::builder(presets::Minimal)
+            .secret_key(secret2)
+            .alpns(vec![VOICE_ALPN.to_vec()])
+            .ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify())
+            .bind()
+            .await
+            .unwrap();
+        let _r1 = Router::builder(ep1.clone())
+            .accept(VOICE_ALPN, DummyVoice)
+            .spawn();
+
+        let conn = ep2.connect(ep1.addr(), VOICE_ALPN).await.unwrap();
+
+        let frame = vec![1u8, 2, 3, 4];
+        conn.send_datagram(frame.clone().into()).unwrap();
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                match conn.read_datagram().await {
+                    Ok(bytes) => return bytes.to_vec(),
+                    Err(_) => continue,
+                }
+            }
+        })
+        .await
+        .expect("datagram not received within 3 seconds");
+
+        assert_eq!(received, frame);
+    }
+
+    #[derive(Debug, Clone)]
+    struct DummyVoice;
+
+    impl ProtocolHandler for DummyVoice {
+        async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
+            // Echo back any datagram received.
+            while let Ok(datagram) = conn.read_datagram().await {
+                let _ = conn.send_datagram(datagram);
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "video")]
+mod video_tests {
+    use super::*;
+    use iroh::{
+        Endpoint, SecretKey,
+        endpoint::{Connection, presets},
+        protocol::{AcceptError, ProtocolHandler, Router},
+    };
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Two endpoints connect via VIDEO_ALPN, one sends a JPEG frame over a
+    /// unidirectional stream, the other receives it — end-to-end video flow.
+    #[tokio::test]
+    async fn video_frame_flow() {
+        let secret1 = SecretKey::generate();
+        let secret2 = SecretKey::generate();
+        let ep1 = Endpoint::builder(presets::Minimal)
+            .secret_key(secret1)
+            .alpns(vec![VIDEO_ALPN.to_vec()])
+            .ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify())
+            .bind()
+            .await
+            .unwrap();
+        let ep2 = Endpoint::builder(presets::Minimal)
+            .secret_key(secret2)
+            .alpns(vec![VIDEO_ALPN.to_vec()])
+            .ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify())
+            .bind()
+            .await
+            .unwrap();
+
+        let frame = b"fake-jpeg-data".to_vec();
+        let received: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+        let received_clone = received.clone();
+
+        // Server: accept connection, read the uni stream, store the frame.
+        let _r1 = Router::builder(ep1.clone())
+            .accept(
+                VIDEO_ALPN,
+                VideoReceiver {
+                    expected: frame.clone(),
+                    received: received_clone,
+                },
+            )
+            .spawn();
+
+        // Client: connect and send the frame.
+        let conn = ep2.connect(ep1.addr(), VIDEO_ALPN).await.unwrap();
+        let mut tx_stream = conn.open_uni().await.unwrap();
+        tx_stream.write_u32(frame.len() as u32).await.unwrap();
+        tx_stream.write_all(&frame).await.unwrap();
+        tx_stream.finish().unwrap();
+
+        // Give the server time to process.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let stored = received
+            .lock()
+            .unwrap()
+            .take()
+            .expect("server did not receive frame");
+        assert_eq!(stored, frame);
+    }
+
+    #[derive(Debug, Clone)]
+    struct VideoReceiver {
+        expected: Vec<u8>,
+        received: Arc<Mutex<Option<Vec<u8>>>>,
+    }
+
+    impl ProtocolHandler for VideoReceiver {
+        async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
+            let mut rx = conn
+                .accept_uni()
+                .await
+                .map_err(|e| AcceptError::from_err(std::io::Error::other(e.to_string())))?;
+            let len = rx
+                .read_u32()
+                .await
+                .map_err(|e| AcceptError::from_err(std::io::Error::other(e.to_string())))?
+                as usize;
+            let mut buf = vec![0u8; len];
+            rx.read_exact(&mut buf)
+                .await
+                .map_err(|e| AcceptError::from_err(std::io::Error::other(e.to_string())))?;
+            assert_eq!(buf, self.expected);
+            *self.received.lock().unwrap() = Some(buf);
+            Ok(())
+        }
+    }
+}

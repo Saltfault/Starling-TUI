@@ -1535,4 +1535,42 @@ mod tests {
         cancel.cancel();
         assert!(task.await.expect("retry task panicked"));
     }
+
+    /// Verify that a chat message survives encrypt → broadcast → decrypt
+    /// round-trip through the FlockCrypto and GossipPayload layers.
+    #[test]
+    fn message_encrypt_decrypt_round_trip() {
+        let secret = iroh::SecretKey::generate();
+        let crypto = starling::crypto::FlockCrypto::from_secret(&[42u8; 32]);
+
+        let msg = starling::event::ChatMessage {
+            id: "test-1".into(),
+            author: "alice".into(),
+            body: "hello from test".into(),
+            ts: 1,
+        };
+        let payload = starling::event::GossipPayload::Chat(msg.clone());
+
+        // Simulate broadcast: serialize → sign → encrypt.
+        let payload_bytes = postcard::to_stdvec(&payload).unwrap();
+        let signed = starling::event::Signed::sign(&secret, payload_bytes);
+        let signed_bytes = postcard::to_stdvec(&signed).unwrap();
+        let ciphertext = crypto.try_encrypt(&signed_bytes).unwrap();
+
+        // Simulate receive: decrypt → deserialize → verify → deserialize payload.
+        let decrypted = crypto.decrypt(&ciphertext).unwrap();
+        let envelope: starling::event::Signed = postcard::from_bytes(&decrypted).unwrap();
+        envelope.verify().unwrap();
+        let received: starling::event::GossipPayload =
+            postcard::from_bytes(&envelope.payload).unwrap();
+
+        match received {
+            starling::event::GossipPayload::Chat(m) => {
+                assert_eq!(m.id, "test-1");
+                assert_eq!(m.author, "alice");
+                assert_eq!(m.body, "hello from test");
+            }
+            _ => panic!("expected Chat payload"),
+        }
+    }
 }

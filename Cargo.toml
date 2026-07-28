@@ -37,6 +37,7 @@ uuid = { version = "1.24.0", features = ["v4", "serde"] }
 zeroize = "1.8.2"
 
 [dev-dependencies]
+iroh = { version = "1.0.3", features = ["test-utils"] }
 tempfile = "3.23.0"
 
 # Linux: cpal PulseAudio backend, nokhwa (V4L2 — needs libclang-dev)
