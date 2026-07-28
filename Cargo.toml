@@ -30,14 +30,11 @@ ringbuf = { version = "0.5.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.0"
 sled = "0.34"
-starling = { git = "https://forgejo.hearthhome.lol/Saltfault/Starling.git" }
+starling = { git = "https://forgejo.hearthhome.lol/Saltfault/Starling.git", tag = "v0.4.2" }
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
 zeroize = "1.8.2"
-
-[patch."https://forgejo.hearthhome.lol/Saltfault/Starling.git"]
-starling = { path = "../starling" }
 
 [dev-dependencies]
 tempfile = "3.23.0"
