@@ -23,10 +23,9 @@ jobs:
       - name: Point patch to local starling
         run: sed -i.bak 's|starling = { git = .*|starling = { path = "./starling" }|' Cargo.toml && rm -f Cargo.toml.bak
       - name: Install Rust
-      - name: Install kache
-        run: cargo install kache --locked
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          cargo install kache --locked
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
       - name: Extract version
         id: version
@@ -66,10 +65,9 @@ jobs:
       - name: Point patch to local starling
         run: sed -i.bak 's|starling = { git = .*|starling = { path = "./starling" }|' Cargo.toml && rm -f Cargo.toml.bak
       - name: Install Rust
-      - name: Install kache
-        run: cargo install kache --locked
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          cargo install kache --locked
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           export PATH="$HOME/.cargo/bin:$PATH"
 
