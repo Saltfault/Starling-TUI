@@ -114,7 +114,9 @@ jobs:
             ext=""
             [[ "$target" == *-windows-* ]] && ext=".exe"
             cp "target/$target/release/starling-tui$ext" "starling-tui-$target$ext"
+            sha256sum "starling-tui-$target$ext" > "starling-tui-$target.sha256"
           done
+          cp install.sh install.ps1 .
 
       - name: Download macOS from GitHub Release
         env:
@@ -166,8 +168,7 @@ jobs:
           release_id=$(curl -s -X POST "$API/repos/$OWNER/$REPO/releases" \
             -H "Authorization: Bearer $FORGEJO_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":false}" | jq -r '.id // empty')
-
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":false,\"body\":\"## Quick install\\n\\n**Windows (PowerShell):**\\n\`\`\`\\nirm $FORGEJO/$REPO/releases/download/$TAG/install.ps1 | iex\\n\`\`\`\\n\\n**Linux / macOS:**\\n\`\`\`\\ncurl -sSfL $FORGEJO/$REPO/releases/download/$TAG/install.sh | bash\\n\`\`\`\\n\\n**Linux runtime deps:** libasound2 libpulse0 libv4l-0\"}" | jq -r '.id // empty')
           if [ -z "$release_id" ]; then
             echo "Failed to create Forgejo release"
             exit 1
@@ -186,8 +187,9 @@ jobs:
           uploaded_count=$(curl --fail --silent --show-error \
             "$API/repos/$OWNER/$REPO/releases/$release_id" \
             -H "Authorization: Bearer $FORGEJO_TOKEN" | jq '.assets | length')
-          if [ "$uploaded_count" -ne "$expected_count" ] || [ "$uploaded_count" -ne 5 ]; then
-            echo "Expected 5 release assets, uploaded $uploaded_count from $expected_count files"
+          # 5 binaries + 2 sha256 + 2 install scripts = 9 assets
+          if [ "$uploaded_count" -ne 9 ]; then
+            echo "Expected 9 release assets, uploaded $uploaded_count"
             exit 1
           fi
           echo "Forgejo release $TAG created with $uploaded_count assets"

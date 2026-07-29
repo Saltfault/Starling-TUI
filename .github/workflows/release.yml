@@ -91,11 +91,19 @@ jobs:
           ext=""
           [[ "${{ matrix.target }}" == *-windows-* ]] && ext=".exe"
           cp "target/${{ matrix.target }}/release/starling-tui$ext" "starling-tui-${{ matrix.target }}$ext"
+          sha256sum "starling-tui-${{ matrix.target }}$ext" > "starling-tui-${{ matrix.target }}.sha256"
       - name: Upload binary
         uses: actions/upload-artifact@v7
         with:
           name: starling-tui-${{ matrix.target }}
           path: starling-tui-${{ matrix.target }}*
+      - name: Upload install scripts
+        uses: actions/upload-artifact@v7
+        with:
+          name: install-scripts
+          path: |
+            install.sh
+            install.ps1
 
   release:
     needs: [detect, build]
@@ -112,10 +120,26 @@ jobs:
           tag_name: v${{ needs.detect.outputs.version }}
           files: artifacts/**/*
           body: |
-            ## Which download?
+            ## Quick install
 
-            - Windows (64-bit) ............. `starling-tui-x86_64-pc-windows-msvc.exe`
-            - macOS (M1–M4) ............... `starling-tui-aarch64-apple-darwin`
-            - macOS (Intel) ............... `starling-tui-x86_64-apple-darwin`
-            - Linux (x64) ................. `starling-tui-x86_64-unknown-linux-gnu`
-            - Linux (ARM64 / Pi 4+) ........ `starling-tui-aarch64-unknown-linux-gnu`
+            **Windows (PowerShell):**
+            ```
+            irm https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/releases/download/v${{ needs.detect.outputs.version }}/install.ps1 | iex
+            ```
+
+            **Linux / macOS:**
+            ```
+            curl -sSfL https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/releases/download/v${{ needs.detect.outputs.version }}/install.sh | bash
+            ```
+
+            ## Manual download
+
+            | Platform | Binary |
+            |----------|--------|
+            | Windows (64-bit) | `starling-tui-x86_64-pc-windows-msvc.exe` |
+            | macOS (M1–M4) | `starling-tui-aarch64-apple-darwin` |
+            | macOS (Intel) | `starling-tui-x86_64-apple-darwin` |
+            | Linux (x64) | `starling-tui-x86_64-unknown-linux-gnu` |
+            | Linux (ARM64) | `starling-tui-aarch64-unknown-linux-gnu` |
+
+            **Linux runtime deps:** `libasound2 libpulse0 libv4l-0` (pre-installed on most distros)
