@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starling installer — Linux / macOS
 # Usage:
-#   curl -sSfL https://forgejo.hearthhome.lol/Saltfault/<REPO>/releases/download/v<VERSION>/install.sh | bash
+#   curl -sSfL https://forgejo.hearthhome.lol/Saltfault/<REPO>/raw/branch/main/install.sh | bash
 #   ./install.sh -v v0.6.15 -b starling-tui -r Starling-TUI
 #   ./install.sh --uninstall -b starling-tui
 

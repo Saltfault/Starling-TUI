@@ -1,6 +1,6 @@
 # Starling installer — Windows (PowerShell)
 # Usage:
-#   irm https://forgejo.hearthhome.lol/Saltfault/<REPO>/releases/download/v<VERSION>/install.ps1 | iex
+#   irm https://forgejo.hearthhome.lol/Saltfault/<REPO>/raw/branch/main/install.ps1 | iex
 #   install.ps1 -Version v0.6.15 -Binary starling-tui -Repo Starling-TUI
 #   install.ps1 -Uninstall -Binary starling-tui
 

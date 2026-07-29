@@ -47,12 +47,12 @@ Or install standalone — no Rust or compiler needed:
 
 **Windows (PowerShell):**
 ```powershell
-irm https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/releases/latest/download/install.ps1 | iex
+irm https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/raw/branch/main/install.ps1 | iex
 ```
 
 **Linux / macOS:**
 ```bash
-curl -sSfL https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/releases/latest/download/install.sh | bash
+curl -sSfL https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/raw/branch/main/install.sh | bash
 ```
 
 The installer places `starling-tui` in your PATH. Run `starling-tui` to launch.
