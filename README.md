@@ -36,20 +36,24 @@ video calls.
 
 ---
 
-## Getting started
+## Install
 
-**Install the TUI via the Starling launcher.** You don't install this repo
-directly — you install [**Starling**](https://forgejo.hearthhome.lol/Saltfault/Starling)
-(the main repo), then use it to install the client:
+Download the prebuilt binary — no Rust or compiler needed:
 
-```bash
-# one-time: install the launcher
-cargo install --git https://forgejo.hearthhome.lol/Saltfault/Starling.git
-# then install the terminal client
-starling install tui
+**Windows (PowerShell):**
+```powershell
+irm https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/releases/latest/download/install.ps1 | iex
 ```
 
-> Building from source instead? See the from-source instructions further down.
+**Linux / macOS:**
+```bash
+curl -sSfL https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/releases/latest/download/install.sh | bash
+```
+
+The installer places `starling-tui` in your PATH. Run `starling-tui` to launch.
+Upgrade: re-run the same command. Uninstall: `install.sh --uninstall` or `install.ps1 -Uninstall`.
+
+> **Building from source?** See [Platform setup](#platform-setup) below.
 
 **Configure your profile (one-time):**
 
