@@ -23,7 +23,7 @@ jobs:
       - name: Checkout starling core
         run: git clone https://forgejo.hearthhome.lol/Saltfault/Starling.git starling
       - name: Point patch to local starling
-        run: sed -i.bak 's|path = "../starling"|path = "./starling"|' Cargo.toml && rm -f Cargo.toml.bak
+        run: sed -i 's|starling = { git = .*|starling = { path = "./starling" }|' Cargo.toml
       - name: Extract version
         id: version
         run: echo "value=$(grep '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
@@ -70,13 +70,13 @@ jobs:
         run: git clone https://forgejo.hearthhome.lol/Saltfault/Starling.git starling
       - name: Point patch to local starling
         if: runner.os != 'Windows'
-        run: sed -i.bak 's|path = "../starling"|path = "./starling"|' Cargo.toml && rm -f Cargo.toml.bak
+        run: sed -i 's|starling = { git = .*|starling = { path = "./starling" }|' Cargo.toml
       - name: Point patch to local starling
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $c = Get-Content Cargo.toml -Raw
-          $c = $c -replace 'path = "\.\.\/starling"', 'path = "./starling"'
+          $c = $c -replace 'starling = \{ git = [^}]+\}', 'starling = { path = "./starling" }'
           [IO.File]::WriteAllText("$pwd\Cargo.toml", $c)
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
