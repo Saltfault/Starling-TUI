@@ -46,7 +46,7 @@ if ($Upgrade) {
 
 # ---- resolve version ----
 if ($Version -eq "latest") {
-    $release = Invoke-RestMethod "$ForgejoBase/$Repo/releases/latest"
+    $release = Invoke-RestMethod "https://forgejo.hearthhome.lol/api/v1/repos/Saltfault/$Repo/releases/latest"
     $Tag = $release.tag_name
 } else {
     $Tag = $Version
