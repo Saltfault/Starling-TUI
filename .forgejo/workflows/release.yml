@@ -126,7 +126,6 @@ jobs:
             cp "target/$target/release/starling-tui$ext" "starling-tui-$target$ext"
             sha256sum "starling-tui-$target$ext" > "starling-tui-$target.sha256"
           done
-          cp install.sh install.ps1 .
 
       - name: Download macOS from GitHub Release
         env:
