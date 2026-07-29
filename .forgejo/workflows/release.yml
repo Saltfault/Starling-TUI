@@ -6,7 +6,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTC_WRAPPER: kache
 
 jobs:
   detect:
@@ -47,11 +46,17 @@ jobs:
       - name: Install system dependencies
         run: apt-get update && apt-get install -y libasound2-dev libclang-dev
       - name: Check formatting
+        env:
+          RUSTC_WRAPPER: kache
         run: cargo fmt --check
       - name: Clippy
+        env:
+          RUSTC_WRAPPER: kache
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Run tests
         if: steps.check.outputs.skip == 'false'
+        env:
+          RUSTC_WRAPPER: kache
         run: cargo test --all-features
 
   release:
@@ -91,6 +96,8 @@ jobs:
             libpulse-dev:arm64 \
             libv4l-dev:arm64
 
+        env:
+          RUSTC_WRAPPER: kache
       - name: Build all targets
         run: |
           set -e
