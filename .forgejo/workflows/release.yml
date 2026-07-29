@@ -37,7 +37,7 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$current" = "$latest_tag" ]; then
+          if [ "$current" = "$latest_tag" ] && curl -sf "https://forgejo.hearthhome.lol/api/v1/repos/Saltfault/Starling-TUI/releases/tags/$current" > /dev/null 2>&1; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
