@@ -334,6 +334,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let name = profile.name.clone();
+    let pronouns = profile.pronouns.clone();
     #[cfg(feature = "audio")]
     let input_device = profile.input_device.clone();
     #[cfg(feature = "audio")]
@@ -377,6 +378,7 @@ async fn main() -> anyhow::Result<()> {
         name,
         input_device,
         camera_index,
+        pronouns,
     ));
     if !restored_contexts.is_empty() {
         let _ = cmd_tx.send(Command::RestoreContexts(restored_contexts));
@@ -610,13 +612,13 @@ async fn main() -> anyhow::Result<()> {
                         app.presence.neighbor_down(id);
                     }
 
-                    AppEvent::PeerNamed { space, id, name } => {
+                    AppEvent::PeerNamed { space, id, name, pronouns } => {
                         if id != my_node_id {
                             let ctx = app.presence.context_mut(space);
                             ctx.set_profile(ui::MemberProfile {
                                 endpoint: id,
                                 name: name.clone(),
-                                pronouns: String::new(),
+                                pronouns: pronouns.clone(),
                             });
                             if !ctx.ordered_ids.contains(&id) {
                                 ctx.ordered_ids.push(id);
@@ -742,6 +744,8 @@ async fn main() -> anyhow::Result<()> {
                             Ok(handle_join_room_key(&mut app, k, &cmd_tx)),
                         Popup::Menu =>
                             handle_menu_key(&mut app, k, &cmd_tx, &mut term),
+                        Popup::BirdProfile =>
+                            Ok(handle_bird_profile_key(&mut app, k, &cmd_tx)),
                         Popup::None =>
                             handle_normal_key(&mut app, k, &cmd_tx),
                     }?;
@@ -977,6 +981,32 @@ fn handle_join_room_key(
     KeyOutcome::Handled
 }
 
+
+
+fn handle_bird_profile_key(
+    app: &mut App,
+    k: &KeyEvent,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+) -> KeyOutcome {
+    match k.code {
+        KeyCode::Enter | KeyCode::Char('c' | 'C') => {
+            #[cfg(feature = "audio")]
+            if let Some(peer) = app.bird_profile_peer {
+                if cmd_tx.send(Command::StartCall(vec![peer])).is_ok() {
+                    app.error_message = Some("Connecting call...".into());
+                }
+            }
+            app.show_bird_profile = false;
+            app.bird_profile_peer = None;
+        }
+        KeyCode::Esc => {
+            app.show_bird_profile = false;
+            app.bird_profile_peer = None;
+        }
+        _ => {}
+    }
+    KeyOutcome::Handled
+}
 fn handle_menu_key(
     app: &mut App,
     k: &KeyEvent,
@@ -1558,9 +1588,11 @@ fn handle_mouse_click(
         let visible_row = (row - flocks_top - 1) as usize;
         if let Some(content_row) = app.bird_scroll.row_index(visible_row)
             && content_row > 0
-            && content_row <= app.peers.len()
+            && content_row <= app.active_peers().len()
         {
             app.selected_peer = content_row - 1;
+            app.bird_profile_peer = app.selected_peer_id();
+            app.show_bird_profile = true;
         }
     }
 

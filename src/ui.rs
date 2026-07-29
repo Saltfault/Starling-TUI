@@ -342,6 +342,8 @@ pub struct App {
     pub my_perms: starling::roost::perms::Perm,
     /// Peer endpoint id -> top role color, for coloring names in the bird list.
     pub peer_roles: HashMap<EndpointId, (u8, u8, u8)>,
+    pub show_bird_profile: bool,
+    pub bird_profile_peer: Option<EndpointId>,
 }
 
 impl Default for App {
@@ -393,22 +395,21 @@ impl Default for App {
             presence: ScopedPresence::default(),
             status_notice: None,
             status_notice_expires_at: None,
+            show_bird_profile: false,
+            bird_profile_peer: None,
             my_perms: starling::roost::perms::Perm::empty(),
             peer_roles: HashMap::new(),
         }
     }
 }
 
-/// Which popup currently owns the keyboard, in the same priority order as the
-/// `if app.show_*` guard chain in the event loop. `None` means normal-mode
-/// key handling applies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Popup {
     DeleteConfirm,
     CreateRoom,
     EditFlock,
     JoinRoom,
     Menu,
+    BirdProfile,
     None,
 }
 
@@ -416,7 +417,6 @@ impl App {
     /// Resolve the single active popup using the same precedence as the old
     /// `if`-cascade: delete-confirm wins over create-room, which wins over
     /// edit-flock, join-room, and the menu, in that order. Only the highest-
-    /// precedence open popup receives keys; the rest are masked.
     pub fn active_popup(&self) -> Popup {
         if self.show_delete_confirm {
             Popup::DeleteConfirm
@@ -428,6 +428,8 @@ impl App {
             Popup::JoinRoom
         } else if self.show_menu {
             Popup::Menu
+        } else if self.show_bird_profile {
+            Popup::BirdProfile
         } else {
             Popup::None
         }
@@ -953,10 +955,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_edit_flock_popup(f, app);
     } else if app.show_join_room {
         draw_join_room_popup(f, app);
-    } else if app.show_delete_confirm {
-        draw_delete_confirm_popup(f, app);
     } else if app.show_menu {
         draw_menu_popup(f, app);
+    } else if app.show_bird_profile {
+        draw_bird_profile_popup(f, app);
     }
 }
 
@@ -1547,6 +1549,77 @@ fn draw_delete_confirm_popup(f: &mut Frame, app: &App) {
     );
     f.render_widget(
         Paragraph::new(" Enter = confirm . Esc = cancel").style(Style::new().fg(app.palette.dim)),
+        rows[3],
+    );
+}
+
+fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
+    let peer = match app.bird_profile_peer {
+        Some(id) => id,
+        None => return,
+    };
+    let profile = app.active_context()
+        .and_then(|ctx| app.presence.contexts.get(&ctx.id))
+        .and_then(|presence| presence.members.get(&peer));
+    let name = profile.map(|p| p.name.as_str()).unwrap_or("Unknown");
+    let pronouns = profile.and_then(|p| if p.pronouns.is_empty() { None } else { Some(p.pronouns.as_str()) });
+
+    let popup = centered(f.area(), 40, 7);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(app.palette.border))
+            .title(Span::styled(
+                format!(" {name} "),
+                Style::new().fg(app.palette.accent).add_modifier(Modifier::BOLD),
+            )),
+        popup,
+    );
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+
+    let pronouns_text = pronouns.unwrap_or("—");
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Pronouns: ", Style::new().fg(app.palette.dim)),
+            Span::styled(pronouns_text, Style::new().fg(app.palette.text)),
+        ])),
+        rows[0],
+    );
+
+    let id_short = peer.to_string();
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("ID: ", Style::new().fg(app.palette.dim)),
+            Span::styled(&id_short[..24.min(id_short.len())], Style::new().fg(app.palette.dim)),
+        ])),
+        rows[1],
+    );
+
+    #[cfg(feature = "audio")]
+    {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("[ Call ]", Style::new()
+                    .fg(app.palette.selection)
+                    .add_modifier(Modifier::BOLD)),
+            ])),
+            rows[2],
+        );
+    }
+
+    f.render_widget(
+        Paragraph::new(" Enter/C = call . Esc = close").style(Style::new().fg(app.palette.dim)),
         rows[3],
     );
 }

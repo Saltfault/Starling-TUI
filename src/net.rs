@@ -352,6 +352,7 @@ pub async fn run(
     mut name: String,
     input_device: Option<String>,
     camera_index: Option<u32>,
+    pronouns: String,
 ) -> anyhow::Result<()> {
     #[cfg(feature = "audio")]
     let mut input_device = input_device;
@@ -488,6 +489,7 @@ pub async fn run(
             secret.clone(),
             dm_secret_bytes,
             my_dm_public_bytes.clone(),
+            pronouns.clone(),
         )
         .await?;
     }
@@ -508,6 +510,7 @@ pub async fn run(
             secret.clone(),
             dm_secret_bytes,
             my_dm_public_bytes.clone(),
+            pronouns.clone(),
         )
         .await
         {
@@ -663,6 +666,7 @@ pub async fn run(
                     secret.clone(),
                     dm_secret_bytes,
                     my_dm_public_bytes.clone(),
+                    pronouns.clone(),
                 )
                 .await
                 {
@@ -947,6 +951,7 @@ async fn join_by_code(
     secret: iroh::SecretKey,
     dm_secret_bytes: [u8; 32],
     my_dm_public_bytes: Vec<u8>,
+    pronouns: String,
 ) -> anyhow::Result<()> {
     let decoded = starling::net::decode_typed_code(&code)
         .ok_or_else(|| anyhow::anyhow!("invalid or unsupported typed code"))?;
@@ -958,7 +963,6 @@ async fn join_by_code(
             // from the 32-byte secret inside the typed code, NOT from the
             // displayed code's characters. The displayed code still binds the
             // gossip topic (so peers with the right code find each other),
-            // but a peer who can guess the topic cannot read the bytes.
             join_flock(
                 gossip,
                 code.clone(),
@@ -973,6 +977,7 @@ async fn join_by_code(
                 secret.clone(),
                 dm_secret_bytes,
                 my_dm_public_bytes.clone(),
+                pronouns.clone(),
             )
             .await?;
             if flock.opener != my_id {
@@ -1005,6 +1010,7 @@ async fn join_by_code(
                 secret,
                 dm_secret_bytes,
                 my_dm_public_bytes,
+                pronouns,
             )
             .await
         }
@@ -1026,6 +1032,7 @@ async fn join_flock(
     secret: iroh::SecretKey,
     dm_secret_bytes: [u8; 32],
     my_dm_public_bytes: Vec<u8>,
+    pronouns: String,
 ) -> anyhow::Result<()> {
     if flocks.contains_key(&code) {
         return Ok(());
@@ -1046,6 +1053,7 @@ async fn join_flock(
         rx_secret,
         rx_dm_secret,
         rx_dm_pk,
+        rx_pronouns,
     ) = (
         FlockCrypto::from_secret(&flock_secret),
         code.clone(),
@@ -1056,6 +1064,7 @@ async fn join_flock(
         secret,
         dm_secret_bytes,
         my_dm_public_bytes,
+        pronouns,
     );
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
@@ -1080,7 +1089,7 @@ async fn join_flock(
                                 private: false,
                             });
                         }
-                        GossipPayload::Profile { id, name, dm_pk } => {
+                        GossipPayload::Profile { id, name, dm_pk, pronouns } => {
                             if id != envelope.author {
                                 starling::logger::warn(&format!(
                                     "dropped spoofed profile: \
@@ -1093,6 +1102,7 @@ async fn join_flock(
                                 space: rx_space,
                                 id,
                                 name,
+                                pronouns,
                             });
                             if !dm_pk.is_empty() {
                                 dm_pks.insert(id, dm_pk.clone());
@@ -1145,6 +1155,7 @@ async fn join_flock(
                         id: rx_my_id,
                         name: rx_name.clone(),
                         dm_pk: rx_dm_pk.clone(),
+                        pronouns: rx_pronouns.clone(),
                     };
                     let _ = starling::net::broadcast_payload(
                         &rx_sender,
@@ -1194,6 +1205,7 @@ async fn join_roost(
     secret: iroh::SecretKey,
     dm_secret_bytes: [u8; 32],
     my_dm_public_bytes: Vec<u8>,
+    pronouns: String,
 ) -> anyhow::Result<()> {
     let control_key = format!("{code}/_control");
 
@@ -1266,6 +1278,7 @@ async fn join_roost(
             secret.clone(),
             dm_secret_bytes,
             my_dm_public_bytes.clone(),
+            pronouns.clone(),
         )
         .await?;
 
@@ -1336,6 +1349,7 @@ async fn join_roost_channel(
     identity_secret: iroh::SecretKey,
     dm_secret_bytes: [u8; 32],
     my_dm_public_bytes: Vec<u8>,
+    pronouns: String,
 ) -> anyhow::Result<()> {
     let code = format!("{roost_code}/{channel}");
     if flocks.contains_key(&code) {
@@ -1354,6 +1368,7 @@ async fn join_roost_channel(
     let rx_my_id = my_id;
     let rx_name = name.clone();
     let rx_dm_secret = dm_secret_bytes;
+    let rx_pronouns = pronouns;
     let space_id = starling::protocol::SpaceId::RoostChannel {
         roost: starling::protocol::RoostId(*opener.as_bytes()),
         channel: channel_id_from_name(channel),
@@ -1383,7 +1398,7 @@ async fn join_roost_channel(
                                 private: false,
                             });
                         }
-                        GossipPayload::Profile { id, name, dm_pk } => {
+                        GossipPayload::Profile { id, name, dm_pk, pronouns } => {
                             if id != envelope.author {
                                 starling::logger::warn(&format!(
                                     "roost channel: dropped spoofed profile \
@@ -1396,6 +1411,7 @@ async fn join_roost_channel(
                                 space: rx_space,
                                 id,
                                 name,
+                                pronouns,
                             });
                             if !dm_pk.is_empty() {
                                 dm_pks.insert(id, dm_pk.clone());
@@ -1450,6 +1466,7 @@ async fn join_roost_channel(
                         id: rx_my_id,
                         name: rx_name.clone(),
                         dm_pk: my_dm_public_bytes.clone(),
+                        pronouns: rx_pronouns.clone(),
                     };
                     let _ = starling::net::broadcast_payload(
                         &rx_sender,

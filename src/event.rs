@@ -104,6 +104,7 @@ pub enum AppEvent {
         space: starling::protocol::SpaceId,
         id: EndpointId,
         name: String,
+        pronouns: String,
     },
     Ticket(EndpointId),
     Error(String),
