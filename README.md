@@ -38,7 +38,12 @@ video calls.
 
 ## Install
 
-Download the prebuilt binary — no Rust or compiler needed:
+**Recommended:** install the [`starling` launcher](https://forgejo.hearthhome.lol/Saltfault/Starling#install), then:
+```bash
+starling install tui
+```
+
+Or install standalone — no Rust or compiler needed:
 
 **Windows (PowerShell):**
 ```powershell
@@ -51,9 +56,7 @@ curl -sSfL https://forgejo.hearthhome.lol/Saltfault/Starling-TUI/releases/latest
 ```
 
 The installer places `starling-tui` in your PATH. Run `starling-tui` to launch.
-Upgrade: re-run the same command. Uninstall: `install.sh --uninstall` or `install.ps1 -Uninstall`.
-
-> **Building from source?** See [Platform setup](#platform-setup) below.
+Upgrade: re-run the same command, or `starling update tui`. Uninstall: `install.sh --uninstall`.
 
 **Configure your profile (one-time):**
 
