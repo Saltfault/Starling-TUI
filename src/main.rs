@@ -981,8 +981,6 @@ fn handle_join_room_key(
     KeyOutcome::Handled
 }
 
-
-
 fn handle_bird_profile_key(
     app: &mut App,
     k: &KeyEvent,

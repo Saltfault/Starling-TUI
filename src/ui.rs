@@ -1558,11 +1558,18 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
         Some(id) => id,
         None => return,
     };
-    let profile = app.active_context()
+    let profile = app
+        .active_context()
         .and_then(|ctx| app.presence.contexts.get(&ctx.id))
         .and_then(|presence| presence.members.get(&peer));
     let name = profile.map(|p| p.name.as_str()).unwrap_or("Unknown");
-    let pronouns = profile.and_then(|p| if p.pronouns.is_empty() { None } else { Some(p.pronouns.as_str()) });
+    let pronouns = profile.and_then(|p| {
+        if p.pronouns.is_empty() {
+            None
+        } else {
+            Some(p.pronouns.as_str())
+        }
+    });
 
     let popup = centered(f.area(), 40, 7);
     f.render_widget(Clear, popup);
@@ -1572,7 +1579,9 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
             .border_style(Style::new().fg(app.palette.border))
             .title(Span::styled(
                 format!(" {name} "),
-                Style::new().fg(app.palette.accent).add_modifier(Modifier::BOLD),
+                Style::new()
+                    .fg(app.palette.accent)
+                    .add_modifier(Modifier::BOLD),
             )),
         popup,
     );
@@ -1601,7 +1610,10 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("ID: ", Style::new().fg(app.palette.dim)),
-            Span::styled(&id_short[..24.min(id_short.len())], Style::new().fg(app.palette.dim)),
+            Span::styled(
+                &id_short[..24.min(id_short.len())],
+                Style::new().fg(app.palette.dim),
+            ),
         ])),
         rows[1],
     );
@@ -1609,11 +1621,12 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
     #[cfg(feature = "audio")]
     {
         f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("[ Call ]", Style::new()
+            Paragraph::new(Line::from(vec![Span::styled(
+                "[ Call ]",
+                Style::new()
                     .fg(app.palette.selection)
-                    .add_modifier(Modifier::BOLD)),
-            ])),
+                    .add_modifier(Modifier::BOLD),
+            )])),
             rows[2],
         );
     }
