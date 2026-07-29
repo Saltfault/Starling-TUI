@@ -20,7 +20,7 @@ jobs:
       - name: Checkout starling core
         run: git clone https://forgejo.hearthhome.lol/Saltfault/Starling.git starling
       - name: Point patch to local starling
-        run: sed -i.bak 's|path = "../starling"|path = "./starling"|' Cargo.toml && rm -f Cargo.toml.bak
+        run: sed -i 's|starling = { git = .*|starling = { path = "./starling" }|' Cargo.toml
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -61,7 +61,7 @@ jobs:
       - name: Checkout starling core
         run: git clone https://forgejo.hearthhome.lol/Saltfault/Starling.git starling
       - name: Point patch to local starling
-        run: sed -i.bak 's|path = "../starling"|path = "./starling"|' Cargo.toml && rm -f Cargo.toml.bak
+        run: sed -i 's|starling = { git = .*|starling = { path = "./starling" }|' Cargo.toml
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y

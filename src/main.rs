@@ -989,10 +989,10 @@ fn handle_bird_profile_key(
     match k.code {
         KeyCode::Enter | KeyCode::Char('c' | 'C') => {
             #[cfg(feature = "audio")]
-            if let Some(peer) = app.bird_profile_peer {
-                if cmd_tx.send(Command::StartCall(vec![peer])).is_ok() {
-                    app.error_message = Some("Connecting call...".into());
-                }
+            if let Some(peer) = app.bird_profile_peer
+                && cmd_tx.send(Command::StartCall(vec![peer])).is_ok()
+            {
+                app.error_message = Some("Connecting call...".into());
             }
             app.show_bird_profile = false;
             app.bird_profile_peer = None;

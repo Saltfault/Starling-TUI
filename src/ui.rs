@@ -955,6 +955,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_edit_flock_popup(f, app);
     } else if app.show_join_room {
         draw_join_room_popup(f, app);
+    } else if app.show_delete_confirm {
+        draw_delete_confirm_popup(f, app);
     } else if app.show_menu {
         draw_menu_popup(f, app);
     } else if app.show_bird_profile {
