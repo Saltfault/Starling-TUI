@@ -475,8 +475,8 @@ pub async fn run(
     let mut flocks: HashMap<String, FlockHandle> = HashMap::new();
     let mut spaces: HashMap<starling::protocol::SpaceId, FlockHandle> = HashMap::new();
 
-    if let Some(code) = bootstrap {
-        if let Err(e) = join_by_code(
+    if let Some(code) = bootstrap
+        && let Err(e) = join_by_code(
             &gossip,
             &endpoint,
             code,
@@ -492,9 +492,8 @@ pub async fn run(
             pronouns.clone(),
         )
         .await
-        {
-            let _ = evt_tx.send(AppEvent::Notice(format!("join failed: {e}")));
-        }
+    {
+        let _ = evt_tx.send(AppEvent::Notice(format!("join failed: {e}")));
     }
 
     // Rejoin saved contexts that have persisted join codes.
