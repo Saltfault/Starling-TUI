@@ -1040,7 +1040,13 @@ async fn join_flock(
 
     let topic = starling::net::topic_for(&format!("starling/flock/{code}"));
     let crypto = FlockCrypto::from_secret(&flock_secret);
-    let (sender, mut receiver) = gossip.subscribe(topic, boot).await?.split();
+    let (sender, mut receiver) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        gossip.subscribe(topic, boot),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out joining flock — peer unreachable"))??
+    .split();
 
     let rx_space = starling::protocol::SpaceId::Flock(starling::protocol::FlockId(flock_secret));
     let (
@@ -1360,7 +1366,13 @@ async fn join_roost_channel(
     starling::logger::info(&format!(
         "join_roost_channel: subscribing to '{code}' with bootstrap {opener}"
     ));
-    let (sender, mut receiver) = gossip.subscribe(topic, vec![opener]).await?.split();
+    let (sender, mut receiver) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        gossip.subscribe(topic, vec![opener]),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out subscribing to roost channel '{code}'"))??
+    .split();
     let rx_crypto = FlockCrypto::from_secret(&secret);
     let rx_code = code.clone();
     let rx_tx = evt_tx.clone();
