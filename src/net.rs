@@ -476,11 +476,11 @@ pub async fn run(
     let mut spaces: HashMap<starling::protocol::SpaceId, FlockHandle> = HashMap::new();
 
     if let Some(code) = bootstrap {
-        join_by_code(
+        if let Err(e) = join_by_code(
             &gossip,
             &endpoint,
             code,
-            0, // bootstrap: no app state to query newest_ts from
+            0,
             &mut flocks,
             &mut spaces,
             evt_tx.clone(),
@@ -491,7 +491,10 @@ pub async fn run(
             my_dm_public_bytes.clone(),
             pronouns.clone(),
         )
-        .await?;
+        .await
+        {
+            let _ = evt_tx.send(AppEvent::Notice(format!("join failed: {e}")));
+        }
     }
 
     // Rejoin saved contexts that have persisted join codes.
