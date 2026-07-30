@@ -193,12 +193,9 @@ jobs:
               -F "attachment=@$f"
           done
 
-          uploaded_count=$(curl --fail --silent --show-error \
-            "$API/repos/$OWNER/$REPO/releases/$release_id" \
-            -H "Authorization: Bearer $FORGEJO_TOKEN" | jq '.assets | length')
-          # 5 binaries + 2 sha256 + 2 install scripts = 9 assets
-          if [ "$uploaded_count" -ne 9 ]; then
-            echo "Expected 9 release assets, uploaded $uploaded_count"
+          # 5 binaries + 5 sha256 + 2 install scripts = 12 assets
+          if [ "$uploaded_count" -ne 12 ]; then
+            echo "Expected 12 release assets, uploaded $uploaded_count"
             exit 1
           fi
           echo "Forgejo release $TAG created with $uploaded_count assets"
