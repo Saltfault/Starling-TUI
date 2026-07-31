@@ -326,7 +326,6 @@ fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[allow(dead_code)]
 fn pkg_config_exists(lib: &str) -> bool {
     std::process::Command::new("pkg-config")
         .args(["--exists", lib])

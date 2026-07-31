@@ -180,12 +180,15 @@ pub struct ContextView {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub enum ContextState {
+    #[allow(dead_code)]
     AwaitingKeys,
+    #[allow(dead_code)]
     Reconciling,
     Ready,
+    #[allow(dead_code)]
     Revoked,
+    #[allow(dead_code)]
     NeedsUserAction,
     Restoring,
 }

@@ -102,14 +102,14 @@ pub async fn handle_incoming(
 }
 
 // ===========================================================================
-// V1: per-peer media session
+// Per-peer media session
 // ===========================================================================
 //
-// V1 keeps a single [`MediaSession`] per active call. Each remote peer gets
+// Keeps a single [`MediaSession`] per active call. Each remote peer gets
 // its own Opus decoder so packets from different peers can be decoded
 // independently and then mixed into a single output buffer for playback.
 // Signalling (invite/accept/leave) uses [`starling::call::SignedCallSignalV1`]
-// over the V1 ALPNs; the session itself only owns the decode/mix pipeline and
+// over the ALPNs; the session itself only owns the decode/mix pipeline and
 // the task lifecycle.
 
 #[cfg(feature = "audio")]
