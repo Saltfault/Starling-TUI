@@ -30,7 +30,7 @@ ringbuf = { version = "0.5.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.0"
 sled = "0.34"
-starling = { git = "https://forgejo.hearthhome.lol/Saltfault/Starling.git", tag = "v0.5.5" }
+starling = { git = "https://forgejo.hearthhome.lol/Saltfault/Starling.git", tag = "v0.5.4" }
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
