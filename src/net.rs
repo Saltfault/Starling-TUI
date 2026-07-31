@@ -233,7 +233,6 @@ pub struct CallSession {
 }
 
 /// Publishes presence immediately, every 20 seconds, and on profile/call changes.
-#[allow(dead_code)]
 pub async fn publish_presence(
     sender: GossipSender,
     crypto: FlockCrypto,
@@ -1089,6 +1088,7 @@ async fn join_flock(
     .split();
 
     let rx_space = starling::protocol::SpaceId::Flock(starling::protocol::FlockId(flock_secret));
+    let identity_secret = secret.clone();
     let (
         rx_crypto,
         rx_code,
@@ -1221,6 +1221,16 @@ async fn join_flock(
         }
     });
 
+    let (_, presence_changes) = mpsc::unbounded_channel();
+    let presence_crypto = FlockCrypto::from_secret(&flock_secret);
+    tokio::spawn(publish_presence(
+        sender.clone(),
+        presence_crypto,
+        rx_space,
+        identity_secret,
+        presence_changes,
+        cancel.clone(),
+    ));
     flocks.insert(
         code.clone(),
         FlockHandle {
@@ -1428,6 +1438,7 @@ async fn join_roost_channel(
 
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
+    let identity_secret2 = identity_secret.clone();
     tokio::spawn(async move {
         let rx_space = space_id;
         let mut dm_pks: HashMap<EndpointId, Vec<u8>> = HashMap::new();
@@ -1540,6 +1551,17 @@ async fn join_roost_channel(
             }
         }
     });
+
+    let (_, presence_changes) = mpsc::unbounded_channel();
+    let presence_crypto = FlockCrypto::from_secret(&secret);
+    tokio::spawn(publish_presence(
+        sender.clone(),
+        presence_crypto,
+        space_id,
+        identity_secret2,
+        presence_changes,
+        cancel.clone(),
+    ));
 
     let flock_handle = FlockHandle {
         sender: sender.clone(),
