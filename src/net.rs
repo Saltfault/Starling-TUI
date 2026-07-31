@@ -838,17 +838,11 @@ pub async fn run(
                     let Ok((mut send, mut recv)) = conn.open_bi().await else {
                         return;
                     };
-                    let req = ModRequest::SetRole {
-                        target,
-                        role_index,
-                    };
-                    let _ = send
-                        .write_all(&postcard::to_stdvec(&req).unwrap())
-                        .await;
+                    let req = ModRequest::SetRole { target, role_index };
+                    let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
                     let _ = send.finish();
                     if let Ok(bytes) = recv.read_to_end(1024).await
-                        && let Ok(Err(reason)) =
-                            postcard::from_bytes::<Result<(), String>>(&bytes)
+                        && let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
                     {
                         let _ = tx.send(AppEvent::Notice(reason));
                     }
@@ -866,13 +860,10 @@ pub async fn run(
                         return;
                     };
                     let req = ModRequest::TransferOwnership(target);
-                    let _ = send
-                        .write_all(&postcard::to_stdvec(&req).unwrap())
-                        .await;
+                    let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
                     let _ = send.finish();
                     if let Ok(bytes) = recv.read_to_end(1024).await
-                        && let Ok(Err(reason)) =
-                            postcard::from_bytes::<Result<(), String>>(&bytes)
+                        && let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
                     {
                         let _ = tx.send(AppEvent::Notice(reason));
                     }
@@ -889,13 +880,10 @@ pub async fn run(
                         return;
                     };
                     let req = ModRequest::Invite(target);
-                    let _ = send
-                        .write_all(&postcard::to_stdvec(&req).unwrap())
-                        .await;
+                    let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
                     let _ = send.finish();
                     if let Ok(bytes) = recv.read_to_end(1024).await
-                        && let Ok(Err(reason)) =
-                            postcard::from_bytes::<Result<(), String>>(&bytes)
+                        && let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
                     {
                         let _ = tx.send(AppEvent::Notice(reason));
                     }

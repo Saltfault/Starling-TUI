@@ -445,7 +445,7 @@ pub enum ContextMenuAction {
     Invite,
     Kick,
     Ban,
-    SetRole(usize),
+    SetRole,
     RemoveRoles,
     TransferOwnership,
     DeleteMessage,
@@ -951,7 +951,7 @@ impl App {
                 if perms.contains(starling::roost::perms::Perm::MANAGE_ROLES) {
                     self.context_menu_items.push(ContextMenuItem {
                         label: "Set Role".into(),
-                        action: ContextMenuAction::SetRole(0),
+                        action: ContextMenuAction::SetRole,
                         enabled: !self.my_perms.is_empty(),
                     });
                     self.context_menu_items.push(ContextMenuItem {
@@ -1844,9 +1844,7 @@ fn draw_role_submenu(f: &mut Frame, app: &App) {
         .roosts
         .iter()
         .find(|r| !r.code.is_empty())
-        .map(|_| {
-            vec!["Moderator", "Member"]
-        })
+        .map(|_| vec!["Moderator", "Member"])
         .unwrap_or_default();
 
     let items: Vec<ListItem> = roles
@@ -1862,10 +1860,7 @@ fn draw_role_submenu(f: &mut Frame, app: &App) {
                 Style::new().fg(app.palette.text)
             };
             let prefix = if sel { "> " } else { "  " };
-            ListItem::new(Line::from(Span::styled(
-                format!("{prefix}{name}"),
-                style,
-            )))
+            ListItem::new(Line::from(Span::styled(format!("{prefix}{name}"), style)))
         })
         .collect();
 

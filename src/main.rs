@@ -1044,7 +1044,7 @@ fn handle_context_menu_key(
                 return Ok(());
             }
             match &item.action {
-                ContextMenuAction::SetRole(_) => {
+                ContextMenuAction::SetRole => {
                     if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
                         app.role_submenu_target = Some(*endpoint);
                         app.role_submenu_selection = 0;
@@ -1164,11 +1164,10 @@ fn execute_context_action(
         ContextMenuAction::DeleteMessage => {
             app.error_message = Some("Delete Message not yet implemented".into());
         }
-        ContextMenuAction::SetRole(_) => {}
+        ContextMenuAction::SetRole => {}
     }
     Ok(())
 }
-
 
 fn handle_menu_key(
     app: &mut App,
