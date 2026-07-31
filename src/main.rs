@@ -215,6 +215,7 @@ fn nav_items(app: &App) -> Vec<Selection> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     starling::logger::init()?;
 
     let args: Vec<String> = std::env::args().collect();
