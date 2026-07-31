@@ -133,8 +133,8 @@ impl Drop for Decoder {
 unsafe impl Send for Decoder {}
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 pub enum Channels {
+    #[allow(dead_code)]
     Mono = 1,
     Stereo = 2,
 }

@@ -46,7 +46,6 @@ impl Default for Palette {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub struct MemberProfile {
     pub endpoint: EndpointId,
     pub name: String,
@@ -313,11 +312,8 @@ pub struct App {
     /// the untrusted `id` field inside the payload). `/chirp` looks up the
     /// recipient through this table; main() feeds it from `AppEvent::DmKey`.
     pub peer_dm_keys: HashMap<EndpointId, Vec<u8>>,
-    #[allow(dead_code)]
     pub local_video_frame: Option<RgbImage>,
-    #[allow(dead_code)]
     pub remote_video_frames: HashMap<EndpointId, RgbImage>,
-    #[allow(dead_code)]
     pub show_video: bool,
     pub show_menu: bool,
     pub menu_selection: usize,
