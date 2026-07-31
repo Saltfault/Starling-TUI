@@ -1314,6 +1314,10 @@ fn handle_normal_key(
             app.menu_selection = 0;
         }
 
+        KeyCode::Tab if !app.peers.is_empty() => {
+            app.select_next_peer();
+            app.scroll_focus = ScrollPanel::Birds;
+        }
         KeyCode::Up if !app.peers.is_empty() => {
             if app.selected_peer > 0 {
                 app.selected_peer -= 1;

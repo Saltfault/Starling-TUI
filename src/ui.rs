@@ -298,7 +298,6 @@ pub struct App {
     pub show_create_room: bool,
     pub show_join_room: bool,
     pub join_input: String,
-    #[allow(dead_code)]
     pub joining: Option<String>,
     pub show_edit_flock: bool,
     pub edit_flock_code: String,
@@ -794,7 +793,6 @@ impl App {
         self.active_peers().len() + 1
     }
 
-    #[allow(dead_code)]
     pub fn select_next_peer(&mut self) {
         let peers = self.active_peers();
         if !peers.is_empty() {
@@ -1492,6 +1490,8 @@ fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
 fn status_text(app: &App) -> String {
     if let Some(notice) = app.visible_status_notice(Instant::now()) {
         notice.to_string()
+    } else if app.joining.is_some() {
+        "Joining...".into()
     } else if app.in_call {
         format!("in call{}", if app.muted { " . muted" } else { " . live" })
     } else if let Some(active) = app.active {
@@ -1500,7 +1500,6 @@ fn status_text(app: &App) -> String {
         String::new()
     }
 }
-
 fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
     let mut spans = Vec::new();
     for (action, label, _x, _w) in toolbar_buttons(app) {
