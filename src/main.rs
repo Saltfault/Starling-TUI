@@ -37,7 +37,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::mpsc;
-use ui::{App, FlockView, MENU_ITEMS, Popup, RoostView, ScrollPanel, Selection, ToolbarAction};
+use ui::{
+    App, ContextMenuAction, ContextMenuTarget, FlockView, MENU_ITEMS, Popup, RoostView,
+    ScrollPanel, Selection, ToolbarAction,
+};
 
 const MOUSE_TRACKING_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
 const MOUSE_TRACKING_OFF: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
@@ -746,6 +749,14 @@ async fn main() -> anyhow::Result<()> {
                             handle_menu_key(&mut app, k, &cmd_tx, &mut term),
                         Popup::BirdProfile =>
                             Ok(handle_bird_profile_key(&mut app, k, &cmd_tx)),
+                        Popup::ContextMenu => {
+                            handle_context_menu_key(&mut app, k, &cmd_tx)?;
+                            Ok(KeyOutcome::Handled)
+                        }
+                        Popup::RoleSubmenu => {
+                            handle_role_submenu_key(&mut app, k, &cmd_tx)?;
+                            Ok(KeyOutcome::Handled)
+                        }
                         Popup::None =>
                             handle_normal_key(&mut app, k, &cmd_tx),
                     }?;
@@ -776,8 +787,10 @@ async fn main() -> anyhow::Result<()> {
                         MouseEventKind::ScrollDown if !app.show_menu => {
                             handle_mouse_scroll(&mut app, m.column, m.row, 3.0)?;
                         }
-                        MouseEventKind::Down(MouseButton::Right)
-                        | MouseEventKind::Up(MouseButton::Right)
+                        MouseEventKind::Down(MouseButton::Right) => {
+                            handle_right_click(&mut app, m.column, m.row)?;
+                        }
+                        MouseEventKind::Up(MouseButton::Right)
                         | MouseEventKind::Drag(MouseButton::Right) => {}
                         _ => {}
                     }
@@ -1005,6 +1018,158 @@ fn handle_bird_profile_key(
     }
     KeyOutcome::Handled
 }
+
+fn handle_context_menu_key(
+    app: &mut App,
+    k: &KeyEvent,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+) -> anyhow::Result<()> {
+    match k.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.context_menu_selection = app.context_menu_selection.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            let max = app.context_menu_items.len().saturating_sub(1);
+            app.context_menu_selection = app
+                .context_menu_selection
+                .min(max)
+                .saturating_add(1)
+                .min(max);
+        }
+        KeyCode::Enter => {
+            let Some(item) = app.context_menu_items.get(app.context_menu_selection) else {
+                return Ok(());
+            };
+            if !item.enabled {
+                return Ok(());
+            }
+            match &item.action {
+                ContextMenuAction::SetRole(_) => {
+                    if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
+                        app.role_submenu_target = Some(*endpoint);
+                        app.role_submenu_selection = 0;
+                        app.show_role_submenu = true;
+                        app.show_context_menu = false;
+                    }
+                }
+                _ => {
+                    let action = item.action.clone();
+                    execute_context_action(app, cmd_tx, &action)?;
+                    app.show_context_menu = false;
+                }
+            }
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.show_context_menu = false;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_role_submenu_key(
+    app: &mut App,
+    k: &KeyEvent,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+) -> anyhow::Result<()> {
+    match k.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.role_submenu_selection = app.role_submenu_selection.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.role_submenu_selection = app.role_submenu_selection.saturating_add(1);
+        }
+        KeyCode::Enter => {
+            let target = app.role_submenu_target;
+            let role_idx = app.role_submenu_selection;
+            if let Some(endpoint) = target
+                && let Some(roost_ep) = app.context_menu_roost_endpoint()
+            {
+                let _ = cmd_tx.send(Command::SetRole {
+                    roost: roost_ep,
+                    target: endpoint,
+                    role_index: Some(role_idx),
+                });
+            }
+            app.show_role_submenu = false;
+            app.show_context_menu = false;
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.show_role_submenu = false;
+            app.show_context_menu = true;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn execute_context_action(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+    action: &ContextMenuAction,
+) -> anyhow::Result<()> {
+    let Some(roost_ep) = app.context_menu_roost_endpoint() else {
+        return Ok(());
+    };
+
+    match action {
+        ContextMenuAction::Ban => {
+            if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
+                let _ = cmd_tx.send(Command::Ban {
+                    roost: roost_ep,
+                    target: *endpoint,
+                });
+            }
+        }
+        ContextMenuAction::Kick => {
+            if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
+                let _ = cmd_tx.send(Command::Kick {
+                    roost: roost_ep,
+                    target: *endpoint,
+                });
+            }
+        }
+        ContextMenuAction::Invite => {
+            if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
+                let _ = cmd_tx.send(Command::Invite {
+                    roost: roost_ep,
+                    target: *endpoint,
+                });
+            }
+        }
+        ContextMenuAction::RemoveRoles => {
+            if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
+                let _ = cmd_tx.send(Command::SetRole {
+                    roost: roost_ep,
+                    target: *endpoint,
+                    role_index: None,
+                });
+            }
+        }
+        ContextMenuAction::TransferOwnership => {
+            if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
+                let _ = cmd_tx.send(Command::TransferOwnership {
+                    roost: roost_ep,
+                    target: *endpoint,
+                });
+            }
+        }
+        ContextMenuAction::AddChannel => {
+            app.show_context_menu = false;
+            app.error_message = Some("Add Channel: type name and press Enter".into());
+        }
+        ContextMenuAction::RemoveChannel => {
+            app.error_message = Some("Remove Channel not yet implemented".into());
+        }
+        ContextMenuAction::DeleteMessage => {
+            app.error_message = Some("Delete Message not yet implemented".into());
+        }
+        ContextMenuAction::SetRole(_) => {}
+    }
+    Ok(())
+}
+
+
 fn handle_menu_key(
     app: &mut App,
     k: &KeyEvent,
@@ -1028,7 +1193,6 @@ fn handle_menu_key(
     }
     Ok(KeyOutcome::Handled)
 }
-
 fn handle_normal_key(
     app: &mut App,
     k: &KeyEvent,
@@ -1439,6 +1603,10 @@ fn handle_mouse_click(
         return Ok(());
     }
 
+    if app.show_context_menu || app.show_role_submenu {
+        return Ok(());
+    }
+
     if app.show_create_room {
         return Ok(());
     }
@@ -1502,7 +1670,6 @@ fn handle_mouse_click(
                     }
                     #[cfg(feature = "audio")]
                     ToolbarAction::Mute => {
-                        app.muted = !app.muted;
                         muted_flag.store(app.muted, Ordering::Relaxed);
                     }
                     #[cfg(feature = "video")]
@@ -1591,6 +1758,61 @@ fn handle_mouse_click(
             app.selected_peer = content_row - 1;
             app.bird_profile_peer = app.selected_peer_id();
             app.show_bird_profile = true;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {
+    app.show_context_menu = false;
+    app.show_role_submenu = false;
+
+    let (term_w, term_h) = crossterm::terminal::size()?;
+    let (flocks_top, _flocks_h, roosts_top, roosts_h, birds_h) = panel_geometry(term_h);
+
+    // Hit-test: right side = birds panel
+    if col >= term_w.saturating_sub(24)
+        && row > flocks_top
+        && row < flocks_top + birds_h.saturating_sub(1)
+    {
+        app.scroll_focus = ScrollPanel::Birds;
+        let visible_row = (row - flocks_top - 1) as usize;
+        if let Some(content_row) = app.bird_scroll.row_index(visible_row)
+            && content_row > 0
+            && content_row <= app.active_peers().len()
+        {
+            let peer_id = app.active_peers()[content_row - 1];
+            app.build_context_menu(ContextMenuTarget::Bird(peer_id));
+            app.show_context_menu = !app.context_menu_items.is_empty();
+            return Ok(());
+        }
+    }
+
+    // Hit-test: left side = roosts panel
+    if col < 26 && row > roosts_top && row < roosts_top + roosts_h.saturating_sub(1) {
+        app.scroll_focus = ScrollPanel::Roosts;
+        let visible_row = (row - roosts_top - 1) as usize;
+        if let Some(content_row) = app.roost_scroll.row_index(visible_row) {
+            let mut cursor = 0usize;
+            for (ri, rv) in app.roosts.iter().enumerate() {
+                if cursor == content_row {
+                    app.build_context_menu(ContextMenuTarget::Roost(ri));
+                    app.show_context_menu = !app.context_menu_items.is_empty();
+                    return Ok(());
+                }
+                cursor += 1;
+                if app.expanded.contains(&ri) {
+                    for ci in 0..rv.channels.len() {
+                        if cursor == content_row {
+                            app.build_context_menu(ContextMenuTarget::RoostChannel(ri, ci));
+                            app.show_context_menu = !app.context_menu_items.is_empty();
+                            return Ok(());
+                        }
+                        cursor += 1;
+                    }
+                }
+            }
         }
     }
 

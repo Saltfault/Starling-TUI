@@ -53,6 +53,19 @@ pub enum Command {
         roost: EndpointId,
         target: EndpointId,
     },
+    SetRole {
+        roost: EndpointId,
+        target: EndpointId,
+        role_index: Option<usize>,
+    },
+    TransferOwnership {
+        roost: EndpointId,
+        target: EndpointId,
+    },
+    Invite {
+        roost: EndpointId,
+        target: EndpointId,
+    },
 }
 
 #[derive(Debug)]

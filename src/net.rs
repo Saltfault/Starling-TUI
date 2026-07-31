@@ -824,6 +824,84 @@ pub async fn run(
                 });
             }
 
+            Command::SetRole {
+                roost,
+                target,
+                role_index,
+            } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(conn) = ep.connect(EndpointAddr::from(roost), MOD_ALPN).await else {
+                        return;
+                    };
+                    let Ok((mut send, mut recv)) = conn.open_bi().await else {
+                        return;
+                    };
+                    let req = ModRequest::SetRole {
+                        target,
+                        role_index,
+                    };
+                    let _ = send
+                        .write_all(&postcard::to_stdvec(&req).unwrap())
+                        .await;
+                    let _ = send.finish();
+                    if let Ok(bytes) = recv.read_to_end(1024).await
+                        && let Ok(Err(reason)) =
+                            postcard::from_bytes::<Result<(), String>>(&bytes)
+                    {
+                        let _ = tx.send(AppEvent::Notice(reason));
+                    }
+                });
+            }
+
+            Command::TransferOwnership { roost, target } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(conn) = ep.connect(EndpointAddr::from(roost), MOD_ALPN).await else {
+                        return;
+                    };
+                    let Ok((mut send, mut recv)) = conn.open_bi().await else {
+                        return;
+                    };
+                    let req = ModRequest::TransferOwnership(target);
+                    let _ = send
+                        .write_all(&postcard::to_stdvec(&req).unwrap())
+                        .await;
+                    let _ = send.finish();
+                    if let Ok(bytes) = recv.read_to_end(1024).await
+                        && let Ok(Err(reason)) =
+                            postcard::from_bytes::<Result<(), String>>(&bytes)
+                    {
+                        let _ = tx.send(AppEvent::Notice(reason));
+                    }
+                });
+            }
+            Command::Invite { roost, target } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(conn) = ep.connect(EndpointAddr::from(roost), MOD_ALPN).await else {
+                        return;
+                    };
+                    let Ok((mut send, mut recv)) = conn.open_bi().await else {
+                        return;
+                    };
+                    let req = ModRequest::Invite(target);
+                    let _ = send
+                        .write_all(&postcard::to_stdvec(&req).unwrap())
+                        .await;
+                    let _ = send.finish();
+                    if let Ok(bytes) = recv.read_to_end(1024).await
+                        && let Ok(Err(reason)) =
+                            postcard::from_bytes::<Result<(), String>>(&bytes)
+                    {
+                        let _ = tx.send(AppEvent::Notice(reason));
+                    }
+                });
+            }
+
             Command::Quit => break,
             Command::Leave { code } => {
                 // Remove the top-level handle and any derived roost channel

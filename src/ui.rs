@@ -344,6 +344,13 @@ pub struct App {
     pub peer_roles: HashMap<EndpointId, (u8, u8, u8)>,
     pub show_bird_profile: bool,
     pub bird_profile_peer: Option<EndpointId>,
+    pub show_context_menu: bool,
+    pub show_role_submenu: bool,
+    pub context_menu_target: Option<ContextMenuTarget>,
+    pub context_menu_selection: usize,
+    pub context_menu_items: Vec<ContextMenuItem>,
+    pub role_submenu_target: Option<EndpointId>,
+    pub role_submenu_selection: usize,
 }
 
 impl Default for App {
@@ -393,6 +400,13 @@ impl Default for App {
             context_order: Vec::new(),
             active: None,
             presence: ScopedPresence::default(),
+            show_role_submenu: false,
+            show_context_menu: false,
+            context_menu_target: None,
+            context_menu_selection: 0,
+            role_submenu_target: None,
+            role_submenu_selection: 0,
+            context_menu_items: Vec::new(),
             status_notice: None,
             status_notice_expires_at: None,
             show_bird_profile: false,
@@ -410,7 +424,39 @@ pub enum Popup {
     JoinRoom,
     Menu,
     BirdProfile,
+    ContextMenu,
+    RoleSubmenu,
     None,
+}
+
+/// What was right-clicked to open the context menu.
+#[derive(Clone, Debug)]
+pub enum ContextMenuTarget {
+    Roost(usize),
+    RoostChannel(usize, usize),
+    Bird(EndpointId),
+}
+
+/// What the context menu triggers when selected.
+#[derive(Clone, Debug)]
+pub enum ContextMenuAction {
+    AddChannel,
+    RemoveChannel,
+    Invite,
+    Kick,
+    Ban,
+    SetRole(usize),
+    RemoveRoles,
+    TransferOwnership,
+    DeleteMessage,
+}
+
+/// One entry in the context menu.
+#[derive(Clone, Debug)]
+pub struct ContextMenuItem {
+    pub label: String,
+    pub action: ContextMenuAction,
+    pub enabled: bool,
 }
 
 impl App {
@@ -418,7 +464,11 @@ impl App {
     /// `if`-cascade: delete-confirm wins over create-room, which wins over
     /// edit-flock, join-room, and the menu, in that order. Only the highest-
     pub fn active_popup(&self) -> Popup {
-        if self.show_delete_confirm {
+        if self.show_role_submenu {
+            Popup::RoleSubmenu
+        } else if self.show_context_menu {
+            Popup::ContextMenu
+        } else if self.show_delete_confirm {
             Popup::DeleteConfirm
         } else if self.show_create_room {
             Popup::CreateRoom
@@ -837,6 +887,111 @@ impl App {
     pub fn advance_scroll(&mut self, dt: f32) -> bool {
         self.flock_scroll.advance(dt) | self.roost_scroll.advance(dt) | self.bird_scroll.advance(dt)
     }
+
+    /// Build the context menu items for a given target
+    pub fn build_context_menu(&mut self, target: ContextMenuTarget) {
+        self.context_menu_target = Some(target.clone());
+        self.context_menu_selection = 0;
+        self.context_menu_items = Vec::new();
+
+        let perms = self.my_perms;
+
+        match target {
+            ContextMenuTarget::Roost(ri) => {
+                if let Some(rv) = self.roosts.get(ri) {
+                    if perms.contains(starling::roost::perms::Perm::MANAGE_CHANS) {
+                        self.context_menu_items.push(ContextMenuItem {
+                            label: "Add Channel".into(),
+                            action: ContextMenuAction::AddChannel,
+                            enabled: true,
+                        });
+                        self.context_menu_items.push(ContextMenuItem {
+                            label: "Remove Channel".into(),
+                            action: ContextMenuAction::RemoveChannel,
+                            enabled: !rv.channels.is_empty(),
+                        });
+                    }
+                    if perms.contains(starling::roost::perms::Perm::INVITE) {
+                        self.context_menu_items.push(ContextMenuItem {
+                            label: "Invite Bird".into(),
+                            action: ContextMenuAction::Invite,
+                            enabled: true,
+                        });
+                    }
+                }
+            }
+            ContextMenuTarget::RoostChannel(_ri, _ci) => {
+                if perms.contains(starling::roost::perms::Perm::MANAGE_MSGS) {
+                    self.context_menu_items.push(ContextMenuItem {
+                        label: "Delete Message".into(),
+                        action: ContextMenuAction::DeleteMessage,
+                        enabled: true,
+                    });
+                }
+            }
+            ContextMenuTarget::Bird(endpoint) => {
+                let is_self = self.node_id == Some(endpoint);
+                if is_self {
+                    return;
+                }
+                if perms.contains(starling::roost::perms::Perm::KICK) {
+                    self.context_menu_items.push(ContextMenuItem {
+                        label: "Kick".into(),
+                        action: ContextMenuAction::Kick,
+                        enabled: true,
+                    });
+                }
+                if perms.contains(starling::roost::perms::Perm::BAN) {
+                    self.context_menu_items.push(ContextMenuItem {
+                        label: "Ban".into(),
+                        action: ContextMenuAction::Ban,
+                        enabled: true,
+                    });
+                }
+                if perms.contains(starling::roost::perms::Perm::MANAGE_ROLES) {
+                    self.context_menu_items.push(ContextMenuItem {
+                        label: "Set Role".into(),
+                        action: ContextMenuAction::SetRole(0),
+                        enabled: !self.my_perms.is_empty(),
+                    });
+                    self.context_menu_items.push(ContextMenuItem {
+                        label: "Remove All Roles".into(),
+                        action: ContextMenuAction::RemoveRoles,
+                        enabled: true,
+                    });
+                }
+                if perms.contains(starling::roost::perms::Perm::ADMIN) {
+                    self.context_menu_items.push(ContextMenuItem {
+                        label: "Transfer Ownership".into(),
+                        action: ContextMenuAction::TransferOwnership,
+                        enabled: true,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Get the roost endpoint for the current context menu target
+    pub fn context_menu_roost_endpoint(&self) -> Option<EndpointId> {
+        let target = self.context_menu_target.as_ref()?;
+        match target {
+            ContextMenuTarget::Roost(ri) => {
+                let rv = self.roosts.get(*ri)?;
+                starling::net::decode_typed_code(&rv.code)
+                    .and_then(|t| starling::net::typed_code_node_id(&t))
+            }
+            ContextMenuTarget::RoostChannel(ri, _) => {
+                let rv = self.roosts.get(*ri)?;
+                starling::net::decode_typed_code(&rv.code)
+                    .and_then(|t| starling::net::typed_code_node_id(&t))
+            }
+            ContextMenuTarget::Bird(_) => {
+                let ctx = self.active_context()?;
+                let roost_id = ctx.roost?;
+                Some(EndpointId::from_bytes(&roost_id.0).ok()?)
+            }
+        }
+    }
 }
 
 pub fn toolbar_buttons(app: &App) -> Vec<(ToolbarAction, &'static str, u16, u16)> {
@@ -948,8 +1103,11 @@ pub fn draw(f: &mut Frame, app: &App) {
             .block(Block::default().borders(Borders::ALL).title(" message ")),
         chunks[3],
     );
-
-    if app.show_create_room {
+    if app.show_role_submenu {
+        draw_role_submenu(f, app);
+    } else if app.show_context_menu {
+        draw_context_menu(f, app);
+    } else if app.show_create_room {
         draw_create_room_popup(f, app);
     } else if app.show_edit_flock {
         draw_edit_flock_popup(f, app);
@@ -1636,6 +1794,96 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
     f.render_widget(
         Paragraph::new(" Enter/C = call . Esc = close").style(Style::new().fg(app.palette.dim)),
         rows[3],
+    );
+}
+
+fn draw_context_menu(f: &mut Frame, app: &App) {
+    let items: Vec<ListItem> = app
+        .context_menu_items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let sel = i == app.context_menu_selection;
+            let style = if sel {
+                Style::new()
+                    .fg(app.palette.selection)
+                    .add_modifier(Modifier::BOLD)
+            } else if item.enabled {
+                Style::new().fg(app.palette.text)
+            } else {
+                Style::new().fg(app.palette.dim)
+            };
+            let prefix = if sel { "> " } else { "  " };
+            ListItem::new(Line::from(Span::styled(
+                format!("{prefix}{}", item.label),
+                style,
+            )))
+        })
+        .collect();
+
+    let width = 28u16;
+    let height = items.len() as u16 + 2;
+    let popup = centered(f.area(), width, height);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(app.palette.border))
+                .title(Span::styled(
+                    " Actions ",
+                    Style::new().fg(app.palette.accent),
+                )),
+        ),
+        popup,
+    );
+}
+
+fn draw_role_submenu(f: &mut Frame, app: &App) {
+    let roles: Vec<&str> = app
+        .roosts
+        .iter()
+        .find(|r| !r.code.is_empty())
+        .map(|_| {
+            vec!["Moderator", "Member"]
+        })
+        .unwrap_or_default();
+
+    let items: Vec<ListItem> = roles
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let sel = i == app.role_submenu_selection;
+            let style = if sel {
+                Style::new()
+                    .fg(app.palette.selection)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(app.palette.text)
+            };
+            let prefix = if sel { "> " } else { "  " };
+            ListItem::new(Line::from(Span::styled(
+                format!("{prefix}{name}"),
+                style,
+            )))
+        })
+        .collect();
+
+    let width = 24u16;
+    let height = items.len() as u16 + 2;
+    let popup = centered(f.area(), width, height);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(app.palette.border))
+                .title(Span::styled(
+                    " Assign Role ",
+                    Style::new().fg(app.palette.accent),
+                )),
+        ),
+        popup,
     );
 }
 
