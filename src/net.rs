@@ -14,7 +14,7 @@ use starling::roost::{ModRequest, RoostState, RoostWelcome};
 use std::collections::{HashMap, HashSet};
 
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{Duration, timeout};
 
@@ -148,7 +148,7 @@ pub struct SpaceHandle {
     sender: GossipSender,
     keys: Keyring,
     history: HistoryStore,
-    members: Arc<MemberDirectory>,
+    members: (),
     cancel: CancellationToken,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     readiness: SpaceReadiness,
@@ -158,7 +158,7 @@ pub struct SpaceHandle {
 pub struct RoostHandle {
     control: AuthenticatedRoostControl,
     manifest: starling::roost::SignedManifestV1,
-    members: Arc<MemberDirectory>,
+    members: (),
     history: HistoryStore,
     channels: HashMap<starling::protocol::ChannelId, SpaceHandle>,
     readiness: SpaceReadiness,
@@ -199,31 +199,6 @@ impl Keyring {
     }
 }
 
-#[derive(Default)]
-#[allow(dead_code)]
-pub struct MemberDirectory {
-    members: RwLock<HashMap<EndpointId, crate::ui::MemberProfile>>,
-    ordered_ids: RwLock<Vec<EndpointId>>,
-    revision: RwLock<u64>,
-}
-
-#[allow(dead_code)]
-impl MemberDirectory {
-    pub fn replace(&self, ids: impl IntoIterator<Item = EndpointId>) {
-        let mut ids: Vec<_> = ids.into_iter().collect();
-        ids.sort_unstable();
-        ids.dedup();
-        *self.ordered_ids.write().expect("member directory poisoned") = ids;
-    }
-
-    pub fn ids(&self) -> Vec<EndpointId> {
-        self.ordered_ids
-            .read()
-            .expect("member directory poisoned")
-            .clone()
-    }
-}
-
 #[allow(dead_code)]
 pub struct AuthenticatedRoostControl {
     pub roost: starling::protocol::RoostId,
@@ -246,9 +221,6 @@ pub enum SpaceReadiness {
     NeedsUserAction,
     Retrying { attempt: u32 },
 }
-
-#[allow(dead_code)]
-pub type RoostReadiness = SpaceReadiness;
 
 #[allow(dead_code)]
 pub struct CallSession {
