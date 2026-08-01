@@ -1,6 +1,6 @@
 [package]
 name = "Starling-TUI"
-version = "0.7.6"
+version = "0.7.7"
 edition = "2024"
 
 [[bin]]
@@ -27,7 +27,7 @@ nokhwa = { version = "0.10.11", features = ["input-native"], optional = true }
 postcard = { version = "1.1.3", features = ["use-std"] }
 ratatui = "0.30.2"
 ringbuf = { version = "0.5.1", optional = true }
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "ring", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.0"
 sled = "0.34"
@@ -40,7 +40,6 @@ zeroize = "1.8.2"
 [dev-dependencies]
 iroh = { version = "1.0.3", features = ["test-utils"] }
 tempfile = "3.23.0"
-rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"] }
 
 # Linux: cpal PulseAudio backend, nokhwa (V4L2 — needs libclang-dev)
 [target.'cfg(target_os = "linux")'.dependencies]

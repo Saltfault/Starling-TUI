@@ -215,7 +215,10 @@ fn nav_items(app: &App) -> Vec<Selection> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Install rustls crypto provider (required by iroh 1.0+).
+    // Try aws-lc-rs first, fall back to ring. Ignore if already installed.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     starling::logger::init()?;
 
     let args: Vec<String> = std::env::args().collect();
