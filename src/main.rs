@@ -215,8 +215,9 @@ fn nav_items(app: &App) -> Vec<Selection> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // iroh 1.0.3 uses ring by default — must match.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("rustls ring provider");
     starling::logger::init()?;
 
     let args: Vec<String> = std::env::args().collect();
