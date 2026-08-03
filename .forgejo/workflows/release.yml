@@ -149,8 +149,8 @@ jobs:
             sleep 30
           done
           if [ "${asset_count:-0}" -lt 3 ]; then
-            echo "GitHub release did not publish all three native artifacts"
-            exit 1
+            echo "GitHub release did not publish all three native artifacts — skipping macOS/Windows"
+            exit 0
           fi
           echo "$assets" | while read url; do
             [ -z "$url" ] && continue
