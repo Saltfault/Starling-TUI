@@ -1376,6 +1376,9 @@ fn draw_typed_messages(f: &mut Frame, app: &App, area: Rect) -> bool {
     let Some(messages) = app.active_context_messages() else {
         return false;
     };
+    if messages.is_empty() {
+        return false;
+    }
     let items = messages.iter().map(|message| {
         ListItem::new(Line::from(vec![
             Span::styled(

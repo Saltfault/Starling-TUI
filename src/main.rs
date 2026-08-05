@@ -1726,7 +1726,7 @@ fn handle_mouse_click(
                 }
             }
         }
-    } else if col < 26 && row > roosts_top && row < roosts_top + roosts_h.saturating_sub(1) {
+    } else if col < 26 && row >= roosts_top && row < roosts_top + roosts_h.saturating_sub(1) {
         app.scroll_focus = ScrollPanel::Roosts;
         let visible_row = (row - roosts_top - 1) as usize;
         if let Some(content_row) = app.roost_scroll.row_index(visible_row) {
@@ -1793,7 +1793,7 @@ fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {
     }
 
     // Hit-test: left side = roosts panel
-    if col < 26 && row > roosts_top && row < roosts_top + roosts_h.saturating_sub(1) {
+    if col < 26 && row >= roosts_top && row < roosts_top + roosts_h.saturating_sub(1) {
         app.scroll_focus = ScrollPanel::Roosts;
         let visible_row = (row - roosts_top - 1) as usize;
         if let Some(content_row) = app.roost_scroll.row_index(visible_row) {
