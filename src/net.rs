@@ -10,6 +10,7 @@ use iroh_gossip::{
 use n0_future::StreamExt;
 use starling::crypto::FlockCrypto;
 use starling::event::{ChatMessage, GossipPayload};
+use starling::presence::publish_presence;
 use starling::roost::{ModRequest, RoostState, RoostWelcome};
 use std::collections::{HashMap, HashSet};
 
@@ -230,48 +231,6 @@ pub struct CallSession {
     pub connections: HashMap<EndpointId, Connection>,
     pub cancel: CancellationToken,
     pub tasks: Vec<tokio::task::JoinHandle<()>>,
-}
-
-/// Publishes presence immediately, every 20 seconds, and on profile/call changes.
-pub async fn publish_presence(
-    sender: GossipSender,
-    crypto: FlockCrypto,
-    space: starling::protocol::SpaceId,
-    secret: iroh::SecretKey,
-    mut changes: mpsc::UnboundedReceiver<()>,
-    cancel: CancellationToken,
-) -> anyhow::Result<()> {
-    let mut sequence = 0_u64;
-    let mut interval = tokio::time::interval(Duration::from_secs(20));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            () = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => {},
-            change = changes.recv() => {
-                if change.is_none() {
-                    return Ok(());
-                }
-            }
-        }
-        let issued = chrono::Utc::now().timestamp_millis();
-        let lease = starling::presence::PresenceLeaseBodyV1 {
-            space,
-            endpoint: secret.public(),
-            sequence,
-            issued_unix_ms: issued,
-            expiry_unix_ms: issued.saturating_add(60_000),
-        }
-        .sign(&secret)?;
-        let payload = GossipPayload::Presence(lease);
-        let plaintext = postcard::to_stdvec(&payload)?;
-        sender
-            .broadcast(crypto.try_encrypt(&plaintext)?.into())
-            .await?;
-        sequence = sequence
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("presence sequence overflow"))?;
-    }
 }
 
 /// Drives one space through the explicit restore lifecycle.
