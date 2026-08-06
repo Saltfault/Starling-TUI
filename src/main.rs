@@ -740,7 +740,7 @@ async fn main() -> anyhow::Result<()> {
                         Popup::DeleteConfirm =>
                             Ok(handle_delete_confirm_key(&mut app, k)),
                         Popup::CreateRoost =>
-                            Ok(KeyOutcome::Handled),
+                            Ok(handle_create_roost_key(&mut app, k, &cmd_tx)),
                         Popup::CreateRoom =>
                             Ok(handle_create_room_key(&mut app, k, &cmd_tx)),
                         Popup::EditFlock =>
@@ -902,6 +902,31 @@ fn handle_create_room_key(
             app.create_flock_secret = None;
             app.create_flock_name.clear();
             app.show_create_room = false;
+        }
+        _ => {}
+    }
+    KeyOutcome::Handled
+}
+
+fn handle_create_roost_key(
+    app: &mut App,
+    k: &KeyEvent,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+) -> KeyOutcome {
+    match k.code {
+        KeyCode::Enter if !app.create_roost_input.is_empty() => {
+            let name = std::mem::take(&mut app.create_roost_input);
+            let _ = cmd_tx.send(Command::CreateRoost { name });
+            app.show_create_roost = false;
+        }
+        KeyCode::Char(c) if !c.is_control() => {
+            app.create_roost_input.push(c);
+        }
+        KeyCode::Backspace => {
+            app.create_roost_input.pop();
+        }
+        KeyCode::Esc => {
+            app.show_create_roost = false;
         }
         _ => {}
     }
@@ -1908,28 +1933,31 @@ fn activate_menu_item(
             open_create_room(app);
         }
         1 => {
+            app.create_roost_input.clear();
+            app.show_create_roost = true;
+        }
+        2 => {
             if !open_edit_flock(app) {
                 app.show_menu = true;
             }
         }
-        2 => {
+        3 => {
             app.join_input.clear();
             app.show_join_room = true;
         }
-        3 => {
+        4 => {
             open_editor(app, cmd_tx, term, "profile")?;
             app.show_menu = true;
         }
-        4 => {
+        5 => {
             open_editor(app, cmd_tx, term, "settings")?;
             app.show_menu = true;
         }
-        5 => {
+        6 => {
             app.show_menu = false;
             app.show_delete_confirm = true;
-            app.delete_confirm_input.clear();
         }
-        6 => {
+        7 => {
             app.quit_requested = true;
         }
         _ => {}

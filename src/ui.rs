@@ -195,6 +195,7 @@ pub enum ContextState {
 
 pub const MENU_ITEMS: &[&str] = &[
     "Create a Flock",
+    "Create a Roost",
     "Edit a Flock",
     "Join",
     "Profile",
@@ -1112,6 +1113,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_role_submenu(f, app);
     } else if app.show_context_menu {
         draw_context_menu(f, app);
+    } else if app.show_create_roost {
+        draw_create_roost_popup(f, app);
     } else if app.show_create_room {
         draw_create_room_popup(f, app);
     } else if app.show_edit_flock {
@@ -1616,6 +1619,45 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
     );
     f.render_widget(
         Paragraph::new(format!(" {}_", app.create_flock_name))
+            .style(Style::new().fg(app.palette.selection)),
+        rows[1],
+    );
+    f.render_widget(
+        Paragraph::new("Press Enter to create, Esc to cancel.")
+            .style(Style::new().fg(app.palette.dim)),
+        rows[2],
+    );
+}
+
+fn draw_create_roost_popup(f: &mut Frame, app: &App) {
+    let popup = centered(f.area(), 60, 8);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(app.palette.border))
+            .title(Span::styled(
+                " Create a Roost ",
+                Style::new().fg(app.palette.accent),
+            )),
+        popup,
+    );
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+    f.render_widget(
+        Paragraph::new("Roost name:").style(Style::new().fg(app.palette.text)),
+        rows[0],
+    );
+    f.render_widget(
+        Paragraph::new(format!(" {}_", app.create_roost_input))
             .style(Style::new().fg(app.palette.selection)),
         rows[1],
     );
