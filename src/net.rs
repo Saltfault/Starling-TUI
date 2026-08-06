@@ -821,7 +821,7 @@ pub async fn run(
             }
 
             Command::CreateRoost { name } => {
-                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
                 tokio::spawn(async move {
                     let (_console_tx, console_rx) = tokio::sync::mpsc::unbounded_channel();
                     match starling::roost::server::open(&name, true, console_rx).await {
