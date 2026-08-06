@@ -52,6 +52,7 @@ fn main() {
     // Linux: use system libopus via pkg-config (no GitHub download needed).
     if target_os == "linux" && pkg_config_opus() {
         write_system_bindings(&bindings_path);
+        println!("cargo:rustc-link-lib=opus");
         return;
     }
     if lib_dir.exists() && bindings_path.exists() {
