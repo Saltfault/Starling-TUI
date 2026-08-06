@@ -739,6 +739,8 @@ async fn main() -> anyhow::Result<()> {
                     let outcome = match app.active_popup() {
                         Popup::DeleteConfirm =>
                             Ok(handle_delete_confirm_key(&mut app, k)),
+                        Popup::CreateRoost =>
+                            Ok(KeyOutcome::Handled),
                         Popup::CreateRoom =>
                             Ok(handle_create_room_key(&mut app, k, &cmd_tx)),
                         Popup::EditFlock =>
