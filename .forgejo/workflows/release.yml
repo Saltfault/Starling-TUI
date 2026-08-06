@@ -44,7 +44,7 @@ jobs:
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
       - name: Install system dependencies
-        run: apt-get update && apt-get install -y libasound2-dev libclang-dev
+        run: apt-get update && apt-get install -y libasound2-dev libclang-dev libopus-dev pkg-config
       - name: Check formatting
         env:
           RUSTC_WRAPPER: kache
@@ -92,10 +92,10 @@ jobs:
             libpulse-dev \
             libclang-dev \
             libv4l-dev \
+            libopus-dev \
             libasound2-dev:arm64 \
             libpulse-dev:arm64 \
             libv4l-dev:arm64
-
         env:
           RUSTC_WRAPPER: kache
       - name: Build all targets

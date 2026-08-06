@@ -49,6 +49,11 @@ fn main() {
         return;
     }
 
+    // Linux: use system libopus via pkg-config (no GitHub download needed).
+    if target_os == "linux" && pkg_config_opus() {
+        write_system_bindings(&bindings_path);
+        return;
+    }
     if lib_dir.exists() && bindings_path.exists() {
         link_opus(&lib_dir);
         return;
@@ -127,6 +132,14 @@ fn main() {
     link_opus(&lib_dir);
 }
 
+/// Returns true if system libopus is available via pkg-config.
+fn pkg_config_opus() -> bool {
+    std::process::Command::new("pkg-config")
+        .args(["--exists", "opus"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
 fn write_system_bindings(path: &Path) {
     const BINDINGS: &str = r#"
 pub const OPUS_APPLICATION_VOIP: u32 = 2048;
