@@ -299,6 +299,8 @@ pub struct App {
     pub create_flock_secret: Option<[u8; 32]>,
     pub create_flock_name: String,
     pub show_create_room: bool,
+    pub show_create_roost: bool,
+    pub create_roost_input: String,
     pub show_join_room: bool,
     pub join_input: String,
     pub joining: Option<String>,
@@ -368,6 +370,8 @@ impl Default for App {
             create_flock_secret: None,
             create_flock_name: String::new(),
             show_create_room: false,
+            show_create_roost: false,
+            create_roost_input: String::new(),
             show_join_room: false,
             join_input: String::new(),
             joining: None,
@@ -418,6 +422,7 @@ impl Default for App {
 pub enum Popup {
     DeleteConfirm,
     CreateRoom,
+    CreateRoost,
     EditFlock,
     JoinRoom,
     Menu,
@@ -468,6 +473,8 @@ impl App {
             Popup::ContextMenu
         } else if self.show_delete_confirm {
             Popup::DeleteConfirm
+        } else if self.show_create_roost {
+            Popup::CreateRoost
         } else if self.show_create_room {
             Popup::CreateRoom
         } else if self.show_edit_flock {

@@ -28,6 +28,9 @@ pub enum Command {
         code: String,
         since: i64,
     },
+    CreateRoost {
+        name: String,
+    },
     UpdateProfile {
         name: String,
         input_device: Option<String>,

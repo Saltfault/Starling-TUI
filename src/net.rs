@@ -820,6 +820,20 @@ pub async fn run(
                 });
             }
 
+            Command::CreateRoost { name } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    match starling::roost::server::open(&name).await {
+                        Ok(()) => {
+                            let _ = tx.send(AppEvent::Notice(format!("roost '{name}' started")));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::Error(format!("roost '{name}' failed: {e}")));
+                        }
+                    }
+                });
+            }
             Command::Quit => break,
             Command::Leave { code } => {
                 // Remove the top-level handle and any derived roost channel
