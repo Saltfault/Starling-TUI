@@ -823,6 +823,10 @@ pub async fn run(
             Command::CreateRoost { name } => {
                 let tx = evt_tx.clone();
                 tokio::spawn(async move {
+                    if let Err(e) = starling::roost::server::create(&name) {
+                        let _ = tx.send(AppEvent::Error(format!("roost '{name}' failed: {e}")));
+                        return;
+                    }
                     let (_console_tx, console_rx) = tokio::sync::mpsc::unbounded_channel();
                     match starling::roost::server::open(&name, true, console_rx).await {
                         Ok(()) => {
