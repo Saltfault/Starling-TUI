@@ -69,6 +69,19 @@ pub enum Command {
         roost: EndpointId,
         target: EndpointId,
     },
+    AddChannel {
+        roost: EndpointId,
+        channel: String,
+    },
+    RemoveChannel {
+        roost: EndpointId,
+        channel: String,
+    },
+    DeleteMessage {
+        roost: EndpointId,
+        channel: String,
+        id: String,
+    },
 }
 
 #[derive(Debug)]

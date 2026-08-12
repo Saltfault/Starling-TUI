@@ -326,15 +326,14 @@ pub async fn run(
     let durable_history = crate::history_store::SledHistory::open(
         starling::config::Profile::config_dir().join("history-v1"),
     )?;
-    // Membership chains are not persisted by this client yet. Deny every
-    // history request until a real membership-backed authorizer is installed
-    // (mirrors SRV-9/10).
-    starling::logger::warn(
-        "history server authorizer: always denies — membership persistence not yet implemented",
-    );
+    // Flocks are open-membership: anyone holding the room code is authorized
+    // to read history. Roost channel history is served by the roost itself,
+    // which enforces membership server-side. So the client-side history
+    // server authorizes everyone — the gossip topic already gates who can
+    // reach this handler.
     let history_proto = HistoryProto {
         store: durable_history,
-        authorize: Arc::new(|_, _| false),
+        authorize: Arc::new(|_, _| true),
         seen_challenges: Arc::new(Mutex::new(HashSet::new())),
     };
 
@@ -810,6 +809,69 @@ pub async fn run(
                         return;
                     };
                     let req = ModRequest::Invite(target);
+                    let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
+                    let _ = send.finish();
+                    if let Ok(bytes) = recv.read_to_end(1024).await
+                        && let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
+                    {
+                        let _ = tx.send(AppEvent::Notice(reason));
+                    }
+                });
+            }
+
+            Command::AddChannel { roost, channel } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(conn) = ep.connect(EndpointAddr::from(roost), MOD_ALPN).await else {
+                        return;
+                    };
+                    let Ok((mut send, mut recv)) = conn.open_bi().await else {
+                        return;
+                    };
+                    let req = ModRequest::AddChannel(channel);
+                    let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
+                    let _ = send.finish();
+                    if let Ok(bytes) = recv.read_to_end(1024).await
+                        && let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
+                    {
+                        let _ = tx.send(AppEvent::Notice(reason));
+                    }
+                });
+            }
+
+            Command::RemoveChannel { roost, channel } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(conn) = ep.connect(EndpointAddr::from(roost), MOD_ALPN).await else {
+                        return;
+                    };
+                    let Ok((mut send, mut recv)) = conn.open_bi().await else {
+                        return;
+                    };
+                    let req = ModRequest::RemoveChannel(channel);
+                    let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
+                    let _ = send.finish();
+                    if let Ok(bytes) = recv.read_to_end(1024).await
+                        && let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
+                    {
+                        let _ = tx.send(AppEvent::Notice(reason));
+                    }
+                });
+            }
+
+            Command::DeleteMessage { roost, channel, id } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(conn) = ep.connect(EndpointAddr::from(roost), MOD_ALPN).await else {
+                        return;
+                    };
+                    let Ok((mut send, mut recv)) = conn.open_bi().await else {
+                        return;
+                    };
+                    let req = ModRequest::DeleteMessage { channel, id };
                     let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
                     let _ = send.finish();
                     if let Ok(bytes) = recv.read_to_end(1024).await

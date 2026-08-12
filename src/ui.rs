@@ -301,6 +301,8 @@ pub struct App {
     pub create_flock_name: String,
     pub show_create_room: bool,
     pub show_create_roost: bool,
+    pub show_add_channel: bool,
+    pub add_channel_input: String,
     pub create_roost_input: String,
     pub show_join_room: bool,
     pub join_input: String,
@@ -372,6 +374,8 @@ impl Default for App {
             create_flock_name: String::new(),
             show_create_room: false,
             show_create_roost: false,
+            show_add_channel: false,
+            add_channel_input: String::new(),
             create_roost_input: String::new(),
             show_join_room: false,
             join_input: String::new(),
@@ -424,6 +428,7 @@ pub enum Popup {
     DeleteConfirm,
     CreateRoom,
     CreateRoost,
+    AddChannel,
     EditFlock,
     JoinRoom,
     Menu,
@@ -474,6 +479,8 @@ impl App {
             Popup::ContextMenu
         } else if self.show_delete_confirm {
             Popup::DeleteConfirm
+        } else if self.show_add_channel {
+            Popup::AddChannel
         } else if self.show_create_roost {
             Popup::CreateRoost
         } else if self.show_create_room {
@@ -1113,6 +1120,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_role_submenu(f, app);
     } else if app.show_context_menu {
         draw_context_menu(f, app);
+    } else if app.show_add_channel {
+        draw_add_channel_popup(f, app);
     } else if app.show_create_roost {
         draw_create_roost_popup(f, app);
     } else if app.show_create_room {
@@ -1658,6 +1667,45 @@ fn draw_create_roost_popup(f: &mut Frame, app: &App) {
     );
     f.render_widget(
         Paragraph::new(format!(" {}_", app.create_roost_input))
+            .style(Style::new().fg(app.palette.selection)),
+        rows[1],
+    );
+    f.render_widget(
+        Paragraph::new("Press Enter to create, Esc to cancel.")
+            .style(Style::new().fg(app.palette.dim)),
+        rows[2],
+    );
+}
+
+fn draw_add_channel_popup(f: &mut Frame, app: &App) {
+    let popup = centered(f.area(), 60, 8);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(app.palette.border))
+            .title(Span::styled(
+                " Add Channel ",
+                Style::new().fg(app.palette.accent),
+            )),
+        popup,
+    );
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+    f.render_widget(
+        Paragraph::new("Channel name:").style(Style::new().fg(app.palette.text)),
+        rows[0],
+    );
+    f.render_widget(
+        Paragraph::new(format!(" {}_", app.add_channel_input))
             .style(Style::new().fg(app.palette.selection)),
         rows[1],
     );

@@ -739,6 +739,8 @@ async fn main() -> anyhow::Result<()> {
                     let outcome = match app.active_popup() {
                         Popup::DeleteConfirm =>
                             Ok(handle_delete_confirm_key(&mut app, k)),
+                        Popup::AddChannel =>
+                            Ok(handle_add_channel_key(&mut app, k, &cmd_tx)),
                         Popup::CreateRoost =>
                             Ok(handle_create_roost_key(&mut app, k, &cmd_tx)),
                         Popup::CreateRoom =>
@@ -927,6 +929,36 @@ fn handle_create_roost_key(
         }
         KeyCode::Esc => {
             app.show_create_roost = false;
+        }
+        _ => {}
+    }
+    KeyOutcome::Handled
+}
+
+fn handle_add_channel_key(
+    app: &mut App,
+    k: &KeyEvent,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+) -> KeyOutcome {
+    match k.code {
+        KeyCode::Enter if !app.add_channel_input.is_empty() => {
+            let channel = std::mem::take(&mut app.add_channel_input);
+            if let Some(roost_ep) = app.context_menu_roost_endpoint() {
+                let _ = cmd_tx.send(Command::AddChannel {
+                    roost: roost_ep,
+                    channel,
+                });
+            }
+            app.show_add_channel = false;
+        }
+        KeyCode::Char(c) if !c.is_control() => {
+            app.add_channel_input.push(c);
+        }
+        KeyCode::Backspace => {
+            app.add_channel_input.pop();
+        }
+        KeyCode::Esc => {
+            app.show_add_channel = false;
         }
         _ => {}
     }
@@ -1164,6 +1196,34 @@ fn execute_context_action(
                 });
             }
         }
+        ContextMenuAction::AddChannel => {
+            app.show_context_menu = false;
+            app.add_channel_input.clear();
+            app.show_add_channel = true;
+        }
+        ContextMenuAction::RemoveChannel => {
+            if let Some(ContextMenuTarget::RoostChannel(ri, ci)) = &app.context_menu_target
+                && let Some(channel) = app.roosts.get(*ri).and_then(|r| r.channels.get(*ci))
+            {
+                let _ = cmd_tx.send(Command::RemoveChannel {
+                    roost: roost_ep,
+                    channel: channel.name.clone(),
+                });
+            }
+        }
+        ContextMenuAction::DeleteMessage => {
+            if let Some(ContextMenuTarget::RoostChannel(ri, ci)) = &app.context_menu_target
+                && let Some(channel) = app.roosts.get(*ri).and_then(|r| r.channels.get(*ci))
+                && let Some(last) = channel.messages.last()
+            {
+                let _ = cmd_tx.send(Command::DeleteMessage {
+                    roost: roost_ep,
+                    channel: channel.name.clone(),
+                    id: last.msg.id.clone(),
+                });
+            }
+        }
+        ContextMenuAction::SetRole => {}
         ContextMenuAction::RemoveRoles => {
             if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
                 let _ = cmd_tx.send(Command::SetRole {
@@ -1181,17 +1241,6 @@ fn execute_context_action(
                 });
             }
         }
-        ContextMenuAction::AddChannel => {
-            app.show_context_menu = false;
-            app.error_message = Some("Add Channel: type name and press Enter".into());
-        }
-        ContextMenuAction::RemoveChannel => {
-            app.error_message = Some("Remove Channel not yet implemented".into());
-        }
-        ContextMenuAction::DeleteMessage => {
-            app.error_message = Some("Delete Message not yet implemented".into());
-        }
-        ContextMenuAction::SetRole => {}
     }
     Ok(())
 }
