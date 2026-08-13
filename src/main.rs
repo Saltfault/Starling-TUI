@@ -1456,6 +1456,25 @@ fn handle_normal_key(
     cmd_tx: &mpsc::UnboundedSender<Command>,
 ) -> anyhow::Result<KeyOutcome> {
     match k.code {
+        KeyCode::Enter if k.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.in_call {
+                #[cfg(feature = "audio")]
+                let _ = cmd_tx.send(Command::HangUp);
+                app.in_call = false;
+                app.show_video = false;
+            } else {
+                let targets: Vec<EndpointId> = app
+                    .selected_peer_id()
+                    .map_or_else(|| app.active_peers(), |peer| vec![peer]);
+                if !targets.is_empty() {
+                    let _ = cmd_tx.send(Command::StartCall(targets));
+                    app.error_message = Some("Connecting call...".into());
+                } else {
+                    app.error_message = Some("No one is online in this context".into());
+                }
+            }
+        }
+
         KeyCode::Enter if !app.input.is_empty() => {
             let text = std::mem::take(&mut app.input);
             if let Some(code) = text

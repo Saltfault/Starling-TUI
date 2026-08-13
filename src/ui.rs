@@ -1596,20 +1596,28 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         .to_string(),
         V2View::Space => "Messages and presence".to_string(),
     };
+    let call_label = if app.in_call { "[HANG UP]" } else { "[CALL]" };
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
-            title,
+            title.clone(),
             Style::new()
                 .fg(app.palette.text)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(topic, Style::new().fg(app.palette.dim)),
+        Span::raw("  "),
+        Span::styled(
+            call_label,
+            Style::new()
+                .fg(app.palette.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]))
     .block(Block::default().borders(Borders::BOTTOM));
     f.render_widget(header, Rect::new(area.x, area.y, area.width, 2));
 
-    let rows = match app.v2_view {
+    let rows: Vec<ListItem> = match app.v2_view {
         V2View::Home => vec![ListItem::new(Span::styled(
             if app.selected_dm.is_some() {
                 "No direct messages yet."
@@ -1618,36 +1626,58 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
             },
             Style::new().fg(app.palette.dim),
         ))],
-        V2View::Space => app
-            .active_messages()
-            .iter()
-            .map(|message| {
-                let color = author_color(&message.msg.author);
-                let header = Line::from(vec![
-                    Span::styled(
-                        format!("{} ", initials(&message.msg.author)),
-                        Style::new().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        message.msg.author.clone(),
-                        Style::new().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("  {}", format_ts(message.msg.ts)),
+        V2View::Space => {
+            let msgs = app.active_messages();
+            if msgs.is_empty() {
+                vec![
+                    ListItem::new(Span::styled(
+                        title.clone(),
+                        Style::new()
+                            .fg(app.palette.text)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    ListItem::new(Span::styled(
+                        format!("This is the beginning of the {title} conversation."),
                         Style::new().fg(app.palette.dim),
-                    ),
-                ]);
-                let mut body_spans = Vec::new();
-                if message.private {
-                    body_spans.push(Span::styled("🔒 ", Style::new().fg(app.palette.dim)));
+                    )),
+                ]
+            } else {
+                let mut rows = vec![ListItem::new(Span::styled(
+                    "— Today —",
+                    Style::new().fg(app.palette.dim),
+                ))];
+                for message in msgs {
+                    let color = author_color(&message.msg.author);
+                    let header = Line::from(vec![
+                        Span::styled(
+                            format!("{} ", initials(&message.msg.author)),
+                            Style::new().fg(color).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            message.msg.author.clone(),
+                            Style::new().fg(color).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("  {}", format_ts(message.msg.ts)),
+                            Style::new().fg(app.palette.dim),
+                        ),
+                    ]);
+                    let mut body_spans = Vec::new();
+                    if message.private {
+                        body_spans.push(Span::styled("🔒 ", Style::new().fg(app.palette.dim)));
+                    }
+                    body_spans.push(Span::styled(
+                        message.msg.body.clone(),
+                        Style::new().fg(app.palette.text),
+                    ));
+                    rows.push(ListItem::new(Text::from(vec![
+                        header,
+                        Line::from(body_spans),
+                    ])));
                 }
-                body_spans.push(Span::styled(
-                    message.msg.body.clone(),
-                    Style::new().fg(app.palette.text),
-                ));
-                ListItem::new(Text::from(vec![header, Line::from(body_spans)]))
-            })
-            .collect::<Vec<_>>(),
+                rows
+            }
+        }
     };
     let body = Rect::new(
         area.x,
