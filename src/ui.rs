@@ -18,8 +18,12 @@ const DEFAULT_INVITE: Color = Color::Rgb(35, 165, 90);
 
 pub struct Palette {
     pub text: Color,
+    pub fg_2: Color,
+    pub muted: Color,
     pub background: Option<Color>,
     pub border: Color,
+    pub surface: Color,
+    pub surface_warm: Color,
     pub accent: Color,
     pub author: Color,
     pub selection: Color,
@@ -35,8 +39,12 @@ impl Default for Palette {
     fn default() -> Self {
         Self {
             text: Color::Rgb(219, 222, 225),
+            fg_2: Color::Rgb(242, 243, 245),
+            muted: Color::Rgb(148, 155, 164),
             background: Some(Color::Rgb(49, 51, 56)),
             border: Color::Rgb(63, 65, 71),
+            surface: Color::Rgb(43, 45, 49),
+            surface_warm: Color::Rgb(30, 31, 34),
             accent: DEFAULT_ACCENT,
             author: DEFAULT_AUTHOR,
             selection: DEFAULT_SELECTION,
@@ -47,6 +55,12 @@ impl Default for Palette {
             active: Color::Rgb(88, 101, 242),
             focus_ring: Color::Rgb(160, 170, 255),
         }
+    }
+}
+
+impl Palette {
+    pub fn success(&self) -> Color {
+        Color::Rgb(35, 165, 90)
     }
 }
 
@@ -502,7 +516,6 @@ pub enum TerminalIcon {
     Voice,
     Call,
     Video,
-    Members,
 }
 
 impl TerminalIcon {
@@ -511,7 +524,6 @@ impl TerminalIcon {
             Self::Voice => "\u{f130}",
             Self::Call => "\u{f095}",
             Self::Video => "\u{f03d}",
-            Self::Members => "\u{f0c0}",
         })
     }
 
@@ -520,7 +532,6 @@ impl TerminalIcon {
             Self::Voice => "♫",
             Self::Call => "☎",
             Self::Video => "▣",
-            Self::Members => "♟",
         })
     }
 
@@ -529,7 +540,6 @@ impl TerminalIcon {
             Self::Voice => "[V]",
             Self::Call => "[C]",
             Self::Video => "[D]",
-            Self::Members => "[M]",
         }
     }
 
@@ -1213,15 +1223,15 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     let columns = if matches!(app.v2_view, V2View::Home) {
         Layout::horizontal([
-            Constraint::Length(6),
-            Constraint::Length(20),
+            Constraint::Length(8),
+            Constraint::Length(24),
             Constraint::Min(1),
         ])
         .split(area)
     } else {
         Layout::horizontal([
-            Constraint::Length(6),
-            Constraint::Length(20),
+            Constraint::Length(8),
+            Constraint::Length(24),
             Constraint::Min(1),
             Constraint::Length(20),
         ])
@@ -1353,84 +1363,137 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::RIGHT)
-                .bg(Color::Rgb(30, 31, 34))
-                .title_alignment(Alignment::Center)
-                .title(""),
+                .border_style(
+                    Style::new()
+                        .fg(app.palette.border)
+                        .bg(app.palette.surface_warm),
+                )
+                .bg(app.palette.surface_warm),
         ),
         area,
     );
 }
 
 fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
-    let mut items = vec![ListItem::new(Span::styled(
-        if matches!(app.v2_view, V2View::Home) {
-            " DIRECT MESSAGES "
-        } else {
-            " CHANNELS "
-        },
-        Style::new().fg(app.palette.dim),
-    ))];
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
 
+    // Header
+    let header_text = match app.v2_view {
+        V2View::Home => "Friends".to_string(),
+        V2View::Space => app
+            .active_context()
+            .and_then(|_| Some(app.active_title()))
+            .unwrap_or_else(|| "Server".to_string()),
+    };
+    f.render_widget(
+        Paragraph::new(header_text)
+            .style(
+                Style::new()
+                    .fg(app.palette.fg_2)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(Style::new().fg(app.palette.border).bg(app.palette.surface))
+                    .bg(app.palette.surface),
+            ),
+        chunks[0],
+    );
+
+    // Scroll items
+    let mut items = Vec::new();
     if matches!(app.v2_view, V2View::Home) {
+        items.push(ListItem::new(Line::from(vec![Span::styled(
+            "DIRECT MESSAGES",
+            Style::new()
+                .fg(app.palette.muted)
+                .add_modifier(Modifier::BOLD),
+        )])));
         for peer in app
             .peers
             .iter()
-            .take(area.height.saturating_sub(3) as usize)
+            .take(chunks[1].height.saturating_sub(2) as usize)
         {
             let name = app.peer_display_name(peer);
             let selected = app.selected_dm == Some(*peer);
-            let status_color = match app.peer_status.get(peer) {
-                Some(BirdStatus::Online) => Color::Rgb(35, 165, 90),
-                Some(BirdStatus::Idle) => Color::Rgb(240, 178, 50),
-                Some(BirdStatus::InCall) => app.palette.accent,
-                None => app.palette.dim,
+            let (status_fg, status_char) = match app.peer_status.get(peer) {
+                Some(BirdStatus::Online) => (Color::Rgb(35, 165, 90), "●"),
+                Some(BirdStatus::Idle) => (Color::Rgb(240, 178, 50), "◐"),
+                Some(BirdStatus::InCall) => (app.palette.accent, "●"),
+                None => (app.palette.dim, "●"),
+            };
+            let _ = status_fg;
+            let fg = if selected {
+                app.palette.fg_2
+            } else {
+                app.palette.text
+            };
+            let bg = if selected {
+                Color::Rgb(78, 80, 88)
+            } else {
+                app.palette.surface
             };
             items.push(ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!("{} ", initials(&name)),
-                    Style::new().fg(status_color).add_modifier(Modifier::BOLD),
+                    format!(" {} ", initials(&name)),
+                    Style::new()
+                        .bg(app.palette.accent)
+                        .fg(Color::Rgb(255, 255, 255)),
                 ),
-                Span::styled(
-                    name,
-                    Style::new().fg(if selected {
-                        app.palette.active
-                    } else {
-                        app.palette.text
-                    }),
-                ),
+                Span::styled(status_char, Style::new().fg(app.palette.success())),
+                Span::styled(format!(" {}", name), Style::new().fg(fg).bg(bg)),
             ])));
         }
     } else {
         match app.selection {
-            Selection::Flock(_) => items.push(ListItem::new(Span::styled(
-                " [TEXT] general ",
-                Style::new().fg(app.palette.selection),
-            ))),
+            Selection::Flock(_) => {
+                items.push(ListItem::new(Line::from(vec![Span::styled(
+                    "CHANNELS",
+                    Style::new()
+                        .fg(app.palette.muted)
+                        .add_modifier(Modifier::BOLD),
+                )])));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("# ", Style::new().fg(app.palette.dim)),
+                    Span::styled("general", Style::new().fg(app.palette.text)),
+                ])));
+            }
             Selection::Channel(ri, ci) => {
                 if let Some(roost) = app.roosts.get(ri) {
-                    if !roost.channels.is_empty() {
-                        items.push(ListItem::new(Span::styled(
-                            " CHANNELS ",
-                            Style::new()
-                                .fg(app.palette.dim)
-                                .add_modifier(Modifier::BOLD),
-                        )));
-                    }
+                    items.push(ListItem::new(Line::from(vec![Span::styled(
+                        "CHANNELS",
+                        Style::new()
+                            .fg(app.palette.muted)
+                            .add_modifier(Modifier::BOLD),
+                    )])));
                     for (index, channel) in roost.channels.iter().enumerate() {
                         let selected = index == ci;
-                        let mut spans = vec![Span::styled("# ", Style::new().fg(app.palette.dim))];
-                        spans.push(Span::styled(
-                            channel.name.clone(),
-                            Style::new().fg(if selected {
-                                app.palette.selection
-                            } else {
-                                app.palette.text
-                            }),
-                        ));
+                        let fg = if selected {
+                            app.palette.fg_2
+                        } else {
+                            app.palette.text
+                        };
+                        let bg = if selected {
+                            Color::Rgb(78, 80, 88)
+                        } else {
+                            app.palette.surface
+                        };
+                        let mut spans = vec![
+                            Span::styled("# ", Style::new().fg(app.palette.dim).bg(bg)),
+                            Span::styled(channel.name.clone(), Style::new().fg(fg).bg(bg)),
+                        ];
                         if channel.unread > 0 {
                             spans.push(Span::styled(
-                                format!(" ({})", channel.unread),
-                                Style::new().fg(app.palette.selection),
+                                format!(" {}", channel.unread),
+                                Style::new()
+                                    .fg(Color::Rgb(255, 255, 255))
+                                    .bg(Color::Rgb(242, 63, 67)),
                             ));
                         }
                         items.push(ListItem::new(Line::from(spans)));
@@ -1439,42 +1502,45 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
             }
         }
     }
-    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
+
     f.render_widget(
         List::new(items).block(
             Block::default()
-                .borders(Borders::RIGHT)
-                .bg(Color::Rgb(43, 45, 49))
-                .title(" sidebar "),
+                .borders(Borders::NONE)
+                .bg(app.palette.surface),
         ),
-        chunks[0],
+        chunks[1],
     );
-    let footer = Line::from(vec![
+
+    // Footer / user bar
+    let footer = Paragraph::new(Line::from(vec![
         Span::styled(
-            format!("{} ", initials(&app.name)),
+            format!(" {} ", initials(&app.name)),
             Style::new()
-                .fg(app.palette.accent)
-                .add_modifier(Modifier::BOLD),
+                .bg(app.palette.accent)
+                .fg(Color::Rgb(255, 255, 255)),
         ),
+        Span::raw(" "),
         Span::styled(
             app.name.clone(),
             Style::new()
-                .fg(app.palette.text)
+                .fg(app.palette.fg_2)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(
-            if app.muted { "[UNMUTE]" } else { "[MUTE]" },
-            Style::new().fg(if app.muted {
-                Color::Rgb(242, 63, 67)
-            } else {
-                app.palette.dim
-            }),
-        ),
+        Span::styled("M", Style::new().fg(app.palette.muted)),
         Span::raw(" "),
-        Span::styled("[SETTINGS]", Style::new().fg(app.palette.dim)),
-    ]);
-    f.render_widget(footer, chunks[1]);
+        Span::styled("H", Style::new().fg(app.palette.muted)),
+        Span::raw(" "),
+        Span::styled("S", Style::new().fg(app.palette.muted)),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::new().fg(app.palette.border).bg(app.palette.surface))
+            .bg(app.palette.surface),
+    );
+    f.render_widget(footer, chunks[2]);
 }
 
 fn flattened_channels(app: &App) -> impl Iterator<Item = &FlockView> {
@@ -1482,6 +1548,14 @@ fn flattened_channels(app: &App) -> impl Iterator<Item = &FlockView> {
 }
 
 fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+
+    // Header
     let title = match app.v2_view {
         V2View::Home => app
             .selected_dm
@@ -1490,79 +1564,81 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         V2View::Space => app.active_title(),
     };
     let topic = match app.v2_view {
-        V2View::Home => if app.selected_dm.is_some() { "" } else { "" }.to_string(),
+        V2View::Home => String::new(),
         V2View::Space => "General discussion".to_string(),
     };
-    let call_label = if app.in_call { "[HANG UP]" } else { "[CALL]" };
     let header = Paragraph::new(Line::from(vec![
-        Span::styled("#", Style::new().fg(app.palette.dim)),
+        Span::styled("#", Style::new().fg(app.palette.muted)),
         Span::styled(
-            title.clone(),
+            format!(" {}", title),
             Style::new()
-                .fg(app.palette.text)
+                .fg(app.palette.fg_2)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(topic, Style::new().fg(app.palette.dim)),
-        Span::raw("  "),
-        Span::styled(
-            call_label,
-            Style::new()
-                .fg(app.palette.accent)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(topic, Style::new().fg(app.palette.muted)),
     ]))
-    .block(Block::default().borders(Borders::BOTTOM));
-    f.render_widget(header, Rect::new(area.x, area.y, area.width, 1));
+    .block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(
+                Style::new()
+                    .fg(app.palette.border)
+                    .bg(app.palette.background.unwrap_or(app.palette.surface)),
+            )
+            .bg(app.palette.background.unwrap_or(app.palette.surface)),
+    );
+    f.render_widget(header, chunks[0]);
 
+    // Message list
     let rows: Vec<ListItem> = match app.v2_view {
-        V2View::Home => vec![ListItem::new(Span::styled(
+        V2View::Home => vec![ListItem::new(Line::from(vec![Span::styled(
             if app.selected_dm.is_some() {
                 "No direct messages yet."
             } else {
                 "Select a peer to begin a direct message."
             },
-            Style::new().fg(app.palette.dim),
-        ))],
+            Style::new().fg(app.palette.muted),
+        )]))],
         V2View::Space => {
             let msgs = app.active_messages();
             if msgs.is_empty() {
                 vec![
-                    ListItem::new(Span::styled(
-                        title.clone(),
+                    ListItem::new(Line::from(vec![Span::styled(
+                        format!("Welcome to #{title}!"),
                         Style::new()
-                            .fg(app.palette.text)
+                            .fg(app.palette.fg_2)
                             .add_modifier(Modifier::BOLD),
-                    )),
-                    ListItem::new(Span::styled(
-                        format!("This is the beginning of the {title} conversation."),
-                        Style::new().fg(app.palette.dim),
-                    )),
+                    )])),
+                    ListItem::new(Line::from(vec![Span::styled(
+                        "This is the start of the channel.",
+                        Style::new().fg(app.palette.muted),
+                    )])),
                 ]
             } else {
-                let mut rows = vec![ListItem::new(Span::styled(
-                    "— Today —",
-                    Style::new().fg(app.palette.dim),
-                ))];
+                let mut rows = vec![ListItem::new(Line::from(vec![Span::styled(
+                    "────── Today ──────",
+                    Style::new().fg(app.palette.border),
+                )]))];
                 for message in msgs {
                     let color = author_color(&message.msg.author);
                     let header = Line::from(vec![
                         Span::styled(
-                            format!("{} ", initials(&message.msg.author)),
-                            Style::new().fg(color).add_modifier(Modifier::BOLD),
+                            format!(" {} ", initials(&message.msg.author)),
+                            Style::new().bg(color).fg(Color::Rgb(255, 255, 255)),
                         ),
                         Span::styled(
-                            message.msg.author.clone(),
+                            format!(" {}", message.msg.author),
                             Style::new().fg(color).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             format!("  {}", format_ts(message.msg.ts)),
-                            Style::new().fg(app.palette.dim),
+                            Style::new().fg(app.palette.muted),
                         ),
                     ]);
                     let mut body_spans = Vec::new();
                     if message.private {
-                        body_spans.push(Span::styled("🔒 ", Style::new().fg(app.palette.dim)));
+                        body_spans.push(Span::styled("🔒 ", Style::new().fg(app.palette.muted)));
                     }
                     body_spans.push(Span::styled(
                         message.msg.body.clone(),
@@ -1577,48 +1653,38 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
             }
         }
     };
-    let body = Rect::new(
-        area.x,
-        area.y + 1,
-        area.width,
-        area.height.saturating_sub(2),
-    );
     f.render_widget(
         List::new(rows).block(
             Block::default()
                 .borders(Borders::NONE)
-                .bg(Color::Rgb(49, 51, 56))
-                .title(""),
+                .bg(app.palette.background.unwrap_or(app.palette.surface)),
         ),
-        body,
+        chunks[1],
     );
 
-    let input_y = area.y + area.height.saturating_sub(1);
-    let input_area = Rect::new(area.x, input_y, area.width, 1);
-    draw_message_bar(f, app, input_area);
+    // Input
+    draw_message_bar(f, app, chunks[2]);
 }
 
 fn draw_members(f: &mut Frame, app: &App, area: Rect) {
     let mut items = Vec::new();
-    items.push(ListItem::new(Line::from(vec![
-        icon_span(TerminalIcon::Members, app.icon_style, app.palette.accent),
-        Span::styled(
-            "MEMBERS",
-            Style::new()
-                .fg(app.palette.accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ])));
+    items.push(ListItem::new(Line::from(vec![Span::styled(
+        "MEMBERS",
+        Style::new()
+            .fg(app.palette.muted)
+            .add_modifier(Modifier::BOLD),
+    )])));
     items.push(ListItem::new(Line::from(vec![
         Span::styled(
-            format!("{} ", initials(&app.name)),
+            format!(" {} ", initials(&app.name)),
             Style::new()
-                .fg(app.palette.accent)
-                .add_modifier(Modifier::BOLD),
+                .bg(app.palette.accent)
+                .fg(Color::Rgb(255, 255, 255)),
         ),
+        Span::raw(" "),
         Span::styled(
             format!("{} (you)", app.name),
-            Style::new().fg(app.palette.selection),
+            Style::new().fg(app.palette.text),
         ),
     ])));
 
@@ -1643,20 +1709,33 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
         if members.is_empty() {
             continue;
         }
-        items.push(ListItem::new(Span::styled(
-            format!("{label} — {}", members.len()),
+        items.push(ListItem::new(Line::from(vec![Span::styled(
+            format!("{} — {}", label, members.len()),
             Style::new()
-                .fg(app.palette.dim)
+                .fg(app.palette.muted)
                 .add_modifier(Modifier::BOLD),
-        )));
+        )])));
         for peer in members {
             let name = app.peer_display_name(peer);
+            let (status_fg, status_char) = match app.peer_status.get(peer) {
+                Some(BirdStatus::Online) => (Color::Rgb(35, 165, 90), "●"),
+                Some(BirdStatus::Idle) => (Color::Rgb(240, 178, 50), "◐"),
+                Some(BirdStatus::InCall) => (app.palette.accent, "●"),
+                None => (app.palette.dim, "●"),
+            };
+            let _ = status_fg;
             items.push(ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!("{} ", initials(&name)),
+                    format!(" {} ", initials(&name)),
+                    Style::new()
+                        .bg(app.palette.accent)
+                        .fg(Color::Rgb(255, 255, 255)),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    format!("{} {}", status_char, name),
                     Style::new().fg(app.palette.text),
                 ),
-                Span::styled(name, Style::new().fg(app.palette.text)),
             ])));
         }
     }
@@ -1664,25 +1743,18 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::LEFT)
-                .bg(Color::Rgb(43, 45, 49))
-                .title(" members "),
+                .border_style(Style::new().fg(app.palette.border).bg(app.palette.surface))
+                .bg(app.palette.surface),
         ),
         area,
     );
 }
 
 fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::horizontal([
-        Constraint::Length(1),
-        Constraint::Length(area.width.saturating_sub(2)),
-        Constraint::Length(1),
-    ])
-    .split(area);
-
-    f.render_widget(
-        Span::styled("+", Style::new().fg(app.palette.dim)),
-        chunks[0],
-    );
+    let inner = area.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
 
     let placeholder = match app.v2_view {
         V2View::Home => {
@@ -1695,28 +1767,35 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
         V2View::Space => format!("Message #{}", app.active_title()),
     };
     let input_text = if app.input.is_empty() {
-        placeholder
+        format!("+ {}  ✉ ▶", placeholder)
     } else {
-        app.input.clone()
+        format!("+ {} ✉ ▶", app.input)
     };
     let input_color = if app.input.is_empty() {
         app.palette.dim
     } else {
         app.palette.text
     };
+
     f.render_widget(
         Paragraph::new(input_text)
-            .style(Style::new().fg(input_color))
+            .style(Style::new().fg(input_color).bg(app.palette.surface))
             .wrap(Wrap { trim: false }),
-        chunks[1],
+        inner,
     );
-
-    let right = if app.input.is_empty() {
-        Span::styled("◎", Style::new().fg(app.palette.dim))
-    } else {
-        Span::styled("▶", Style::new().fg(app.palette.accent))
-    };
-    f.render_widget(right, chunks[2]);
+    f.render_widget(
+        Paragraph::new("").block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(
+                    Style::new()
+                        .fg(app.palette.border)
+                        .bg(app.palette.background.unwrap_or(app.palette.surface)),
+                )
+                .bg(app.palette.background.unwrap_or(app.palette.surface)),
+        ),
+        area,
+    );
 }
 
 fn draw_call_overlay(f: &mut Frame, app: &App) {
@@ -2871,16 +2950,16 @@ mod tests {
                     .collect()
             })
             .collect();
-        // v2 layout: the server rail is the leftmost 12 columns and lists
-        // servers (flocks/roosts), never channels. The sidebar is the next 28
+        // v2 layout: the server rail is the leftmost 8 columns and lists
+        // servers (flocks/roosts), never channels. The sidebar is the next 24
         // columns and renders the selected roost's channels.
         let rail: Vec<String> = rows
             .iter()
-            .map(|row| row.iter().take(12).cloned().collect::<String>())
+            .map(|row| row.iter().take(8).cloned().collect::<String>())
             .collect();
         let sidebar: Vec<String> = rows
             .iter()
-            .map(|row| row.iter().skip(12).take(28).cloned().collect::<String>())
+            .map(|row| row.iter().skip(8).take(24).cloned().collect::<String>())
             .collect();
         assert!(
             sidebar.iter().any(|row| row.contains("general")),
