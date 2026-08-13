@@ -836,14 +836,11 @@ impl App {
         // messages are actually stored (roost channels live in
         // roosts[].channels; flocks live in flocks).
         if let Some(ctx) = self.active_context() {
-            if ctx.roost.is_some() {
-                for rv in &self.roosts {
-                    for ch in &rv.channels {
-                        if ch.code == ctx.title {
-                            return &ch.messages;
-                        }
-                    }
-                }
+            if ctx.roost.is_some()
+                && let Some(channel) =
+                    flattened_channels(self).find(|channel| channel.code == ctx.title)
+            {
+                return &channel.messages;
             } else if let Some(secret) = &ctx.secret
                 && let Some(fv) = self.flocks.iter().find(|f| f.code == *secret)
             {
@@ -1679,6 +1676,77 @@ fn draw_typed_messages(f: &mut Frame, app: &App, area: Rect) -> bool {
         area,
     );
     true
+}
+
+fn flattened_channels(app: &App) -> impl Iterator<Item = &FlockView> {
+    app.roosts.iter().flat_map(|roost| roost.channels.iter())
+}
+
+fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
+    let title = match app.v2_view {
+        V2View::Home => app
+            .selected_dm
+            .map(|peer| format!("DM: {}", app.peer_display_name(&peer)))
+            .unwrap_or_else(|| "Direct messages".to_string()),
+        V2View::Space => app.active_title(),
+    };
+    let topic = match app.v2_view {
+        V2View::Home => if app.selected_dm.is_some() {
+            "Direct conversation"
+        } else {
+            "Select a peer from the sidebar"
+        }
+        .to_string(),
+        V2View::Space => "Messages and presence".to_string(),
+    };
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(
+            title,
+            Style::new()
+                .fg(app.palette.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(topic, Style::new().fg(app.palette.dim)),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM));
+    f.render_widget(header, Rect::new(area.x, area.y, area.width, 2));
+
+    let rows = match app.v2_view {
+        V2View::Home => vec![ListItem::new(Span::styled(
+            if app.selected_dm.is_some() {
+                "No direct messages yet."
+            } else {
+                "Select a peer to begin a direct message."
+            },
+            Style::new().fg(app.palette.dim),
+        ))],
+        V2View::Space => app
+            .active_messages()
+            .iter()
+            .map(|message| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{}: ", message.msg.author),
+                        Style::new()
+                            .fg(app.palette.author)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(message.msg.body.clone(), Style::new().fg(app.palette.text)),
+                ]))
+            })
+            .collect::<Vec<_>>(),
+    };
+    let body = Rect::new(
+        area.x,
+        area.y + 2,
+        area.width,
+        area.height.saturating_sub(2),
+    );
+    f.render_widget(
+        List::new(rows).block(Block::default().borders(Borders::ALL).title(" chat ")),
+        body,
+    );
 }
 
 fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
