@@ -555,6 +555,49 @@ fn icon_span(icon: TerminalIcon, style: IconStyle, color: Color) -> Span<'static
     Span::styled(format!("{} ", icon.glyph(style)), Style::new().fg(color))
 }
 
+fn initials(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "?".to_string();
+    }
+    let mut chars = trimmed.chars();
+    let first = chars.next().unwrap().to_uppercase().to_string();
+    let second = trimmed
+        .split_whitespace()
+        .nth(1)
+        .and_then(|w| w.chars().next())
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default();
+    format!("{first}{second}")
+}
+
+fn author_color(name: &str) -> Color {
+    const PALETTE: [Color; 8] = [
+        Color::Rgb(88, 101, 242),
+        Color::Rgb(35, 165, 90),
+        Color::Rgb(240, 178, 50),
+        Color::Rgb(242, 63, 67),
+        Color::Rgb(235, 69, 158),
+        Color::Rgb(0, 175, 244),
+        Color::Rgb(255, 115, 250),
+        Color::Rgb(128, 132, 142),
+    ];
+    let hash = name
+        .bytes()
+        .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
+    PALETTE[(hash as usize) % PALETTE.len()]
+}
+
+fn format_ts(ts: i64) -> String {
+    use chrono::TimeZone;
+    let secs = if ts > 10_000_000_000 { ts / 1000 } else { ts };
+    chrono::Utc
+        .timestamp_opt(secs, 0)
+        .single()
+        .map(|dt| dt.format("%H:%M").to_string())
+        .unwrap_or_default()
+}
+
 pub enum Popup {
     DeleteConfirm,
     CreateRoom,
@@ -1411,11 +1454,21 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
             .iter()
             .take(area.height.saturating_sub(3) as usize)
         {
+            let name = app.peer_display_name(peer);
             let selected = app.selected_dm == Some(*peer);
+            let status_color = match app.peer_status.get(peer) {
+                Some(BirdStatus::Online) => Color::Rgb(35, 165, 90),
+                Some(BirdStatus::Idle) => Color::Rgb(240, 178, 50),
+                Some(BirdStatus::InCall) => app.palette.accent,
+                None => app.palette.dim,
+            };
             items.push(ListItem::new(Line::from(vec![
-                icon_span(TerminalIcon::Members, app.icon_style, app.palette.channel),
                 Span::styled(
-                    app.peer_display_name(peer),
+                    format!("{} ", initials(&name)),
+                    Style::new().fg(status_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    name,
                     Style::new().fg(if selected {
                         app.palette.active
                     } else {
@@ -1432,19 +1485,36 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
             ))),
             Selection::Channel(ri, ci) => {
                 if let Some(roost) = app.roosts.get(ri) {
+                    if !roost.channels.is_empty() {
+                        items.push(ListItem::new(Span::styled(
+                            " TEXT CHANNELS ",
+                            Style::new()
+                                .fg(app.palette.dim)
+                                .add_modifier(Modifier::BOLD),
+                        )));
+                    }
                     for (index, channel) in roost.channels.iter().enumerate() {
                         let selected = index == ci;
-                        items.push(ListItem::new(Line::from(vec![
-                            icon_span(TerminalIcon::Text, app.icon_style, app.palette.channel),
-                            Span::styled(
-                                channel.name.clone(),
-                                Style::new().fg(if selected {
-                                    app.palette.selection
-                                } else {
-                                    app.palette.text
-                                }),
-                            ),
-                        ])));
+                        let mut spans = vec![icon_span(
+                            TerminalIcon::Text,
+                            app.icon_style,
+                            app.palette.channel,
+                        )];
+                        spans.push(Span::styled(
+                            channel.name.clone(),
+                            Style::new().fg(if selected {
+                                app.palette.selection
+                            } else {
+                                app.palette.text
+                            }),
+                        ));
+                        if channel.unread > 0 {
+                            spans.push(Span::styled(
+                                format!(" ({})", channel.unread),
+                                Style::new().fg(app.palette.selection),
+                            ));
+                        }
+                        items.push(ListItem::new(Line::from(spans)));
                     }
                 }
             }
@@ -1503,21 +1573,30 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
             .active_messages()
             .iter()
             .map(|message| {
-                let mut spans = Vec::new();
+                let color = author_color(&message.msg.author);
+                let header = Line::from(vec![
+                    Span::styled(
+                        format!("{} ", initials(&message.msg.author)),
+                        Style::new().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        message.msg.author.clone(),
+                        Style::new().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  {}", format_ts(message.msg.ts)),
+                        Style::new().fg(app.palette.dim),
+                    ),
+                ]);
+                let mut body_spans = Vec::new();
                 if message.private {
-                    spans.push(Span::styled("🔒 ", Style::new().fg(app.palette.dim)));
+                    body_spans.push(Span::styled("🔒 ", Style::new().fg(app.palette.dim)));
                 }
-                spans.push(Span::styled(
-                    format!("{}: ", message.msg.author),
-                    Style::new()
-                        .fg(app.palette.author)
-                        .add_modifier(Modifier::BOLD),
-                ));
-                spans.push(Span::styled(
+                body_spans.push(Span::styled(
                     message.msg.body.clone(),
                     Style::new().fg(app.palette.text),
                 ));
-                ListItem::new(Line::from(spans))
+                ListItem::new(Text::from(vec![header, Line::from(body_spans)]))
             })
             .collect::<Vec<_>>(),
     };
@@ -1544,23 +1623,56 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
     ])));
-    items.push(ListItem::new(Span::styled(
-        format!("{} (you)", app.name),
-        Style::new().fg(app.palette.selection),
-    )));
-    for peer in app.active_peers() {
-        let status = match app.peer_status.get(&peer) {
-            Some(BirdStatus::InCall) => "[CALL]",
-            Some(BirdStatus::Idle) => "[IDLE]",
-            _ => "[ONLINE]",
-        };
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(format!("{status} "), Style::new().fg(app.palette.dim)),
-            Span::styled(
-                app.peer_display_name(&peer),
-                Style::new().fg(app.palette.text),
-            ),
-        ])));
+    items.push(ListItem::new(Line::from(vec![
+        Span::styled(
+            format!("{} ", initials(&app.name)),
+            Style::new()
+                .fg(app.palette.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{} (you)", app.name),
+            Style::new().fg(app.palette.selection),
+        ),
+    ])));
+
+    let peers = app.active_peers();
+    let mut online = Vec::new();
+    let mut idle = Vec::new();
+    let mut in_call = Vec::new();
+    for peer in peers.iter().copied() {
+        match app
+            .peer_status
+            .get(&peer)
+            .copied()
+            .unwrap_or(BirdStatus::Online)
+        {
+            BirdStatus::Online => online.push(peer),
+            BirdStatus::Idle => idle.push(peer),
+            BirdStatus::InCall => in_call.push(peer),
+        }
+    }
+    let groups = [("Online", &online), ("Idle", &idle), ("In Call", &in_call)];
+    for (label, members) in groups {
+        if members.is_empty() {
+            continue;
+        }
+        items.push(ListItem::new(Span::styled(
+            format!("{label} — {}", members.len()),
+            Style::new()
+                .fg(app.palette.dim)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for peer in members {
+            let name = app.peer_display_name(peer);
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{} ", initials(&name)),
+                    Style::new().fg(app.palette.text),
+                ),
+                Span::styled(name, Style::new().fg(app.palette.text)),
+            ])));
+        }
     }
     f.render_widget(
         List::new(items).block(Block::default().borders(Borders::ALL).title(" members ")),
