@@ -568,6 +568,7 @@ pub enum Popup {
     BirdProfile,
     ContextMenu,
     RoleSubmenu,
+    Profile,
     None,
 }
 
@@ -626,6 +627,8 @@ impl App {
             Popup::Menu
         } else if self.show_bird_profile {
             Popup::BirdProfile
+        } else if self.profile_panel.open {
+            Popup::Profile
         } else {
             Popup::None
         }
@@ -2300,6 +2303,53 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
         Paragraph::new(" Enter/C = call . Esc = close").style(Style::new().fg(app.palette.dim)),
         rows[3],
     );
+}
+
+fn draw_profile_modal(f: &mut Frame, app: &App) {
+    let area = centered(f.area(), 70, 22);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" PROFILE ")
+            .border_style(Style::new().fg(app.palette.accent)),
+        area,
+    );
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let p = &app.profile_panel;
+    let avatar = if p.avatar_label.is_empty() {
+        "STARLING"
+    } else {
+        p.avatar_label.as_str()
+    };
+    let lines = if p.editing {
+        vec![
+            format!("Banner: {}", p.draft_banner),
+            format!("Avatar: {}", p.draft_avatar_label),
+            format!("Name: {}", p.draft_name),
+            format!("Status: {}", p.draft_custom_status),
+            format!("About Me: {}", p.draft_about_me),
+            format!("Pronouns: {}", p.draft_pronouns),
+            format!("MOTD: {}", p.draft_motd),
+            format!(
+                "Editing: {:?}  [TAB FIELD] [ENTER SAVE] [ESC CANCEL]",
+                p.field
+            ),
+        ]
+    } else {
+        vec![
+            format!("{}  {}  [{}]", avatar, p.draft_name, p.custom_status),
+            format!("Banner: {}", p.banner),
+            format!("About Me: {}", p.about_me),
+            format!("Pronouns: {}", p.pronouns),
+            format!("MOTD: {}", p.motd),
+            "[E EDIT]  [ESC CLOSE]".to_string(),
+        ]
+    };
+    f.render_widget(Paragraph::new(lines.join("\n")), inner);
 }
 
 fn draw_context_menu(f: &mut Frame, app: &App) {

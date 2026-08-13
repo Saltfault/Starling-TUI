@@ -111,6 +111,100 @@ fn apply_profile(app: &mut App, profile: &starling::config::Profile) {
         }
     }
     app.palette = palette;
+    app.accent_input = profile.accent_color.clone();
+    app.profile_panel.banner.clone_from(&profile.banner);
+    app.profile_panel
+        .avatar_label
+        .clone_from(&profile.avatar_label);
+    app.profile_panel.about_me.clone_from(&profile.about_me);
+    app.profile_panel.pronouns.clone_from(&profile.pronouns);
+    app.profile_panel.motd.clone_from(&profile.motd);
+    app.profile_panel
+        .custom_status
+        .clone_from(&profile.custom_status);
+}
+
+fn open_profile(app: &mut App) {
+    let p = &mut app.profile_panel;
+    p.open = true;
+    p.editing = false;
+    p.draft_name.clone_from(&app.name);
+    p.draft_avatar_label.clone_from(&p.avatar_label);
+    p.draft_banner.clone_from(&p.banner);
+    p.draft_about_me.clone_from(&p.about_me);
+    p.draft_pronouns.clone_from(&p.pronouns);
+    p.draft_motd.clone_from(&p.motd);
+    p.draft_custom_status.clone_from(&p.custom_status);
+}
+
+fn save_profile(app: &mut App, profile: &mut starling::config::Profile) -> anyhow::Result<()> {
+    let p = &mut app.profile_panel;
+    app.name = p.draft_name.trim().to_string();
+    app.pronouns = p.draft_pronouns.trim().to_string();
+    p.banner = p.draft_banner.trim().to_string();
+    p.avatar_label = p.draft_avatar_label.trim().to_string();
+    p.about_me = p.draft_about_me.trim().to_string();
+    p.pronouns = app.pronouns.clone();
+    p.motd = p.draft_motd.trim().to_string();
+    p.custom_status = p.draft_custom_status.trim().to_string();
+    profile.name = app.name.clone();
+    profile.pronouns = app.pronouns.clone();
+    profile.banner = p.banner.clone();
+    profile.avatar_label = p.avatar_label.clone();
+    profile.about_me = p.about_me.clone();
+    profile.motd = p.motd.clone();
+    profile.custom_status = p.custom_status.clone();
+    profile.save()?;
+    p.editing = false;
+    Ok(())
+}
+
+fn handle_profile_key(
+    app: &mut App,
+    profile: &mut starling::config::Profile,
+    key: &KeyEvent,
+) -> anyhow::Result<KeyOutcome> {
+    match key.code {
+        KeyCode::Char('e' | 'E') if !app.profile_panel.editing => {
+            app.profile_panel.editing = true;
+        }
+        KeyCode::Tab if app.profile_panel.editing => {
+            app.profile_panel.field = match app.profile_panel.field {
+                ui::ProfileField::Name => ui::ProfileField::Avatar,
+                ui::ProfileField::Avatar => ui::ProfileField::Banner,
+                ui::ProfileField::Banner => ui::ProfileField::AboutMe,
+                ui::ProfileField::AboutMe => ui::ProfileField::Pronouns,
+                ui::ProfileField::Pronouns => ui::ProfileField::Motd,
+                ui::ProfileField::Motd => ui::ProfileField::CustomStatus,
+                ui::ProfileField::CustomStatus => ui::ProfileField::Name,
+            };
+        }
+        KeyCode::Enter if app.profile_panel.editing => save_profile(app, profile)?,
+        KeyCode::Esc => {
+            app.profile_panel.open = false;
+            app.profile_panel.editing = false;
+        }
+        KeyCode::Backspace if app.profile_panel.editing => {
+            profile_field_mut(&mut app.profile_panel).pop();
+        }
+        KeyCode::Char(c) if app.profile_panel.editing => {
+            profile_field_mut(&mut app.profile_panel).push(c);
+        }
+        _ => {}
+    }
+    Ok(KeyOutcome::Handled)
+}
+
+fn profile_field_mut(p: &mut ui::LocalProfilePanel) -> &mut String {
+    match p.field {
+        ui::ProfileField::Name => &mut p.draft_name,
+        ui::ProfileField::Avatar => &mut p.draft_avatar_label,
+        ui::ProfileField::Banner => &mut p.draft_banner,
+        ui::ProfileField::AboutMe => &mut p.draft_about_me,
+        ui::ProfileField::Pronouns => &mut p.draft_pronouns,
+        ui::ProfileField::Motd => &mut p.draft_motd,
+        ui::ProfileField::CustomStatus => &mut p.draft_custom_status,
+    }
 }
 
 fn refresh_create_flock_code(app: &mut App) {
@@ -335,6 +429,8 @@ async fn main() -> anyhow::Result<()> {
             None => return Ok(()),
         },
     };
+
+    let mut profile = profile;
 
     let name = profile.name.clone();
     let pronouns = profile.pronouns.clone();
@@ -753,6 +849,8 @@ async fn main() -> anyhow::Result<()> {
                             handle_menu_key(&mut app, k, &cmd_tx, &mut term),
                         Popup::BirdProfile =>
                             Ok(handle_bird_profile_key(&mut app, k, &cmd_tx)),
+                        Popup::Profile =>
+                            handle_profile_key(&mut app, &mut profile, k),
                         Popup::ContextMenu => {
                             handle_context_menu_key(&mut app, k, &cmd_tx)?;
                             Ok(KeyOutcome::Handled)
@@ -1441,6 +1539,10 @@ fn handle_normal_key(
             toggle_call_video(app, cmd_tx);
         }
 
+        KeyCode::Char('p' | 'P') => {
+            open_profile(app);
+        }
+
         KeyCode::Char(c) => {
             app.input = sanitize::sanitize_message(&format!("{}{}", app.input, c));
         }
@@ -2009,8 +2111,7 @@ fn activate_menu_item(
             app.show_join_room = true;
         }
         4 => {
-            open_editor(app, cmd_tx, term, "profile")?;
-            app.show_menu = true;
+            open_profile(app);
         }
         5 => {
             open_editor(app, cmd_tx, term, "settings")?;
