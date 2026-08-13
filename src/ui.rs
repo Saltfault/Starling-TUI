@@ -1831,6 +1831,41 @@ fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+fn draw_members(f: &mut Frame, app: &App, area: Rect) {
+    let mut items = Vec::new();
+    items.push(ListItem::new(Line::from(vec![
+        icon_span(TerminalIcon::Members, app.icon_style, app.palette.accent),
+        Span::styled(
+            "MEMBERS",
+            Style::new()
+                .fg(app.palette.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])));
+    items.push(ListItem::new(Span::styled(
+        format!("{} (you)", app.name),
+        Style::new().fg(app.palette.selection),
+    )));
+    for peer in app.active_peers() {
+        let status = match app.peer_status.get(&peer) {
+            Some(BirdStatus::InCall) => "[CALL]",
+            Some(BirdStatus::Idle) => "[IDLE]",
+            _ => "[ONLINE]",
+        };
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(format!("{status} "), Style::new().fg(app.palette.dim)),
+            Span::styled(
+                app.peer_display_name(&peer),
+                Style::new().fg(app.palette.text),
+            ),
+        ])));
+    }
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::ALL).title(" members ")),
+        area,
+    );
+}
+
 fn status_text(app: &App) -> String {
     if let Some(notice) = app.visible_status_notice(Instant::now()) {
         notice.to_string()
