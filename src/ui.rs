@@ -494,57 +494,211 @@ pub struct LocalProfilePanel {
 // Keep the preference in App so every renderer uses one consistent glyph policy.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum IconStyle {
+    /// Short text labels such as `[Home]` and `[Call]`.
+    Text,
+    /// Nerd Font code points where available, falling back to unicode/ascii.
     NerdFont,
+    /// Standard unicode symbols.
     #[default]
     Unicode,
+    /// Pure ASCII fallbacks.
     Ascii,
 }
 
 impl IconStyle {
     pub fn from_env() -> Self {
         match std::env::var("STARLING_ICON_STYLE").ok().as_deref() {
+            Some("text") => Self::Text,
             Some("nerd") | Some("nerdfont") => Self::NerdFont,
             Some("ascii") => Self::Ascii,
             Some("unicode") => Self::Unicode,
             _ => Self::Unicode,
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Text => "Text",
+            Self::NerdFont => "Nerd Font",
+            Self::Unicode => "Unicode",
+            Self::Ascii => "ASCII",
+        }
+    }
+
+    /// Cycle Text -> Unicode -> NerdFont -> ASCII -> Text.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Text => Self::Unicode,
+            Self::Unicode => Self::NerdFont,
+            Self::NerdFont => Self::Ascii,
+            Self::Ascii => Self::Text,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum TerminalIcon {
+    Home,
+    Hash,
     Voice,
+    Thread,
+    Bell,
+    Pin,
     Call,
+    Plus,
+    Gift,
+    Emoji,
+    Send,
+    Mic,
+    MicMuted,
+    Headset,
+    Settings,
+    Group,
+    Server,
+    Online,
+    Idle,
+    Dnd,
+    InCall,
+    Members,
+    Close,
+    Search,
+    At,
+    More,
     Video,
 }
 
 impl TerminalIcon {
+    fn text(self) -> &'static str {
+        match self {
+            Self::Home => "[H]",
+            Self::Hash => "[#]",
+            Self::Voice => "[V]",
+            Self::Thread => "[T]",
+            Self::Bell => "[B]",
+            Self::Pin => "[P]",
+            Self::Call => "[C]",
+            Self::Plus => "[+]",
+            Self::Gift => "[G]",
+            Self::Emoji => "[E]",
+            Self::Send => "[S]",
+            Self::Mic => "[M]",
+            Self::MicMuted => "[X]",
+            Self::Headset => "[A]",
+            Self::Settings => "[SET]",
+            Self::Group => "[GRP]",
+            Self::Server => "[SRV]",
+            Self::Online => "[ON]",
+            Self::Idle => "[IDLE]",
+            Self::Dnd => "[DND]",
+            Self::InCall => "[CALL]",
+            Self::Members => "[MEM]",
+            Self::Close => "[X]",
+            Self::Search => "[?]",
+            Self::At => "[@]",
+            Self::More => "[...]",
+            Self::Video => "[D]",
+        }
+    }
+
     fn nerd_font(self) -> Option<&'static str> {
         Some(match self {
+            Self::Home => "\u{f015}",
+            Self::Hash => "\u{f292}",
             Self::Voice => "\u{f130}",
+            Self::Thread => "\u{f4c2}",
+            Self::Bell => "\u{f0f3}",
+            Self::Pin => "\u{f08d}",
             Self::Call => "\u{f095}",
+            Self::Plus => "\u{f067}",
+            Self::Gift => "\u{f06b}",
+            Self::Emoji => "\u{f118}",
+            Self::Send => "\u{f1d8}",
+            Self::Mic => "\u{f130}",
+            Self::MicMuted => "\u{f131}",
+            Self::Headset => "\u{f025}",
+            Self::Settings => "\u{f013}",
+            Self::Group => "\u{f0c0}",
+            Self::Server => "\u{e795}",
+            Self::Online => "\u{f111}",
+            Self::Idle => "\u{f017}",
+            Self::Dnd => "\u{f056}",
+            Self::InCall => "\u{f232}",
+            Self::Members => "\u{f0c0}",
+            Self::Close => "\u{f00d}",
+            Self::Search => "\u{f002}",
+            Self::At => "\u{f1fa}",
+            Self::More => "\u{f142}",
             Self::Video => "\u{f03d}",
         })
     }
 
     fn unicode(self) -> Option<&'static str> {
         Some(match self {
+            Self::Home => "⌂",
+            Self::Hash => "#",
             Self::Voice => "♫",
-            Self::Call => "☎",
+            Self::Thread => "↳",
+            Self::Bell => "🔔",
+            Self::Pin => "📌",
+            Self::Call => "📞",
+            Self::Plus => "+",
+            Self::Gift => "🎁",
+            Self::Emoji => "☺",
+            Self::Send => "▶",
+            Self::Mic => "🎙",
+            Self::MicMuted => "🔴",
+            Self::Headset => "🎧",
+            Self::Settings => "⚙",
+            Self::Group => "⚑",
+            Self::Server => "◇",
+            Self::Online => "●",
+            Self::Idle => "◐",
+            Self::Dnd => "●",
+            Self::InCall => "●",
+            Self::Members => "👥",
+            Self::Close => "×",
+            Self::Search => "🔍",
+            Self::At => "@",
+            Self::More => "⋮",
             Self::Video => "▣",
         })
     }
 
     fn ascii(self) -> &'static str {
         match self {
+            Self::Home => "[H]",
+            Self::Hash => "#",
             Self::Voice => "[V]",
+            Self::Thread => "[T]",
+            Self::Bell => "[B]",
+            Self::Pin => "[P]",
             Self::Call => "[C]",
+            Self::Plus => "+",
+            Self::Gift => "[G]",
+            Self::Emoji => "[E]",
+            Self::Send => "[S]",
+            Self::Mic => "[M]",
+            Self::MicMuted => "[X]",
+            Self::Headset => "[A]",
+            Self::Settings => "[SET]",
+            Self::Group => "[GRP]",
+            Self::Server => "[SRV]",
+            Self::Online => "o",
+            Self::Idle => "-",
+            Self::Dnd => "x",
+            Self::InCall => "o",
+            Self::Members => "[MEM]",
+            Self::Close => "[X]",
+            Self::Search => "[?]",
+            Self::At => "[@]",
+            Self::More => "[...]",
             Self::Video => "[D]",
         }
     }
 
-    fn glyph(self, style: IconStyle) -> &'static str {
+    pub fn glyph(self, style: IconStyle) -> &'static str {
         match style {
+            IconStyle::Text => self.text(),
             IconStyle::NerdFont => self
                 .nerd_font()
                 .or_else(|| self.unicode())
@@ -1214,26 +1368,25 @@ pub fn apply_accent_color(app: &mut App, hex: &str) -> bool {
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
 
-    if let Some(bg) = app.palette.background {
-        f.render_widget(
-            Paragraph::new(Line::from(vec![Span::raw("")])).style(Style::new().bg(bg)),
-            area,
-        );
-    }
+    // Paint the whole terminal with the chat background first so no light
+    // terminal default leaks through margins or border cells.
+    f.render_widget(Block::default().bg(Color::Rgb(49, 51, 56)), area);
 
+    // Reference proportions (CSS px -> terminal cols at ~8px/cell):
+    // rail 72px ~9, sidebar 240px ~30, members 240px ~30.
     let columns = if matches!(app.v2_view, V2View::Home) {
         Layout::horizontal([
-            Constraint::Length(8),
-            Constraint::Length(24),
+            Constraint::Length(9),
+            Constraint::Length(30),
             Constraint::Min(1),
         ])
         .split(area)
     } else {
         Layout::horizontal([
-            Constraint::Length(8),
-            Constraint::Length(24),
+            Constraint::Length(9),
+            Constraint::Length(30),
             Constraint::Min(1),
-            Constraint::Length(20),
+            Constraint::Length(30),
         ])
         .split(area)
     };
@@ -1277,54 +1430,63 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
+    fn rail_icon(active: bool, unread: bool, label: &str, _palette: &Palette) -> Line<'static> {
+        let bg = if active {
+            Color::Rgb(88, 101, 242)
+        } else {
+            Color::Rgb(43, 45, 49)
+        };
+        let fg = if active {
+            Color::Rgb(255, 255, 255)
+        } else if unread {
+            Color::Rgb(255, 255, 255)
+        } else {
+            Color::Rgb(242, 243, 245)
+        };
+        let indicator = if active {
+            "▎"
+        } else if unread {
+            "●"
+        } else {
+            " "
+        };
+        let text = format!("{} {} ", indicator, label);
+        Line::from(vec![Span::styled(text, Style::new().fg(fg).bg(bg))])
+    }
+
     let mut items = Vec::new();
     let home_active = matches!(app.v2_view, V2View::Home);
+    items.push(ListItem::new(rail_icon(
+        home_active,
+        false,
+        TerminalIcon::Home.glyph(app.icon_style),
+        &app.palette,
+    )));
     items.push(ListItem::new(Line::from(vec![Span::styled(
-        if home_active { "(*)" } else { "(*)" },
-        Style::new()
-            .fg(if home_active {
-                Color::Rgb(255, 255, 255)
-            } else {
-                app.palette.dim
-            })
-            .add_modifier(if home_active {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            }),
+        "─────────",
+        Style::new().fg(Color::Rgb(63, 65, 71)),
     )])));
 
     for (index, roost) in app.roosts.iter().enumerate() {
         let active = matches!(app.selection, Selection::Channel(ri, _) if ri == index)
             && matches!(app.v2_view, V2View::Space);
         let label = if roost.name.is_empty() {
-            "Roost".to_string()
+            "R".to_string()
         } else {
-            roost.name.clone()
+            roost
+                .name
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_else(|| "R".to_string())
         };
-        let initial = label
-            .chars()
-            .next()
-            .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_default();
         let unread = roost.unread > 0;
-        let icon = format!("({initial}{})", if unread { "•" } else { " " });
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            icon,
-            Style::new()
-                .fg(if active {
-                    Color::Rgb(255, 255, 255)
-                } else if unread {
-                    app.palette.accent
-                } else {
-                    app.palette.dim
-                })
-                .add_modifier(if active || unread {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        )])));
+        items.push(ListItem::new(rail_icon(
+            active,
+            unread,
+            &label,
+            &app.palette,
+        )));
     }
     f.render_widget(
         List::new(items).block(
@@ -1332,10 +1494,10 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::RIGHT)
                 .border_style(
                     Style::new()
-                        .fg(app.palette.border)
-                        .bg(app.palette.surface_warm),
+                        .fg(Color::Rgb(63, 65, 71))
+                        .bg(Color::Rgb(30, 31, 34)),
                 )
-                .bg(app.palette.surface_warm),
+                .bg(Color::Rgb(30, 31, 34)),
         ),
         area,
     );
@@ -1345,13 +1507,13 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(1),
+        Constraint::Length(2),
     ])
     .split(area);
 
-    // Header
+    // Header: server name (Space) or "Messages" (Home)
     let header_text = match app.v2_view {
-        V2View::Home => "Friends".to_string(),
+        V2View::Home => app.name.clone(),
         V2View::Space => app
             .active_context()
             .and_then(|_| Some(app.active_title()))
@@ -1361,14 +1523,18 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(header_text)
             .style(
                 Style::new()
-                    .fg(app.palette.fg_2)
+                    .fg(Color::Rgb(242, 243, 245))
                     .add_modifier(Modifier::BOLD),
             )
             .block(
                 Block::default()
                     .borders(Borders::BOTTOM)
-                    .border_style(Style::new().fg(app.palette.border).bg(app.palette.surface))
-                    .bg(app.palette.surface),
+                    .border_style(
+                        Style::new()
+                            .fg(Color::Rgb(63, 65, 71))
+                            .bg(Color::Rgb(43, 45, 49)),
+                    )
+                    .bg(Color::Rgb(43, 45, 49)),
             ),
         chunks[0],
     );
@@ -1376,73 +1542,91 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     // Scroll items
     let mut items = Vec::new();
     if matches!(app.v2_view, V2View::Home) {
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            "DIRECT MESSAGES",
-            Style::new()
-                .fg(app.palette.muted)
-                .add_modifier(Modifier::BOLD),
-        )])));
+        // DM section header
+        let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                "DIRECT MESSAGES",
+                Style::new()
+                    .fg(Color::Rgb(148, 155, 164))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", plus_icon),
+                Style::new().fg(Color::Rgb(148, 155, 164)),
+            ),
+        ])));
         for peer in app
             .peers
             .iter()
-            .take(chunks[1].height.saturating_sub(4) as usize)
+            .take(chunks[1].height.saturating_sub(8) as usize)
         {
             let name = app.peer_display_name(peer);
             let selected = app.selected_dm == Some(*peer);
-            let (status_fg, status_char) = match app.peer_status.get(peer) {
-                Some(BirdStatus::Online) => (Color::Rgb(35, 165, 90), "●"),
-                Some(BirdStatus::Idle) => (Color::Rgb(240, 178, 50), "◐"),
-                Some(BirdStatus::InCall) => (app.palette.accent, "●"),
-                None => (app.palette.dim, "●"),
+            let status_icon = match app.peer_status.get(peer) {
+                Some(BirdStatus::Online) => (TerminalIcon::Online, Color::Rgb(35, 165, 90)),
+                Some(BirdStatus::Idle) => (TerminalIcon::Idle, Color::Rgb(240, 178, 50)),
+                Some(BirdStatus::InCall) => (TerminalIcon::InCall, Color::Rgb(88, 101, 242)),
+                None => (TerminalIcon::Dnd, Color::Rgb(148, 155, 164)),
             };
-            let _ = status_fg;
+            let status_char = status_icon.0.glyph(app.icon_style);
+            let status_fg = status_icon.1;
             let fg = if selected {
-                app.palette.fg_2
+                Color::Rgb(255, 255, 255)
             } else {
-                app.palette.text
+                Color::Rgb(219, 222, 225)
             };
             let bg = if selected {
-                Color::Rgb(78, 80, 88)
+                Color::Rgb(58, 60, 66)
             } else {
-                app.palette.surface
+                Color::Rgb(43, 45, 49)
             };
+            let initials_str = initials(&name);
             items.push(ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!(" {} ", initials(&name)),
+                    format!(" {} ", initials_str),
                     Style::new()
                         .bg(app.palette.accent)
                         .fg(Color::Rgb(255, 255, 255)),
                 ),
-                Span::styled(status_char, Style::new().fg(app.palette.success())),
-                Span::styled(format!(" {}", name), Style::new().fg(fg).bg(bg)),
+                Span::styled(
+                    format!("{} ", status_char),
+                    Style::new().fg(status_fg).bg(bg),
+                ),
+                Span::styled(name.clone(), Style::new().fg(fg).bg(bg)),
             ])));
         }
+        // Groups / flocks under a GROUPS header
         if !app.flocks.is_empty() {
             items.push(ListItem::new(Line::from(vec![Span::styled(
                 "GROUPS",
                 Style::new()
-                    .fg(app.palette.muted)
+                    .fg(Color::Rgb(148, 155, 164))
                     .add_modifier(Modifier::BOLD),
             )])));
             for (index, flock) in app.flocks.iter().enumerate() {
                 let selected = matches!(app.selection, Selection::Flock(i) if i == index);
                 let fg = if selected {
-                    app.palette.fg_2
+                    Color::Rgb(255, 255, 255)
                 } else {
-                    app.palette.text
+                    Color::Rgb(219, 222, 225)
                 };
                 let bg = if selected {
-                    Color::Rgb(78, 80, 88)
+                    Color::Rgb(58, 60, 66)
                 } else {
-                    app.palette.surface
+                    Color::Rgb(43, 45, 49)
                 };
+                let group_icon = TerminalIcon::Group.glyph(app.icon_style);
                 let mut spans = vec![
-                    Span::styled("+ ", Style::new().fg(app.palette.dim).bg(bg)),
+                    Span::styled(
+                        format!("{} ", group_icon),
+                        Style::new().fg(Color::Rgb(148, 155, 164)).bg(bg),
+                    ),
                     Span::styled(flock.name.clone(), Style::new().fg(fg).bg(bg)),
                 ];
                 if flock.unread > 0 {
                     spans.push(Span::styled(
-                        format!(" {}", flock.unread),
+                        format!(" {} ", flock.unread),
                         Style::new()
                             .fg(Color::Rgb(255, 255, 255))
                             .bg(Color::Rgb(242, 63, 67)),
@@ -1457,41 +1641,45 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
                 items.push(ListItem::new(Line::from(vec![Span::styled(
                     "CHANNELS",
                     Style::new()
-                        .fg(app.palette.muted)
+                        .fg(Color::Rgb(148, 155, 164))
                         .add_modifier(Modifier::BOLD),
                 )])));
                 items.push(ListItem::new(Line::from(vec![
-                    Span::styled("# ", Style::new().fg(app.palette.dim)),
-                    Span::styled("general", Style::new().fg(app.palette.text)),
+                    Span::styled("# ", Style::new().fg(Color::Rgb(148, 155, 164))),
+                    Span::styled("general", Style::new().fg(Color::Rgb(219, 222, 225))),
                 ])));
             }
             Selection::Channel(ri, ci) => {
                 if let Some(roost) = app.roosts.get(ri) {
                     items.push(ListItem::new(Line::from(vec![Span::styled(
-                        "CHANNELS",
+                        "TEXT CHANNELS",
                         Style::new()
-                            .fg(app.palette.muted)
+                            .fg(Color::Rgb(148, 155, 164))
                             .add_modifier(Modifier::BOLD),
                     )])));
                     for (index, channel) in roost.channels.iter().enumerate() {
                         let selected = index == ci;
                         let fg = if selected {
-                            app.palette.fg_2
+                            Color::Rgb(255, 255, 255)
                         } else {
-                            app.palette.text
+                            Color::Rgb(219, 222, 225)
                         };
                         let bg = if selected {
-                            Color::Rgb(78, 80, 88)
+                            Color::Rgb(58, 60, 66)
                         } else {
-                            app.palette.surface
+                            Color::Rgb(43, 45, 49)
                         };
+                        let hash_icon = TerminalIcon::Hash.glyph(app.icon_style);
                         let mut spans = vec![
-                            Span::styled("# ", Style::new().fg(app.palette.dim).bg(bg)),
+                            Span::styled(
+                                format!("{} ", hash_icon),
+                                Style::new().fg(Color::Rgb(148, 155, 164)).bg(bg),
+                            ),
                             Span::styled(channel.name.clone(), Style::new().fg(fg).bg(bg)),
                         ];
                         if channel.unread > 0 {
                             spans.push(Span::styled(
-                                format!(" {}", channel.unread),
+                                format!(" {} ", channel.unread),
                                 Style::new()
                                     .fg(Color::Rgb(255, 255, 255))
                                     .bg(Color::Rgb(242, 63, 67)),
@@ -1505,43 +1693,76 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     }
 
     f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::NONE)
-                .bg(app.palette.surface),
-        ),
+        List::new(items).block(Block::default().bg(Color::Rgb(43, 45, 49))),
         chunks[1],
     );
 
     // Footer / user bar
-    let footer = Paragraph::new(Line::from(vec![
+    let initials_str = initials(&app.name);
+    let user_line = Line::from(vec![
         Span::styled(
-            format!(" {} ", initials(&app.name)),
+            format!(" {} ", initials_str),
             Style::new()
                 .bg(app.palette.accent)
                 .fg(Color::Rgb(255, 255, 255)),
         ),
-        Span::raw(" "),
+        Span::styled(" ", Style::new().bg(Color::Rgb(43, 45, 49))),
         Span::styled(
             app.name.clone(),
             Style::new()
-                .fg(app.palette.fg_2)
-                .add_modifier(Modifier::BOLD),
+                .fg(Color::Rgb(242, 243, 245))
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::Rgb(43, 45, 49)),
         ),
-        Span::raw("  "),
-        Span::styled("M", Style::new().fg(app.palette.muted)),
-        Span::raw(" "),
-        Span::styled("H", Style::new().fg(app.palette.muted)),
-        Span::raw(" "),
-        Span::styled("S", Style::new().fg(app.palette.muted)),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::new().fg(app.palette.border).bg(app.palette.surface))
-            .bg(app.palette.surface),
+        Span::styled(
+            " #0",
+            Style::new()
+                .fg(Color::Rgb(148, 155, 164))
+                .bg(Color::Rgb(43, 45, 49)),
+        ),
+    ]);
+    let mic_icon = if app.muted {
+        TerminalIcon::MicMuted
+    } else {
+        TerminalIcon::Mic
+    };
+    let headset_icon = TerminalIcon::Headset.glyph(app.icon_style);
+    let settings_icon = TerminalIcon::Settings.glyph(app.icon_style);
+    let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
+    let server_icon = TerminalIcon::Server.glyph(app.icon_style);
+    let group_icon = TerminalIcon::Group.glyph(app.icon_style);
+    let controls_line = Line::from(vec![
+        Span::styled(
+            mic_icon.glyph(app.icon_style),
+            Style::new().fg(if app.muted {
+                Color::Rgb(242, 63, 67)
+            } else {
+                Color::Rgb(148, 155, 164)
+            }),
+        ),
+        Span::styled(
+            format!(
+                "  {}  {}  {}{}  {}{}",
+                headset_icon, settings_icon, plus_icon, server_icon, plus_icon, group_icon
+            ),
+            Style::new()
+                .fg(Color::Rgb(148, 155, 164))
+                .bg(Color::Rgb(43, 45, 49)),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(Text::from(vec![user_line, controls_line])).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(
+                    Style::new()
+                        .fg(Color::Rgb(63, 65, 71))
+                        .bg(Color::Rgb(43, 45, 49)),
+                )
+                .bg(Color::Rgb(43, 45, 49)),
+        ),
+        chunks[2],
     );
-    f.render_widget(footer, chunks[2]);
 }
 
 fn flattened_channels(app: &App) -> impl Iterator<Item = &FlockView> {
@@ -1552,35 +1773,58 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(2),
+        Constraint::Length(1),
     ])
     .split(area);
 
     // Header
+    let at_icon = TerminalIcon::At.glyph(app.icon_style);
     let title = match app.v2_view {
         V2View::Home => app
             .selected_dm
-            .map(|peer| format!("@{}", app.peer_display_name(&peer)))
-            .unwrap_or_else(|| "Friends".to_string()),
+            .map(|peer| format!("{} {}", at_icon, app.peer_display_name(&peer)))
+            .unwrap_or_else(|| "Messages".to_string()),
         V2View::Space => app.active_title(),
     };
     let topic = match app.v2_view {
         V2View::Home => String::new(),
         V2View::Space => "General discussion".to_string(),
     };
+    let thread_icon = TerminalIcon::Thread.glyph(app.icon_style);
+    let bell_icon = TerminalIcon::Bell.glyph(app.icon_style);
+    let call_icon = TerminalIcon::Call.glyph(app.icon_style);
+    let more_icon = TerminalIcon::More.glyph(app.icon_style);
+    let hash_icon = TerminalIcon::Hash.glyph(app.icon_style);
     let header = Paragraph::new(Line::from(vec![
-        Span::styled("#", Style::new().fg(app.palette.muted)),
         Span::styled(
-            format!(" {}", title),
+            format!("{} ", hash_icon),
             Style::new()
-                .fg(app.palette.fg_2)
-                .add_modifier(Modifier::BOLD),
+                .fg(Color::Rgb(148, 155, 164))
+                .bg(Color::Rgb(49, 51, 56)),
         ),
-        Span::raw("  "),
-        Span::styled(topic, Style::new().fg(app.palette.muted)),
-        Span::raw(" "),
-        Span::styled("♀", Style::new().fg(app.palette.muted)),
-        Span::raw(" 🔔 ✆"),
+        Span::styled(
+            title.clone(),
+            Style::new()
+                .fg(Color::Rgb(242, 243, 245))
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::Rgb(49, 51, 56)),
+        ),
+        Span::styled("  ", Style::new().bg(Color::Rgb(49, 51, 56))),
+        Span::styled(
+            topic,
+            Style::new()
+                .fg(Color::Rgb(148, 155, 164))
+                .bg(Color::Rgb(49, 51, 56)),
+        ),
+        Span::styled(
+            format!(
+                "    {} {} {}  {}",
+                thread_icon, bell_icon, call_icon, more_icon
+            ),
+            Style::new()
+                .fg(Color::Rgb(148, 155, 164))
+                .bg(Color::Rgb(49, 51, 56)),
+        ),
     ]))
     .alignment(Alignment::Left)
     .block(
@@ -1588,10 +1832,10 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
             .borders(Borders::BOTTOM)
             .border_style(
                 Style::new()
-                    .fg(app.palette.border)
-                    .bg(app.palette.background.unwrap_or(app.palette.surface)),
+                    .fg(Color::Rgb(63, 65, 71))
+                    .bg(Color::Rgb(49, 51, 56)),
             )
-            .bg(app.palette.background.unwrap_or(app.palette.surface)),
+            .bg(Color::Rgb(49, 51, 56)),
     );
     f.render_widget(header, chunks[0]);
 
@@ -1603,27 +1847,38 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 "Select a peer to begin a direct message."
             },
-            Style::new().fg(app.palette.muted),
+            Style::new()
+                .fg(Color::Rgb(148, 155, 164))
+                .bg(Color::Rgb(49, 51, 56)),
         )]))],
         V2View::Space => {
             let msgs = app.active_messages();
             if msgs.is_empty() {
                 vec![
                     ListItem::new(Line::from(vec![Span::styled(
-                        format!("Welcome to #{title}!"),
+                        format!(
+                            "Welcome to {}{}!",
+                            TerminalIcon::Hash.glyph(app.icon_style),
+                            title
+                        ),
                         Style::new()
-                            .fg(app.palette.fg_2)
-                            .add_modifier(Modifier::BOLD),
+                            .fg(Color::Rgb(242, 243, 245))
+                            .add_modifier(Modifier::BOLD)
+                            .bg(Color::Rgb(49, 51, 56)),
                     )])),
                     ListItem::new(Line::from(vec![Span::styled(
                         "This is the start of the channel.",
-                        Style::new().fg(app.palette.muted),
+                        Style::new()
+                            .fg(Color::Rgb(148, 155, 164))
+                            .bg(Color::Rgb(49, 51, 56)),
                     )])),
                 ]
             } else {
                 let mut rows = vec![ListItem::new(Line::from(vec![Span::styled(
                     "────── Today ──────",
-                    Style::new().fg(app.palette.border),
+                    Style::new()
+                        .fg(Color::Rgb(63, 65, 71))
+                        .bg(Color::Rgb(49, 51, 56)),
                 )]))];
                 for message in msgs {
                     let color = author_color(&message.msg.author);
@@ -1638,16 +1893,20 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
                         ),
                         Span::styled(
                             format!("  {}", format_ts(message.msg.ts)),
-                            Style::new().fg(app.palette.muted),
+                            Style::new().fg(Color::Rgb(148, 155, 164)),
                         ),
                     ]);
                     let mut body_spans = Vec::new();
                     if message.private {
-                        body_spans.push(Span::styled("🔒 ", Style::new().fg(app.palette.muted)));
+                        let lock_icon = TerminalIcon::Close.glyph(app.icon_style);
+                        body_spans.push(Span::styled(
+                            format!("{} ", lock_icon),
+                            Style::new().fg(Color::Rgb(148, 155, 164)),
+                        ));
                     }
                     body_spans.push(Span::styled(
                         message.msg.body.clone(),
-                        Style::new().fg(app.palette.text),
+                        Style::new().fg(Color::Rgb(219, 222, 225)),
                     ));
                     rows.push(ListItem::new(Text::from(vec![
                         header,
@@ -1659,11 +1918,7 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         }
     };
     f.render_widget(
-        List::new(rows).block(
-            Block::default()
-                .borders(Borders::NONE)
-                .bg(app.palette.background.unwrap_or(app.palette.surface)),
-        ),
+        List::new(rows).block(Block::default().bg(Color::Rgb(49, 51, 56))),
         chunks[1],
     );
 
@@ -1676,20 +1931,24 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
     items.push(ListItem::new(Line::from(vec![Span::styled(
         "MEMBERS",
         Style::new()
-            .fg(app.palette.muted)
-            .add_modifier(Modifier::BOLD),
+            .fg(Color::Rgb(148, 155, 164))
+            .add_modifier(Modifier::BOLD)
+            .bg(Color::Rgb(43, 45, 49)),
     )])));
+    let initials_str = initials(&app.name);
     items.push(ListItem::new(Line::from(vec![
         Span::styled(
-            format!(" {} ", initials(&app.name)),
+            format!(" {} ", initials_str),
             Style::new()
                 .bg(app.palette.accent)
                 .fg(Color::Rgb(255, 255, 255)),
         ),
-        Span::raw(" "),
+        Span::styled(" ", Style::new().bg(Color::Rgb(43, 45, 49))),
         Span::styled(
             format!("{} (you)", app.name),
-            Style::new().fg(app.palette.text),
+            Style::new()
+                .fg(Color::Rgb(219, 222, 225))
+                .bg(Color::Rgb(43, 45, 49)),
         ),
     ])));
 
@@ -1717,18 +1976,19 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
         items.push(ListItem::new(Line::from(vec![Span::styled(
             format!("{} — {}", label, members.len()),
             Style::new()
-                .fg(app.palette.muted)
-                .add_modifier(Modifier::BOLD),
+                .fg(Color::Rgb(148, 155, 164))
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::Rgb(43, 45, 49)),
         )])));
         for peer in members {
             let name = app.peer_display_name(peer);
-            let (status_fg, status_char) = match app.peer_status.get(peer) {
-                Some(BirdStatus::Online) => (Color::Rgb(35, 165, 90), "●"),
-                Some(BirdStatus::Idle) => (Color::Rgb(240, 178, 50), "◐"),
-                Some(BirdStatus::InCall) => (app.palette.accent, "●"),
-                None => (app.palette.dim, "●"),
+            let (status_icon, status_fg) = match app.peer_status.get(peer) {
+                Some(BirdStatus::Online) => (TerminalIcon::Online, Color::Rgb(35, 165, 90)),
+                Some(BirdStatus::Idle) => (TerminalIcon::Idle, Color::Rgb(240, 178, 50)),
+                Some(BirdStatus::InCall) => (TerminalIcon::InCall, Color::Rgb(88, 101, 242)),
+                None => (TerminalIcon::Dnd, Color::Rgb(148, 155, 164)),
             };
-            let _ = status_fg;
+            let status_char = status_icon.glyph(app.icon_style);
             items.push(ListItem::new(Line::from(vec![
                 Span::styled(
                     format!(" {} ", initials(&name)),
@@ -1736,10 +1996,10 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
                         .bg(app.palette.accent)
                         .fg(Color::Rgb(255, 255, 255)),
                 ),
-                Span::raw(" "),
+                Span::styled(" ", Style::new().bg(Color::Rgb(43, 45, 49))),
                 Span::styled(
                     format!("{} {}", status_char, name),
-                    Style::new().fg(app.palette.text),
+                    Style::new().fg(status_fg).bg(Color::Rgb(43, 45, 49)),
                 ),
             ])));
         }
@@ -1748,15 +2008,19 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::LEFT)
-                .border_style(Style::new().fg(app.palette.border).bg(app.palette.surface))
-                .bg(app.palette.surface),
+                .border_style(
+                    Style::new()
+                        .fg(Color::Rgb(63, 65, 71))
+                        .bg(Color::Rgb(43, 45, 49)),
+                )
+                .bg(Color::Rgb(43, 45, 49)),
         ),
         area,
     );
 }
 
 fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
-    let input_bg = app.palette.surface;
+    let input_bg = Color::Rgb(56, 58, 64);
     let outer = area.inner(Margin {
         horizontal: 1,
         vertical: 0,
@@ -1765,43 +2029,54 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     let placeholder = match app.v2_view {
         V2View::Home => {
             if let Some(peer) = app.selected_dm {
-                format!("Message @{}", app.peer_display_name(&peer))
+                format!(
+                    "Message {}{}",
+                    TerminalIcon::At.glyph(app.icon_style),
+                    app.peer_display_name(&peer)
+                )
             } else {
                 "Message".to_string()
             }
         }
-        V2View::Space => format!("Message #{}", app.active_title()),
+        V2View::Space => format!(
+            "Message {}{}",
+            TerminalIcon::Hash.glyph(app.icon_style),
+            app.active_title()
+        ),
     };
-    let display = if app.input.is_empty() {
-        format!("+  {} ", placeholder)
+    let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
+    let gift_icon = TerminalIcon::Gift.glyph(app.icon_style);
+    let left = format!("{} {}  ", plus_icon, gift_icon);
+    let body = if app.input.is_empty() {
+        format!("{}{}", left, placeholder)
     } else {
-        format!("+  {} ", app.input)
+        format!("{}{}", left, app.input)
     };
     let input_color = if app.input.is_empty() {
-        app.palette.dim
+        Color::Rgb(148, 155, 164)
     } else {
-        app.palette.text
+        Color::Rgb(219, 222, 225)
     };
-    let right = format!(" 🎁 😊 ➤");
-    let full = format!("{}{}", display, right);
+    let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
+    let send_icon = TerminalIcon::Send.glyph(app.icon_style);
+    let right = format!(" {} {} ", emoji_icon, send_icon);
+    let content = format!("{}{}", body, right);
 
     f.render_widget(
-        Paragraph::new(full)
+        Paragraph::new(content)
             .style(Style::new().fg(input_color).bg(input_bg))
             .wrap(Wrap { trim: false }),
         outer,
     );
     f.render_widget(
-        Paragraph::new("").block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(
-                    Style::new()
-                        .fg(app.palette.border)
-                        .bg(app.palette.background.unwrap_or(app.palette.surface)),
-                )
-                .bg(app.palette.background.unwrap_or(app.palette.surface)),
-        ),
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(
+                Style::new()
+                    .fg(Color::Rgb(63, 65, 71))
+                    .bg(Color::Rgb(49, 51, 56)),
+            )
+            .bg(Color::Rgb(49, 51, 56)),
         area,
     );
 }
@@ -1998,8 +2273,8 @@ fn draw_settings_modal(f: &mut Frame, app: &App) {
             "Input device\n  Default\n\nOutput device\n  Default\n\nPush to Talk\n  Off\n\nNoise suppression\n  On".to_string()
         }
         SettingsTab::Appearance => format!(
-            "Theme\n  Dark\n\nAccent color\n  {}\n\nCompact mode\n  Off\n\nShow avatars\n  On\n\n\nEnter a #RRGGBB value.\n[ENTER APPLY]  [ESC CLOSE]",
-            app.accent_input
+            "Theme\n  Dark\n\nAccent color\n  {}\n\nIcon style\n  {}\n\nCompact mode\n  Off\n\nShow avatars\n  On\n\n\nEnter a #RRGGBB value.\n[ENTER APPLY]  [TAB cycle icons]  [ESC CLOSE]",
+            app.accent_input, app.icon_style.label()
         ),
         SettingsTab::Notifications => {
             "Desktop notifications\n  On\n\nMute @everyone\n  Off\n\nSounds\n  On".to_string()
@@ -2958,16 +3233,16 @@ mod tests {
                     .collect()
             })
             .collect();
-        // v2 layout: the server rail is the leftmost 8 columns and lists
-        // servers (flocks/roosts), never channels. The sidebar is the next 24
+        // v2 layout: the server rail is the leftmost 9 columns and lists
+        // servers (flocks/roosts), never channels. The sidebar is the next 30
         // columns and renders the selected roost's channels.
         let rail: Vec<String> = rows
             .iter()
-            .map(|row| row.iter().take(8).cloned().collect::<String>())
+            .map(|row| row.iter().take(9).cloned().collect::<String>())
             .collect();
         let sidebar: Vec<String> = rows
             .iter()
-            .map(|row| row.iter().skip(8).take(24).cloned().collect::<String>())
+            .map(|row| row.iter().skip(9).take(30).cloned().collect::<String>())
             .collect();
         assert!(
             sidebar.iter().any(|row| row.contains("general")),

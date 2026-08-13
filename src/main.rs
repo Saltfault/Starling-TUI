@@ -255,6 +255,9 @@ fn handle_settings_key(
                 app.error_message = Some("Use #RRGGBB".into());
             }
         }
+        KeyCode::Tab if app.settings_tab == ui::SettingsTab::Appearance => {
+            app.icon_style = app.icon_style.next();
+        }
         KeyCode::Backspace if app.settings_tab == ui::SettingsTab::Appearance => {
             app.accent_input.pop();
         }
