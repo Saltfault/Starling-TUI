@@ -135,7 +135,9 @@ fn open_profile(app: &mut App) {
     p.editing = false;
     p.draft_name.clone_from(&app.name);
     p.draft_avatar_label.clone_from(&p.avatar_label);
+    p.draft_avatar_path.clone_from(&p.avatar_path);
     p.draft_banner.clone_from(&p.banner);
+    p.draft_banner_path.clone_from(&p.banner_path);
     p.draft_about_me.clone_from(&p.about_me);
     p.draft_pronouns.clone_from(&p.pronouns);
     p.draft_motd.clone_from(&p.motd);
@@ -147,7 +149,9 @@ fn save_profile(app: &mut App, profile: &mut starling::config::Profile) -> anyho
     app.name = p.draft_name.trim().to_string();
     app.pronouns = p.draft_pronouns.trim().to_string();
     p.banner = p.draft_banner.trim().to_string();
+    p.banner_path = p.draft_banner_path.trim().to_string();
     p.avatar_label = p.draft_avatar_label.trim().to_string();
+    p.avatar_path = p.draft_avatar_path.trim().to_string();
     p.about_me = p.draft_about_me.trim().to_string();
     p.pronouns = app.pronouns.clone();
     p.motd = p.draft_motd.trim().to_string();
@@ -203,8 +207,8 @@ fn handle_profile_key(
 fn profile_field_mut(p: &mut ui::LocalProfilePanel) -> &mut String {
     match p.field {
         ui::ProfileField::Name => &mut p.draft_name,
-        ui::ProfileField::Avatar => &mut p.draft_avatar_label,
-        ui::ProfileField::Banner => &mut p.draft_banner,
+        ui::ProfileField::Avatar => &mut p.draft_avatar_path,
+        ui::ProfileField::Banner => &mut p.draft_banner_path,
         ui::ProfileField::AboutMe => &mut p.draft_about_me,
         ui::ProfileField::Pronouns => &mut p.draft_pronouns,
         ui::ProfileField::Motd => &mut p.draft_motd,
@@ -911,6 +915,15 @@ async fn main() -> anyhow::Result<()> {
                         muted_flag.store(app.muted, Ordering::Relaxed);
                         continue;
                     }
+                    if matches!(k.code, KeyCode::Char('d' | 'D'))
+                        && k.modifiers.contains(KeyModifiers::CONTROL)
+                        && k.modifiers.contains(KeyModifiers::SHIFT)
+                    {
+                        app.deafened = !app.deafened;
+                        app.muted = app.deafened;
+                        muted_flag.store(app.muted, Ordering::Relaxed);
+                        continue;
+                    }
 
                     if app.profile_panel.open {
                         handle_profile_key(&mut app, &mut profile, k)?;
@@ -1478,8 +1491,9 @@ fn handle_normal_key(
             }
         }
 
-        KeyCode::Enter if !app.input.is_empty() => {
+        KeyCode::Enter if app.input_focus && !app.input.is_empty() => {
             let text = std::mem::take(&mut app.input);
+            app.input_focus = false;
             if let Some(code) = text
                 .strip_prefix("/join ")
                 .or_else(|| text.strip_prefix("/join-roost "))
@@ -1596,6 +1610,11 @@ fn handle_normal_key(
             app.show_video = false;
         }
 
+        KeyCode::Esc if app.input_focus => {
+            app.input_focus = false;
+            app.input.clear();
+        }
+
         KeyCode::Esc => {
             app.show_menu = true;
             app.menu_selection = 0;
@@ -1648,16 +1667,38 @@ fn handle_normal_key(
             }
         }
 
-        KeyCode::Char('v' | 'V') if app.in_call => {
+        KeyCode::Char('v' | 'V') if app.in_call && !app.input_focus => {
             toggle_call_video(app, cmd_tx);
         }
 
-        KeyCode::Char('p' | 'P') => {
+        KeyCode::Char('p' | 'P') if !app.input_focus => {
             open_profile(app);
         }
 
-        KeyCode::Char('h' | 'H') => app.open_home(),
-        KeyCode::Char(',') => {
+        KeyCode::Char('n' | 'N') if !app.input_focus => {
+            app.notifications_muted = !app.notifications_muted;
+        }
+
+        KeyCode::Char('c' | 'C')
+            if !app.input_focus
+                && k.modifiers.contains(KeyModifiers::CONTROL)
+                && k.modifiers.contains(KeyModifiers::SHIFT) =>
+        {
+            let targets = app
+                .selected_peer_id()
+                .map_or_else(|| app.active_peers(), |peer| vec![peer]);
+            if !targets.is_empty() {
+                let _ = cmd_tx.send(Command::StartCall(targets));
+                app.error_message = Some("Connecting call...".into());
+            } else {
+                app.error_message = Some("No one is online in this context".into());
+            }
+        }
+
+        KeyCode::Char('h' | 'H') if !app.input_focus => {
+            app.open_home();
+        }
+        KeyCode::Char(',') if !app.input_focus => {
             app.accent_input = match app.palette.accent {
                 ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
                 _ => "#6FAE9D".to_string(),
@@ -1665,11 +1706,16 @@ fn handle_normal_key(
             app.settings_open = true;
         }
 
-        KeyCode::Char(c) => {
+        KeyCode::Char(c) if app.input_focus => {
             app.input = sanitize::sanitize_message(&format!("{}{}", app.input, c));
         }
 
-        KeyCode::Backspace => {
+        KeyCode::Char(c) if !app.input_focus => {
+            app.input_focus = true;
+            app.input = sanitize::sanitize_message(&format!("{}{}", app.input, c));
+        }
+
+        KeyCode::Backspace if app.input_focus => {
             app.input.pop();
         }
 

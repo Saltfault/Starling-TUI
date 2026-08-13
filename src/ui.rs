@@ -297,6 +297,7 @@ pub struct App {
     pub selection: Selection,
     pub expanded: HashSet<usize>,
     pub input: String,
+    pub input_focus: bool,
     pub peers: Vec<EndpointId>,
     pub selected_peer: usize,
     pub node_id: Option<EndpointId>,
@@ -316,6 +317,7 @@ pub struct App {
     pub edit_flock_name: String,
     pub in_call: bool,
     pub muted: bool,
+    pub deafened: bool,
     pub peer_names: HashMap<EndpointId, String>,
     pub peer_status: HashMap<EndpointId, BirdStatus>,
     /// Received `crypto_box` DM public keys, keyed by their authenticated
@@ -361,6 +363,7 @@ pub struct App {
     pub v2_view: V2View,
     pub profile_panel: LocalProfilePanel,
     pub settings_open: bool,
+    pub notifications_muted: bool,
     pub accent_input: String,
     pub settings_tab: SettingsTab,
     pub selected_dm: Option<EndpointId>,
@@ -377,6 +380,7 @@ impl Default for App {
             selection: Selection::default(),
             expanded: HashSet::new(),
             input: String::new(),
+            input_focus: false,
             peers: Vec::new(),
             selected_peer: 0,
             node_id: None,
@@ -396,6 +400,7 @@ impl Default for App {
             edit_flock_name: String::new(),
             in_call: false,
             muted: false,
+            deafened: false,
             peer_names: HashMap::new(),
             peer_status: HashMap::new(),
             peer_dm_keys: HashMap::new(),
@@ -435,6 +440,7 @@ impl Default for App {
             profile_panel: LocalProfilePanel::default(),
             settings_open: false,
             settings_tab: SettingsTab::default(),
+            notifications_muted: false,
             accent_input: "#5865F2".to_string(),
             selected_dm: None,
             icon_style: IconStyle::from_env(),
@@ -477,14 +483,18 @@ pub struct LocalProfilePanel {
     pub editing: bool,
     pub field: ProfileField,
     pub avatar_label: String,
+    pub avatar_path: String,
     pub banner: String,
+    pub banner_path: String,
     pub about_me: String,
     pub pronouns: String,
     pub motd: String,
     pub custom_status: String,
     pub draft_name: String,
     pub draft_avatar_label: String,
+    pub draft_avatar_path: String,
     pub draft_banner: String,
+    pub draft_banner_path: String,
     pub draft_about_me: String,
     pub draft_pronouns: String,
     pub draft_motd: String,
@@ -543,6 +553,7 @@ pub enum TerminalIcon {
     Voice,
     Thread,
     Bell,
+    BellSlash,
     Pin,
     Call,
     Plus,
@@ -552,6 +563,7 @@ pub enum TerminalIcon {
     Mic,
     MicMuted,
     Headset,
+    Deafened,
     Settings,
     Group,
     Server,
@@ -575,6 +587,7 @@ impl TerminalIcon {
             Self::Voice => "[V]",
             Self::Thread => "[T]",
             Self::Bell => "[B]",
+            Self::BellSlash => "[b]",
             Self::Pin => "[P]",
             Self::Call => "[C]",
             Self::Plus => "[+]",
@@ -584,6 +597,7 @@ impl TerminalIcon {
             Self::Mic => "[M]",
             Self::MicMuted => "[X]",
             Self::Headset => "[A]",
+            Self::Deafened => "[D]",
             Self::Settings => "[SET]",
             Self::Group => "[GRP]",
             Self::Server => "[SRV]",
@@ -605,8 +619,9 @@ impl TerminalIcon {
             Self::Home => "\u{f015}",
             Self::Hash => "\u{f292}",
             Self::Voice => "\u{f130}",
-            Self::Thread => "\u{f4c2}",
+            Self::Thread => "\u{f181}",
             Self::Bell => "\u{f0f3}",
+            Self::BellSlash => "\u{f1f6}",
             Self::Pin => "\u{f08d}",
             Self::Call => "\u{f095}",
             Self::Plus => "\u{f067}",
@@ -616,6 +631,7 @@ impl TerminalIcon {
             Self::Mic => "\u{f130}",
             Self::MicMuted => "\u{f131}",
             Self::Headset => "\u{f025}",
+            Self::Deafened => "\u{f6a0}",
             Self::Settings => "\u{f013}",
             Self::Group => "\u{f0c0}",
             Self::Server => "\u{e795}",
@@ -637,8 +653,9 @@ impl TerminalIcon {
             Self::Home => "⌂",
             Self::Hash => "#",
             Self::Voice => "♫",
-            Self::Thread => "↳",
+            Self::Thread => "@",
             Self::Bell => "🔔",
+            Self::BellSlash => "🔕",
             Self::Pin => "📌",
             Self::Call => "📞",
             Self::Plus => "+",
@@ -648,6 +665,7 @@ impl TerminalIcon {
             Self::Mic => "🎙",
             Self::MicMuted => "🔴",
             Self::Headset => "🎧",
+            Self::Deafened => "🔇",
             Self::Settings => "⚙",
             Self::Group => "⚑",
             Self::Server => "◇",
@@ -671,6 +689,7 @@ impl TerminalIcon {
             Self::Voice => "[V]",
             Self::Thread => "[T]",
             Self::Bell => "[B]",
+            Self::BellSlash => "[b]",
             Self::Pin => "[P]",
             Self::Call => "[C]",
             Self::Plus => "+",
@@ -680,6 +699,7 @@ impl TerminalIcon {
             Self::Mic => "[M]",
             Self::MicMuted => "[X]",
             Self::Headset => "[A]",
+            Self::Deafened => "[D]",
             Self::Settings => "[SET]",
             Self::Group => "[GRP]",
             Self::Server => "[SRV]",
@@ -1738,14 +1758,15 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         TerminalIcon::Mic
     };
-    let headset_icon = TerminalIcon::Headset.glyph(app.icon_style);
+    let headset_icon = if app.deafened {
+        TerminalIcon::Deafened.glyph(app.icon_style)
+    } else {
+        TerminalIcon::Headset.glyph(app.icon_style)
+    };
     let settings_icon = TerminalIcon::Settings.glyph(app.icon_style);
-    let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
-    let server_icon = TerminalIcon::Server.glyph(app.icon_style);
-    let group_icon = TerminalIcon::Group.glyph(app.icon_style);
     let controls_line = Line::from(vec![
         Span::styled(
-            mic_icon.glyph(app.icon_style),
+            format!("{} ", mic_icon.glyph(app.icon_style)),
             Style::new().fg(if app.muted {
                 Color::Rgb(242, 63, 67)
             } else {
@@ -1753,10 +1774,15 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
             }),
         ),
         Span::styled(
-            format!(
-                "  {}  {}  {}{}  {}{}",
-                headset_icon, settings_icon, plus_icon, server_icon, plus_icon, group_icon
-            ),
+            format!("{}  ", headset_icon),
+            Style::new().fg(if app.deafened {
+                Color::Rgb(242, 63, 67)
+            } else {
+                Color::Rgb(148, 155, 164)
+            }),
+        ),
+        Span::styled(
+            format!("{} SET", settings_icon),
             Style::new()
                 .fg(Color::Rgb(148, 155, 164))
                 .bg(Color::Rgb(43, 45, 49)),
@@ -1785,7 +1811,7 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(1),
+        Constraint::Length(3),
     ])
     .split(area);
 
@@ -1803,7 +1829,12 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         V2View::Space => "General discussion".to_string(),
     };
     let thread_icon = TerminalIcon::Thread.glyph(app.icon_style);
-    let bell_icon = TerminalIcon::Bell.glyph(app.icon_style);
+    let bell_icon = if app.notifications_muted {
+        TerminalIcon::BellSlash
+    } else {
+        TerminalIcon::Bell
+    }
+    .glyph(app.icon_style);
     let call_icon = TerminalIcon::Call.glyph(app.icon_style);
     let more_icon = TerminalIcon::More.glyph(app.icon_style);
     let hash_icon = TerminalIcon::Hash.glyph(app.icon_style);
@@ -2041,15 +2072,15 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     let input_bg = Color::Rgb(56, 58, 64);
-    // Draw top border across the whole chat bottom.
+    let border_color = if app.input_focus {
+        app.palette.accent
+    } else {
+        Color::Rgb(63, 65, 71)
+    };
     f.render_widget(
         Block::default()
             .borders(Borders::TOP)
-            .border_style(
-                Style::new()
-                    .fg(Color::Rgb(63, 65, 71))
-                    .bg(Color::Rgb(49, 51, 56)),
-            )
+            .border_style(Style::new().fg(border_color).bg(Color::Rgb(49, 51, 56)))
             .bg(Color::Rgb(49, 51, 56)),
         area,
     );
@@ -2096,7 +2127,13 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         Paragraph::new(content)
             .style(Style::new().fg(input_color).bg(input_bg))
-            .wrap(Wrap { trim: false }),
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::new().fg(border_color))
+                    .bg(input_bg),
+            ),
         outer,
     );
 }
@@ -2625,7 +2662,15 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_profile_modal(f: &mut Frame, app: &App) {
-    let area = centered(f.area(), 70, 20);
+    let term = f.area();
+    let width = 50u16.min(term.width.saturating_sub(4)).max(30);
+    let height = 18u16.min(term.height.saturating_sub(4)).max(10);
+    let area = Rect {
+        x: 2,
+        y: term.height.saturating_sub(height + 2),
+        width,
+        height,
+    };
     f.render_widget(Clear, area);
     let modal_bg = Color::Rgb(43, 45, 49);
     let border_fg = Color::Rgb(63, 65, 71);
@@ -2643,7 +2688,11 @@ fn draw_profile_modal(f: &mut Frame, app: &App) {
     });
     let p = &app.profile_panel;
     let banner_line = if p.banner.is_empty() {
-        "──────── banner ────────".to_string()
+        if p.banner_path.is_empty() {
+            "──────── banner ────────".to_string()
+        } else {
+            format!("banner: {}", p.banner_path)
+        }
     } else {
         p.banner.clone()
     };
@@ -2651,6 +2700,20 @@ fn draw_profile_modal(f: &mut Frame, app: &App) {
         initials(&p.draft_name)
     } else {
         p.avatar_label.clone()
+    };
+    let avatar_path_line = if p.editing {
+        format!("Avatar path: {}", p.draft_avatar_path)
+    } else if !p.avatar_path.is_empty() {
+        format!("Avatar path: {}", p.avatar_path)
+    } else {
+        "Avatar path: (none)".to_string()
+    };
+    let banner_path_line = if p.editing {
+        format!("Banner path: {}", p.draft_banner_path)
+    } else if !p.banner_path.is_empty() {
+        format!("Banner path: {}", p.banner_path)
+    } else {
+        "Banner path: (none)".to_string()
     };
     let name_text = if p.editing {
         p.draft_name.clone()
@@ -2709,6 +2772,14 @@ fn draw_profile_modal(f: &mut Frame, app: &App) {
             Style::new().fg(Color::Rgb(148, 155, 164)).bg(modal_bg),
         )]));
     }
+    lines.push(Line::from(vec![Span::styled(
+        avatar_path_line,
+        Style::new().fg(Color::Rgb(148, 155, 164)).bg(modal_bg),
+    )]));
+    lines.push(Line::from(vec![Span::styled(
+        banner_path_line,
+        Style::new().fg(Color::Rgb(148, 155, 164)).bg(modal_bg),
+    )]));
     if !pronouns_text.is_empty() {
         lines.push(Line::from(vec![
             Span::styled(
