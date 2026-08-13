@@ -27,6 +27,7 @@ pub struct Palette {
     pub dim: Color,
     pub channel: Color,
     pub invite: Color,
+    pub active: Color,
 }
 
 impl Default for Palette {
@@ -41,6 +42,7 @@ impl Default for Palette {
             dim: DEFAULT_DIM,
             channel: DEFAULT_CHANNEL,
             invite: DEFAULT_INVITE,
+            active: Color::Rgb(126, 189, 172),
         }
     }
 }
@@ -1531,6 +1533,67 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
     }
     f.render_widget(
         List::new(items).block(Block::default().borders(Borders::ALL).title(" servers ")),
+        area,
+    );
+}
+
+fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
+    let mut items = vec![ListItem::new(Span::styled(
+        if matches!(app.v2_view, V2View::Home) {
+            " DIRECT MESSAGES "
+        } else {
+            " CHANNELS "
+        },
+        Style::new().fg(app.palette.dim),
+    ))];
+
+    if matches!(app.v2_view, V2View::Home) {
+        for peer in app
+            .peers
+            .iter()
+            .take(area.height.saturating_sub(3) as usize)
+        {
+            let selected = app.selected_dm == Some(*peer);
+            items.push(ListItem::new(Line::from(vec![
+                icon_span(TerminalIcon::Members, app.icon_style, app.palette.channel),
+                Span::styled(
+                    app.peer_display_name(peer),
+                    Style::new().fg(if selected {
+                        app.palette.active
+                    } else {
+                        app.palette.text
+                    }),
+                ),
+            ])));
+        }
+    } else {
+        match app.selection {
+            Selection::Flock(_) => items.push(ListItem::new(Span::styled(
+                " [TEXT] general ",
+                Style::new().fg(app.palette.selection),
+            ))),
+            Selection::Channel(ri, ci) => {
+                if let Some(roost) = app.roosts.get(ri) {
+                    for (index, channel) in roost.channels.iter().enumerate() {
+                        let selected = index == ci;
+                        items.push(ListItem::new(Line::from(vec![
+                            icon_span(TerminalIcon::Text, app.icon_style, app.palette.channel),
+                            Span::styled(
+                                channel.name.clone(),
+                                Style::new().fg(if selected {
+                                    app.palette.selection
+                                } else {
+                                    app.palette.text
+                                }),
+                            ),
+                        ])));
+                    }
+                }
+            }
+        }
+    }
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::ALL).title(" sidebar ")),
         area,
     );
 }
