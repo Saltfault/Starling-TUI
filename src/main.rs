@@ -112,6 +112,11 @@ fn apply_profile(app: &mut App, profile: &starling::config::Profile) {
     }
     app.palette = palette;
     app.accent_input = profile.accent_color.clone();
+    if let Some(accent) = ui::hex_to_color(&profile.accent_color) {
+        app.palette.hover = ui::shade_color(accent, 20);
+        app.palette.active = ui::shade_color(accent, 10);
+        app.palette.focus_ring = ui::shade_color(accent, 55);
+    }
     app.profile_panel.banner.clone_from(&profile.banner);
     app.profile_panel
         .avatar_label
@@ -205,6 +210,35 @@ fn profile_field_mut(p: &mut ui::LocalProfilePanel) -> &mut String {
         ui::ProfileField::Motd => &mut p.draft_motd,
         ui::ProfileField::CustomStatus => &mut p.draft_custom_status,
     }
+}
+
+fn handle_settings_key(
+    app: &mut App,
+    profile: &mut starling::config::Profile,
+    key: &KeyEvent,
+) -> anyhow::Result<()> {
+    match key.code {
+        KeyCode::Enter => {
+            let value = app.accent_input.clone();
+            if ui::apply_accent_color(app, &value) {
+                profile.accent_color = value;
+                profile.save()?;
+            } else {
+                app.error_message = Some("Use #RRGGBB".into());
+            }
+        }
+        KeyCode::Backspace => {
+            app.accent_input.pop();
+        }
+        KeyCode::Char(c) => {
+            if "#0123456789abcdefABCDEF".contains(c) && app.accent_input.len() < 7 {
+                app.accent_input.push(c);
+            }
+        }
+        KeyCode::Esc => app.settings_open = false,
+        _ => {}
+    }
+    Ok(())
 }
 
 fn refresh_create_flock_code(app: &mut App) {
@@ -851,6 +885,10 @@ async fn main() -> anyhow::Result<()> {
                             Ok(handle_bird_profile_key(&mut app, k, &cmd_tx)),
                         Popup::Profile =>
                             handle_profile_key(&mut app, &mut profile, k),
+                        Popup::Settings => {
+                            handle_settings_key(&mut app, &mut profile, k)?;
+                            Ok(KeyOutcome::Handled)
+                        }
                         Popup::ContextMenu => {
                             handle_context_menu_key(&mut app, k, &cmd_tx)?;
                             Ok(KeyOutcome::Handled)
@@ -2114,8 +2152,7 @@ fn activate_menu_item(
             open_profile(app);
         }
         5 => {
-            open_editor(app, cmd_tx, term, "settings")?;
-            app.show_menu = true;
+            app.settings_open = true;
         }
         6 => {
             app.show_menu = false;

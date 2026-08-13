@@ -27,7 +27,9 @@ pub struct Palette {
     pub dim: Color,
     pub channel: Color,
     pub invite: Color,
+    pub hover: Color,
     pub active: Color,
+    pub focus_ring: Color,
 }
 
 impl Default for Palette {
@@ -42,7 +44,9 @@ impl Default for Palette {
             dim: DEFAULT_DIM,
             channel: DEFAULT_CHANNEL,
             invite: DEFAULT_INVITE,
+            hover: Color::Rgb(131, 194, 177),
             active: Color::Rgb(126, 189, 172),
+            focus_ring: Color::Rgb(180, 230, 214),
         }
     }
 }
@@ -569,6 +573,7 @@ pub enum Popup {
     ContextMenu,
     RoleSubmenu,
     Profile,
+    Settings,
     None,
 }
 
@@ -629,6 +634,8 @@ impl App {
             Popup::BirdProfile
         } else if self.profile_panel.open {
             Popup::Profile
+        } else if self.settings_open {
+            Popup::Settings
         } else {
             Popup::None
         }
@@ -1197,6 +1204,29 @@ pub fn hex_to_color(hex: &str) -> Option<Color> {
         u8::from_str_radix(&h[2..4], 16).ok()?,
         u8::from_str_radix(&h[4..6], 16).ok()?,
     ))
+}
+
+pub fn shade_color(color: Color, percent: i16) -> Color {
+    let Color::Rgb(r, g, b) = color else {
+        return color;
+    };
+    let shade = |value: u8| -> u8 { (i16::from(value) + percent).clamp(0, 255) as u8 };
+    Color::Rgb(shade(r), shade(g), shade(b))
+}
+
+pub fn apply_accent_color(app: &mut App, hex: &str) -> bool {
+    let Some(accent) = hex_to_color(hex) else {
+        return false;
+    };
+    app.palette.accent = accent;
+    app.palette.selection = shade_color(accent, 35);
+    app.palette.invite = shade_color(accent, 15);
+    app.palette.border = shade_color(accent, -45);
+    app.palette.hover = shade_color(accent, 20);
+    app.palette.active = shade_color(accent, 10);
+    app.palette.focus_ring = shade_color(accent, 55);
+    app.accent_input = hex.to_ascii_uppercase();
+    true
 }
 
 pub fn draw(f: &mut Frame, app: &App) {
@@ -2007,6 +2037,27 @@ fn draw_menu_popup(f: &mut Frame, app: &App) {
         })
         .collect();
     f.render_widget(List::new(items), inner);
+}
+
+fn draw_settings_modal(f: &mut Frame, app: &App) {
+    let area = centered(f.area(), 70, 18);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" SETTINGS / APPEARANCE ")
+            .border_style(Style::new().fg(app.palette.accent)),
+        area,
+    );
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let text = format!(
+        "Accent color\n{}\n\nEnter a #RRGGBB value.\n[ENTER APPLY]  [ESC CLOSE]",
+        app.accent_input
+    );
+    f.render_widget(Paragraph::new(text), inner);
 }
 
 fn draw_create_room_popup(f: &mut Frame, app: &App) {
@@ -2976,7 +3027,7 @@ mod tests {
     }
 
     #[test]
-    fn roost_channels_render_under_roosts_not_in_flocks() {
+    fn roost_channels_render_in_sidebar_not_server_rail() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         let roost = starling::protocol::RoostId::random();
@@ -3007,6 +3058,8 @@ mod tests {
             state: ContextState::Ready,
             secret: Some("ROOST-CODE".into()),
         });
+        app.v2_view = V2View::Space;
+        app.selection = Selection::Channel(0, 0);
         app.expanded.insert(0);
 
         let backend = TestBackend::new(80, 24);
@@ -3016,40 +3069,33 @@ mod tests {
         let area = buf.area();
         let cells = buf.content();
         let full_width = area.width as usize;
-        // The sidebar (flocks + roosts panels) is the leftmost 26 columns; the
-        // message panel sits to its right and would otherwise leak "general"
-        // (the active title) into a naive substring search.
-        let sidebar_width = 26usize;
-        let rows: Vec<String> = (0..area.height as usize)
+        let rows: Vec<Vec<String>> = (0..area.height as usize)
             .map(|y| {
-                (0..sidebar_width)
+                (0..full_width)
                     .map(|x| cells[y * full_width + x].symbol().to_string())
-                    .collect::<String>()
+                    .collect()
             })
             .collect();
-        let flocks_row = rows
+        // v2 layout: the server rail is the leftmost 12 columns and lists
+        // servers (flocks/roosts), never channels. The sidebar is the next 28
+        // columns and renders the selected roost's channels.
+        let rail: Vec<String> = rows
             .iter()
-            .position(|r| r.contains("flocks"))
-            .expect("flocks panel title rendered");
-        let roosts_row = rows
+            .map(|row| row.iter().take(12).cloned().collect::<String>())
+            .collect();
+        let sidebar: Vec<String> = rows
             .iter()
-            .position(|r| r.contains("roosts"))
-            .expect("roosts panel title rendered");
-        // The flocks panel body is strictly between its title and the roosts
-        // panel title; it must NOT contain the roost channel.
-        for row in rows.iter().take(roosts_row).skip(flocks_row + 1) {
+            .map(|row| row.iter().skip(12).take(28).cloned().collect::<String>())
+            .collect();
+        assert!(
+            sidebar.iter().any(|row| row.contains("general")),
+            "roost channel did not render in the sidebar"
+        );
+        for row in &rail {
             assert!(
                 !row.contains("general"),
-                "roost channel leaked into the flocks panel: {:?}",
-                row
+                "roost channel leaked into the server rail: {row:?}"
             );
         }
-        // The roosts panel body must render the channel under the roost.
-        let rendered_under_roosts = ((roosts_row + 1)..rows.len())
-            .any(|y| rows[y].contains("#") && rows[y].contains("general"));
-        assert!(
-            rendered_under_roosts,
-            "roost channel was not rendered under the roosts panel"
-        );
     }
 }
