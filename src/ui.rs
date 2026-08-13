@@ -1143,48 +1143,33 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     draw_header(f, app, chunks[0]);
 
-    let middle = Layout::horizontal([
-        Constraint::Length(26),
+    let columns = Layout::horizontal([
+        Constraint::Length(12),
+        Constraint::Length(28),
         Constraint::Min(1),
-        Constraint::Length(24),
+        Constraint::Length(27),
     ])
     .split(chunks[1]);
 
-    let rail = Layout::vertical([Constraint::Percentage(33), Constraint::Min(3)]).split(middle[0]);
-    draw_flocks(f, app, rail[0]);
-    draw_roosts(f, app, rail[1]);
-
-    if !draw_typed_messages(f, app, middle[1]) {
-        draw_messages(f, app, middle[1]);
+    draw_server_rail(f, app, columns[0]);
+    draw_sidebar(f, app, columns[1]);
+    draw_chat(f, app, columns[2]);
+    if matches!(app.v2_view, V2View::Space) {
+        draw_members(f, app, columns[3]);
     }
-    draw_birds(f, app, middle[2]);
-
-    draw_button_bar(f, app, chunks[2]);
     f.render_widget(
         Paragraph::new(app.input.as_str())
             .block(Block::default().borders(Borders::ALL).title(" message ")),
         chunks[3],
     );
-    if app.show_role_submenu {
-        draw_role_submenu(f, app);
-    } else if app.show_context_menu {
-        draw_context_menu(f, app);
-    } else if app.show_add_channel {
-        draw_add_channel_popup(f, app);
-    } else if app.show_create_roost {
-        draw_create_roost_popup(f, app);
-    } else if app.show_create_room {
-        draw_create_room_popup(f, app);
-    } else if app.show_edit_flock {
-        draw_edit_flock_popup(f, app);
-    } else if app.show_join_room {
-        draw_join_room_popup(f, app);
-    } else if app.show_delete_confirm {
-        draw_delete_confirm_popup(f, app);
-    } else if app.show_menu {
-        draw_menu_popup(f, app);
-    } else if app.show_bird_profile {
-        draw_bird_profile_popup(f, app);
+    if app.in_call {
+        draw_call_overlay(f, app);
+    }
+    if app.profile_panel.open {
+        draw_profile_modal(f, app);
+    }
+    if app.settings_open {
+        draw_settings_modal(f, app);
     }
 }
 
