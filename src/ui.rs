@@ -509,8 +509,6 @@ impl IconStyle {
 
 #[derive(Clone, Copy, Debug)]
 pub enum TerminalIcon {
-    Home,
-    Text,
     Voice,
     Call,
     Video,
@@ -520,8 +518,6 @@ pub enum TerminalIcon {
 impl TerminalIcon {
     fn nerd_font(self) -> Option<&'static str> {
         Some(match self {
-            Self::Home => "\u{f015}",
-            Self::Text => "\u{f075}",
             Self::Voice => "\u{f130}",
             Self::Call => "\u{f095}",
             Self::Video => "\u{f03d}",
@@ -531,8 +527,6 @@ impl TerminalIcon {
 
     fn unicode(self) -> Option<&'static str> {
         Some(match self {
-            Self::Home => "⌂",
-            Self::Text => "▤",
             Self::Voice => "♫",
             Self::Call => "☎",
             Self::Video => "▣",
@@ -542,8 +536,6 @@ impl TerminalIcon {
 
     fn ascii(self) -> &'static str {
         match self {
-            Self::Home => "[H]",
-            Self::Text => "[T]",
             Self::Voice => "[V]",
             Self::Call => "[C]",
             Self::Video => "[D]",
@@ -1372,87 +1364,121 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
     let mut items = Vec::new();
-    let home_style = if matches!(app.v2_view, V2View::Home) {
-        Style::new()
-            .fg(app.palette.selection)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::new().fg(app.palette.text)
-    };
+    let home_active = matches!(app.v2_view, V2View::Home);
     items.push(ListItem::new(Line::from(vec![
-        Span::styled("> ", Style::new().fg(app.palette.accent)),
-        icon_span(TerminalIcon::Home, app.icon_style, app.palette.accent),
-        Span::styled("HOME", home_style),
+        Span::styled(
+            if home_active { "▎" } else { " " },
+            Style::new().fg(Color::Rgb(255, 255, 255)),
+        ),
+        Span::styled(
+            "(*)",
+            Style::new()
+                .fg(if home_active {
+                    Color::Rgb(255, 255, 255)
+                } else {
+                    app.palette.dim
+                })
+                .add_modifier(if home_active {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ),
+        Span::raw(" Home"),
     ])));
+    items.push(ListItem::new(Line::from(vec![Span::styled(
+        "──────────",
+        Style::new().fg(app.palette.dim),
+    )])));
 
     for (index, flock) in app.flocks.iter().enumerate() {
-        let selected = matches!(app.selection, Selection::Flock(i) if i == index)
+        let active = matches!(app.selection, Selection::Flock(i) if i == index)
             && matches!(app.v2_view, V2View::Space);
         let label = if flock.name.is_empty() {
-            "FLOCK"
+            "Flock".to_string()
         } else {
-            flock.name.as_str()
+            flock.name.clone()
         };
-        let unread = if flock.unread > 0 {
-            format!(" <{}>", flock.unread)
-        } else {
-            String::new()
-        };
-        items.push(ListItem::new(Line::from(vec![
+        let initial = label
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_default();
+        let mut spans = vec![
             Span::styled(
-                if selected { "> " } else { "  " },
-                Style::new().fg(app.palette.accent),
+                if active { "▎" } else { " " },
+                Style::new().fg(Color::Rgb(255, 255, 255)),
             ),
             Span::styled(
-                format!("[{}]", label),
-                Style::new().fg(if selected {
-                    app.palette.selection
-                } else {
-                    app.palette.text
-                }),
-            ),
-            Span::styled(
-                unread,
+                format!("({initial})"),
                 Style::new()
-                    .fg(Color::Rgb(242, 63, 67))
-                    .add_modifier(Modifier::BOLD),
+                    .fg(if active {
+                        Color::Rgb(255, 255, 255)
+                    } else {
+                        app.palette.dim
+                    })
+                    .add_modifier(if active {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
-        ])));
+        ];
+        if flock.unread > 0 {
+            spans.push(Span::styled(
+                format!(" {label} {}", flock.unread),
+                Style::new()
+                    .fg(Color::Rgb(255, 255, 255))
+                    .bg(Color::Rgb(242, 63, 67))
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        items.push(ListItem::new(Line::from(spans)));
     }
 
     for (index, roost) in app.roosts.iter().enumerate() {
-        let selected = matches!(app.selection, Selection::Channel(ri, _) if ri == index)
+        let active = matches!(app.selection, Selection::Channel(ri, _) if ri == index)
             && matches!(app.v2_view, V2View::Space);
         let label = if roost.name.is_empty() {
-            "ROOST"
+            "Roost".to_string()
         } else {
-            roost.name.as_str()
+            roost.name.clone()
         };
-        let unread = if roost.unread > 0 {
-            format!(" <{}>", roost.unread)
-        } else {
-            String::new()
-        };
-        items.push(ListItem::new(Line::from(vec![
+        let initial = label
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_default();
+        let mut spans = vec![
             Span::styled(
-                if selected { "> " } else { "  " },
-                Style::new().fg(app.palette.accent),
+                if active { "▎" } else { " " },
+                Style::new().fg(Color::Rgb(255, 255, 255)),
             ),
             Span::styled(
-                format!("[{}]", label),
-                Style::new().fg(if selected {
-                    app.palette.selection
-                } else {
-                    app.palette.text
-                }),
-            ),
-            Span::styled(
-                unread,
+                format!("({initial})"),
                 Style::new()
-                    .fg(Color::Rgb(242, 63, 67))
-                    .add_modifier(Modifier::BOLD),
+                    .fg(if active {
+                        Color::Rgb(255, 255, 255)
+                    } else {
+                        app.palette.dim
+                    })
+                    .add_modifier(if active {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
-        ])));
+        ];
+        if roost.unread > 0 {
+            spans.push(Span::styled(
+                format!(" {label} {}", roost.unread),
+                Style::new()
+                    .fg(Color::Rgb(255, 255, 255))
+                    .bg(Color::Rgb(242, 63, 67))
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        items.push(ListItem::new(Line::from(spans)));
     }
     f.render_widget(
         List::new(items).block(Block::default().borders(Borders::ALL).title(" servers ")),
@@ -1509,7 +1535,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
                 if let Some(roost) = app.roosts.get(ri) {
                     if !roost.channels.is_empty() {
                         items.push(ListItem::new(Span::styled(
-                            " TEXT CHANNELS ",
+                            " CHANNELS ",
                             Style::new()
                                 .fg(app.palette.dim)
                                 .add_modifier(Modifier::BOLD),
@@ -1517,11 +1543,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
                     }
                     for (index, channel) in roost.channels.iter().enumerate() {
                         let selected = index == ci;
-                        let mut spans = vec![icon_span(
-                            TerminalIcon::Text,
-                            app.icon_style,
-                            app.palette.channel,
-                        )];
+                        let mut spans = vec![Span::styled("# ", Style::new().fg(app.palette.dim))];
                         spans.push(Span::styled(
                             channel.name.clone(),
                             Style::new().fg(if selected {
