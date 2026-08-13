@@ -39,7 +39,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use ui::{
     App, ContextMenuAction, ContextMenuTarget, FlockView, MENU_ITEMS, Popup, RoostView,
-    ScrollPanel, Selection, ToolbarAction,
+    ScrollPanel, Selection,
 };
 
 const MOUSE_TRACKING_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
@@ -1924,67 +1924,6 @@ fn handle_mouse_click(
     }
 
     if handle_v2_mouse_click(app, col, row, term_w, term_h) {
-        return Ok(());
-    }
-
-    if row <= 1 && app.active_code().is_some() {
-        copy_active_invite(app, clipboard, Instant::now());
-        return Ok(());
-    }
-
-    let button_bar_y = term_h.saturating_sub(4);
-    if row == button_bar_y {
-        let btns = ui::toolbar_buttons(app);
-        for (action, _label, bx, bw) in btns {
-            if col >= bx && col < bx + bw {
-                match action {
-                    ToolbarAction::Menu => {
-                        app.show_menu = true;
-                        app.menu_selection = 0;
-                    }
-                    ToolbarAction::Leave => {
-                        if let Some((code, title)) = app.leave_active_context() {
-                            let _ = cmd_tx.send(Command::Leave { code });
-                            app.error_message = Some(format!("Left {title}"));
-                        } else {
-                            app.error_message = Some("No active flock or roost to leave".into());
-                        }
-                    }
-                    #[cfg(feature = "audio")]
-                    ToolbarAction::Call => {
-                        if app.in_call {
-                            if cmd_tx.send(Command::HangUp).is_ok() {
-                                app.in_call = false;
-                            }
-                        } else {
-                            let targets: Vec<EndpointId> =
-                                if let Some(peer) = app.selected_peer_id() {
-                                    vec![peer]
-                                } else {
-                                    let peers = app.active_peers();
-                                    if peers.is_empty() {
-                                        app.error_message =
-                                            Some("No one is online in this context".into());
-                                        return Ok(());
-                                    }
-                                    peers
-                                };
-                            if cmd_tx.send(Command::StartCall(targets)).is_err() {
-                                app.error_message = Some("Call service is unavailable".into());
-                            } else {
-                                app.error_message = Some("Connecting call...".into());
-                            }
-                        }
-                    }
-                    #[cfg(feature = "audio")]
-                    ToolbarAction::Mute => {
-                        app.muted = !app.muted;
-                        muted_flag.store(app.muted, Ordering::Relaxed);
-                    }
-                }
-                return Ok(());
-            }
-        }
         return Ok(());
     }
 

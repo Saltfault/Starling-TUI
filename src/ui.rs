@@ -2,9 +2,8 @@ use image::RgbImage;
 use iroh::EndpointId;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
-use sha2::{Digest, Sha256};
 use starling::event::{BirdStatus, ChatMessage};
 use starling::protocol::{RoostId, SpaceId};
 use std::collections::{HashMap, HashSet};
@@ -103,6 +102,7 @@ impl ContextPresence {
         }
     }
 
+    #[allow(dead_code)]
     pub fn live_ids(&self, now: tokio::time::Instant) -> Vec<EndpointId> {
         self.ordered_ids
             .iter()
@@ -259,16 +259,6 @@ impl SpringScroll {
         let index = self.current.round() as isize + visible_row as isize;
         (index >= 0).then_some(index as usize)
     }
-}
-
-#[derive(Clone, Copy)]
-pub enum ToolbarAction {
-    Menu,
-    Leave,
-    #[cfg(feature = "audio")]
-    Call,
-    #[cfg(feature = "audio")]
-    Mute,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -707,6 +697,7 @@ impl App {
     /// base join code (so the caller can send [`Command::Leave`] to tear down
     /// the gossip subscription) and a display title for a status message, or
     /// `None` when no context is active or it has no join code to leave by.
+    #[allow(dead_code)]
     pub fn leave_active_context(&mut self) -> Option<(String, String)> {
         let active = self.active?;
         let context = self.contexts.get(&active)?;
@@ -827,19 +818,12 @@ impl App {
         }
     }
 
+    #[allow(dead_code)]
     pub fn visible_status_notice(&self, now: Instant) -> Option<&str> {
         self.status_notice.as_deref().filter(|_| {
             self.status_notice_expires_at
                 .is_none_or(|expires_at| now < expires_at)
         })
-    }
-
-    pub fn live_member_count(&self, space: starling::protocol::SpaceId) -> usize {
-        self.presence
-            .contexts
-            .get(&space)
-            .map(|p| p.live_ids(tokio::time::Instant::now()).len())
-            .unwrap_or(0)
     }
 
     pub fn active_code(&self) -> Option<&str> {
@@ -1182,55 +1166,6 @@ impl App {
     }
 }
 
-pub fn toolbar_buttons(app: &App) -> Vec<(ToolbarAction, &'static str, u16, u16)> {
-    let labels: Vec<(ToolbarAction, &'static str)> = std::iter::once((
-        ToolbarAction::Menu,
-        if app.show_menu { "Close" } else { "Menu" },
-    ))
-    .chain(std::iter::once((ToolbarAction::Leave, "Leave")))
-    .chain({
-        #[cfg(feature = "audio")]
-        {
-            vec![
-                (
-                    ToolbarAction::Call,
-                    if app.in_call { "Hang up" } else { "Call" },
-                ),
-                (
-                    ToolbarAction::Mute,
-                    if app.muted { "Unmute" } else { "Mute" },
-                ),
-            ]
-            .into_iter()
-        }
-        #[cfg(not(feature = "audio"))]
-        {
-            std::iter::empty()
-        }
-    })
-    .chain({
-        #[cfg(feature = "video")]
-        {
-            std::iter::empty()
-        }
-        #[cfg(not(feature = "video"))]
-        {
-            std::iter::empty()
-        }
-    })
-    .collect();
-    let mut x = 0u16;
-    labels
-        .into_iter()
-        .map(|(action, label)| {
-            let width = label.len() as u16 + 2;
-            let button = (action, label, x, width);
-            x += width + 1;
-            button
-        })
-        .collect()
-}
-
 pub fn hex_to_color(hex: &str) -> Option<Color> {
     let h = hex.trim_start_matches('#');
     if h.len() != 6 {
@@ -1276,23 +1211,22 @@ pub fn draw(f: &mut Frame, app: &App) {
         );
     }
 
-    let chunks = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(1),
-        Constraint::Length(1),
-        Constraint::Length(3),
-    ])
-    .split(area);
-
-    draw_header(f, app, chunks[0]);
-
-    let columns = Layout::horizontal([
-        Constraint::Length(12),
-        Constraint::Length(28),
-        Constraint::Min(1),
-        Constraint::Length(27),
-    ])
-    .split(chunks[1]);
+    let columns = if matches!(app.v2_view, V2View::Home) {
+        Layout::horizontal([
+            Constraint::Length(6),
+            Constraint::Length(20),
+            Constraint::Min(1),
+        ])
+        .split(area)
+    } else {
+        Layout::horizontal([
+            Constraint::Length(6),
+            Constraint::Length(20),
+            Constraint::Min(1),
+            Constraint::Length(20),
+        ])
+        .split(area)
+    };
 
     draw_server_rail(f, app, columns[0]);
     draw_sidebar(f, app, columns[1]);
@@ -1300,12 +1234,6 @@ pub fn draw(f: &mut Frame, app: &App) {
     if matches!(app.v2_view, V2View::Space) {
         draw_members(f, app, columns[3]);
     }
-    draw_button_bar(f, app, chunks[2]);
-    f.render_widget(
-        Paragraph::new(app.input.as_str())
-            .block(Block::default().borders(Borders::ALL).title(" message ")),
-        chunks[3],
-    );
     if app.in_call {
         draw_call_overlay(f, app);
     }
@@ -1338,57 +1266,22 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
-fn draw_header(f: &mut Frame, app: &App, area: Rect) {
-    let header = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
-    let code = app.active_code().unwrap_or("");
-    let swatches = color_swatches(code);
-    if !swatches.is_empty() {
-        f.render_widget(Line::from(swatches), header[0]);
-    }
-    if !code.is_empty() {
-        f.render_widget(
-            Paragraph::new(format!(" starling://join/{code}"))
-                .style(Style::new().fg(app.palette.invite)),
-            header[1],
-        );
-    }
-    if let Some(ref code) = app.joining {
-        let line = Line::from(vec![
-            Span::raw(" Joining "),
-            Span::styled(code.as_str(), Style::new().fg(app.palette.accent)),
-            Span::raw("..."),
-        ]);
-        f.render_widget(line, header[1]);
-    }
-}
-
 fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
     let mut items = Vec::new();
     let home_active = matches!(app.v2_view, V2View::Home);
-    items.push(ListItem::new(Line::from(vec![
-        Span::styled(
-            if home_active { "▎" } else { " " },
-            Style::new().fg(Color::Rgb(255, 255, 255)),
-        ),
-        Span::styled(
-            "(*)",
-            Style::new()
-                .fg(if home_active {
-                    Color::Rgb(255, 255, 255)
-                } else {
-                    app.palette.dim
-                })
-                .add_modifier(if home_active {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ),
-        Span::raw(" Home"),
-    ])));
     items.push(ListItem::new(Line::from(vec![Span::styled(
-        "──────────",
-        Style::new().fg(app.palette.dim),
+        if home_active { "(*)" } else { "(*)" },
+        Style::new()
+            .fg(if home_active {
+                Color::Rgb(255, 255, 255)
+            } else {
+                app.palette.dim
+            })
+            .add_modifier(if home_active {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
     )])));
 
     for (index, flock) in app.flocks.iter().enumerate() {
@@ -1404,36 +1297,24 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
             .next()
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_default();
-        let mut spans = vec![
-            Span::styled(
-                if active { "▎" } else { " " },
-                Style::new().fg(Color::Rgb(255, 255, 255)),
-            ),
-            Span::styled(
-                format!("({initial})"),
-                Style::new()
-                    .fg(if active {
-                        Color::Rgb(255, 255, 255)
-                    } else {
-                        app.palette.dim
-                    })
-                    .add_modifier(if active {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
-            ),
-        ];
-        if flock.unread > 0 {
-            spans.push(Span::styled(
-                format!(" {label} {}", flock.unread),
-                Style::new()
-                    .fg(Color::Rgb(255, 255, 255))
-                    .bg(Color::Rgb(242, 63, 67))
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
-        items.push(ListItem::new(Line::from(spans)));
+        let unread = flock.unread > 0;
+        let icon = format!("({initial}{})", if unread { "•" } else { " " });
+        items.push(ListItem::new(Line::from(vec![Span::styled(
+            icon,
+            Style::new()
+                .fg(if active {
+                    Color::Rgb(255, 255, 255)
+                } else if unread {
+                    app.palette.accent
+                } else {
+                    app.palette.dim
+                })
+                .add_modifier(if active || unread {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        )])));
     }
 
     for (index, roost) in app.roosts.iter().enumerate() {
@@ -1449,43 +1330,32 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
             .next()
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_default();
-        let mut spans = vec![
-            Span::styled(
-                if active { "▎" } else { " " },
-                Style::new().fg(Color::Rgb(255, 255, 255)),
-            ),
-            Span::styled(
-                format!("({initial})"),
-                Style::new()
-                    .fg(if active {
-                        Color::Rgb(255, 255, 255)
-                    } else {
-                        app.palette.dim
-                    })
-                    .add_modifier(if active {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
-            ),
-        ];
-        if roost.unread > 0 {
-            spans.push(Span::styled(
-                format!(" {label} {}", roost.unread),
-                Style::new()
-                    .fg(Color::Rgb(255, 255, 255))
-                    .bg(Color::Rgb(242, 63, 67))
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
-        items.push(ListItem::new(Line::from(spans)));
+        let unread = roost.unread > 0;
+        let icon = format!("({initial}{})", if unread { "•" } else { " " });
+        items.push(ListItem::new(Line::from(vec![Span::styled(
+            icon,
+            Style::new()
+                .fg(if active {
+                    Color::Rgb(255, 255, 255)
+                } else if unread {
+                    app.palette.accent
+                } else {
+                    app.palette.dim
+                })
+                .add_modifier(if active || unread {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        )])));
     }
     f.render_widget(
         List::new(items).block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::RIGHT)
                 .bg(Color::Rgb(30, 31, 34))
-                .title(" servers "),
+                .title_alignment(Alignment::Center)
+                .title(""),
         ),
         area,
     );
@@ -1573,7 +1443,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         List::new(items).block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::RIGHT)
                 .bg(Color::Rgb(43, 45, 49))
                 .title(" sidebar "),
         ),
@@ -1615,21 +1485,17 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let title = match app.v2_view {
         V2View::Home => app
             .selected_dm
-            .map(|peer| format!("DM: {}", app.peer_display_name(&peer)))
-            .unwrap_or_else(|| "Direct messages".to_string()),
+            .map(|peer| format!("@{}", app.peer_display_name(&peer)))
+            .unwrap_or_else(|| "Friends".to_string()),
         V2View::Space => app.active_title(),
     };
     let topic = match app.v2_view {
-        V2View::Home => if app.selected_dm.is_some() {
-            "Direct conversation"
-        } else {
-            "Select a peer from the sidebar"
-        }
-        .to_string(),
-        V2View::Space => "Messages and presence".to_string(),
+        V2View::Home => if app.selected_dm.is_some() { "" } else { "" }.to_string(),
+        V2View::Space => "General discussion".to_string(),
     };
     let call_label = if app.in_call { "[HANG UP]" } else { "[CALL]" };
     let header = Paragraph::new(Line::from(vec![
+        Span::styled("#", Style::new().fg(app.palette.dim)),
         Span::styled(
             title.clone(),
             Style::new()
@@ -1647,7 +1513,7 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         ),
     ]))
     .block(Block::default().borders(Borders::BOTTOM));
-    f.render_widget(header, Rect::new(area.x, area.y, area.width, 2));
+    f.render_widget(header, Rect::new(area.x, area.y, area.width, 1));
 
     let rows: Vec<ListItem> = match app.v2_view {
         V2View::Home => vec![ListItem::new(Span::styled(
@@ -1713,19 +1579,23 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     };
     let body = Rect::new(
         area.x,
-        area.y + 2,
+        area.y + 1,
         area.width,
         area.height.saturating_sub(2),
     );
     f.render_widget(
         List::new(rows).block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::NONE)
                 .bg(Color::Rgb(49, 51, 56))
-                .title(" chat "),
+                .title(""),
         ),
         body,
     );
+
+    let input_y = area.y + area.height.saturating_sub(1);
+    let input_area = Rect::new(area.x, input_y, area.width, 1);
+    draw_message_bar(f, app, input_area);
 }
 
 fn draw_members(f: &mut Frame, app: &App, area: Rect) {
@@ -1793,7 +1663,7 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         List::new(items).block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::LEFT)
                 .bg(Color::Rgb(43, 45, 49))
                 .title(" members "),
         ),
@@ -1801,47 +1671,52 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn status_text(app: &App) -> String {
-    if let Some(notice) = app.visible_status_notice(Instant::now()) {
-        notice.to_string()
-    } else if app.joining.is_some() {
-        "Joining...".into()
-    } else if app.in_call {
-        format!("in call{}", if app.muted { " . muted" } else { " . live" })
-    } else if let Some(active) = app.active {
-        format!("{} live", app.live_member_count(active))
+fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::horizontal([
+        Constraint::Length(1),
+        Constraint::Length(area.width.saturating_sub(2)),
+        Constraint::Length(1),
+    ])
+    .split(area);
+
+    f.render_widget(
+        Span::styled("+", Style::new().fg(app.palette.dim)),
+        chunks[0],
+    );
+
+    let placeholder = match app.v2_view {
+        V2View::Home => {
+            if let Some(peer) = app.selected_dm {
+                format!("Message @{}", app.peer_display_name(&peer))
+            } else {
+                "Message".to_string()
+            }
+        }
+        V2View::Space => format!("Message #{}", app.active_title()),
+    };
+    let input_text = if app.input.is_empty() {
+        placeholder
     } else {
-        String::new()
-    }
-}
-fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
-    let mut spans = Vec::new();
-    for (action, label, _x, _w) in toolbar_buttons(app) {
-        let enabled = match action {
-            ToolbarAction::Leave => app.active_context().is_some(),
-            #[cfg(feature = "audio")]
-            ToolbarAction::Call => app.in_call || app.selected_peer_id().is_some(),
-            _ => true,
-        };
-        let color = if enabled {
-            app.palette.accent
-        } else {
-            app.palette.dim
-        };
-        spans.push(Span::styled("[", Style::new().fg(color)));
-        spans.push(Span::styled(label, Style::new().fg(color)));
-        spans.push(Span::styled("]", Style::new().fg(color)));
-        spans.push(Span::raw(" "));
-    }
-    let status = app
-        .error_message
-        .clone()
-        .unwrap_or_else(|| status_text(app));
-    if !status.is_empty() {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(status, Style::new().fg(app.palette.dim)));
-    }
-    f.render_widget(Line::from(spans), area);
+        app.input.clone()
+    };
+    let input_color = if app.input.is_empty() {
+        app.palette.dim
+    } else {
+        app.palette.text
+    };
+    f.render_widget(
+        Paragraph::new(input_text)
+            .style(Style::new().fg(input_color))
+            .wrap(Wrap { trim: false }),
+        chunks[1],
+    );
+
+    let right = if app.input.is_empty() {
+        Span::styled("◎", Style::new().fg(app.palette.dim))
+    } else {
+        Span::styled("▶", Style::new().fg(app.palette.accent))
+    };
+    f.render_widget(right, chunks[2]);
 }
 
 fn draw_call_overlay(f: &mut Frame, app: &App) {
@@ -2514,62 +2389,6 @@ fn draw_input_popup(f: &mut Frame, title: &str, prompt: &str, value: &str, hint:
     );
 }
 
-fn color_swatches(code: &str) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    for (r, g, b) in parse_color_code(code) {
-        let full = Color::Rgb(r, g, b);
-        let half = Color::Rgb(r / 2, g / 2, b / 2);
-        spans.push(Span::styled("\u{2580}", Style::new().fg(full).bg(half)));
-        spans.push(Span::styled("\u{2584}", Style::new().fg(full).bg(half)));
-        spans.push(Span::raw(" "));
-    }
-    spans
-}
-
-fn parse_color_code(code: &str) -> Vec<(u8, u8, u8)> {
-    let compact = code.trim();
-    if !compact.is_empty()
-        && !compact.contains('-')
-        && compact.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return compact
-            .as_bytes()
-            .chunks_exact(6)
-            .filter_map(|group| {
-                let group = std::str::from_utf8(group).ok()?;
-                Some((
-                    u8::from_str_radix(&group[0..2], 16).ok()?,
-                    u8::from_str_radix(&group[2..4], 16).ok()?,
-                    u8::from_str_radix(&group[4..6], 16).ok()?,
-                ))
-            })
-            .collect();
-    }
-
-    let mut colors = Vec::new();
-    for group in code.split('-') {
-        if group == "BIRD" || group.len() != 6 {
-            continue;
-        }
-        if let (Ok(r), Ok(g), Ok(b)) = (
-            u8::from_str_radix(&group[0..2], 16),
-            u8::from_str_radix(&group[2..4], 16),
-            u8::from_str_radix(&group[4..6], 16),
-        ) {
-            colors.push((r, g, b));
-        }
-    }
-    if colors.is_empty() && !code.is_empty() {
-        colors.extend(
-            Sha256::digest(code.as_bytes())
-                .chunks_exact(3)
-                .take(6)
-                .map(|chunk| (chunk[0], chunk[1], chunk[2])),
-        );
-    }
-    colors
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2915,12 +2734,6 @@ mod tests {
 
         assert_eq!(scroll.row_index(0), Some(4));
         assert_eq!(scroll.row_index(3), Some(7));
-    }
-
-    #[test]
-    fn hexadecimal_codes_map_directly_to_colors() {
-        let colors = parse_color_code("001122AABBCC");
-        assert_eq!(colors, vec![(0x00, 0x11, 0x22), (0xAA, 0xBB, 0xCC)]);
     }
 
     #[test]
