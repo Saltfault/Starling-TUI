@@ -2163,12 +2163,24 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
         ),
     };
     let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
-    let gift_icon = TerminalIcon::Gift.glyph(app.icon_style);
     let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
     let send_icon = TerminalIcon::Send.glyph(app.icon_style);
 
+    // Draw the border first. The content is rendered afterward so the
+    // border widget cannot paint over the controls and placeholder.
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(border_color))
+            .bg(input_bg),
+        outer,
+    );
+    let content = outer.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     let value = if app.input.is_empty() {
-        placeholder.clone()
+        placeholder
     } else {
         app.input.clone()
     };
@@ -2177,43 +2189,31 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Color::Rgb(219, 222, 225)
     };
-
-    let inner = outer.inner(Margin {
-        horizontal: 1,
-        vertical: 0,
-    });
-    let bar_text = format!("{}  {}  {} {}", plus_icon, gift_icon, value, emoji_icon);
+    let left = format!("{} {}", plus_icon, value);
+    let right = format!("{} {}", emoji_icon, send_icon);
+    let right_width = right.chars().count() as u16;
+    let left_area = Rect {
+        x: content.x,
+        y: content.y,
+        width: content.width.saturating_sub(right_width),
+        height: content.height,
+    };
     f.render_widget(
-        Paragraph::new(bar_text)
+        Paragraph::new(left)
             .style(Style::new().fg(input_color).bg(input_bg))
-            .wrap(Wrap { trim: false })
             .alignment(Alignment::Left),
-        Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width.saturating_sub(3),
-            height: inner.height,
-        },
+        left_area,
     );
     f.render_widget(
-        Paragraph::new(send_icon)
-            .style(Style::new().fg(app.palette.accent).bg(input_bg))
+        Paragraph::new(right)
+            .style(Style::new().fg(input_color).bg(input_bg))
             .alignment(Alignment::Right),
         Rect {
-            x: inner.x + inner.width.saturating_sub(3),
-            y: inner.y,
-            width: 3,
-            height: inner.height,
+            x: content.x + content.width.saturating_sub(right_width),
+            y: content.y,
+            width: right_width.min(content.width),
+            height: content.height,
         },
-    );
-    f.render_widget(
-        Paragraph::new(" ").style(Style::new().bg(input_bg)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::new().fg(border_color))
-                .bg(input_bg),
-        ),
-        outer,
     );
 }
 
