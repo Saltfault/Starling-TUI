@@ -354,6 +354,11 @@ pub struct App {
     pub context_menu_items: Vec<ContextMenuItem>,
     pub role_submenu_target: Option<EndpointId>,
     pub role_submenu_selection: usize,
+    pub v2_view: V2View,
+    pub profile_panel: LocalProfilePanel,
+    pub settings_open: bool,
+    pub accent_input: String,
+    pub selected_dm: Option<EndpointId>,
 }
 
 impl Default for App {
@@ -420,8 +425,52 @@ impl Default for App {
             bird_profile_peer: None,
             my_perms: starling::roost::perms::Perm::empty(),
             peer_roles: HashMap::new(),
+            v2_view: V2View::Home,
+            profile_panel: LocalProfilePanel::default(),
+            settings_open: false,
+            accent_input: "#6FAE9D".to_string(),
+            selected_dm: None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum V2View {
+    #[default]
+    Home,
+    Space,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ProfileField {
+    #[default]
+    Name,
+    Avatar,
+    Banner,
+    AboutMe,
+    Pronouns,
+    Motd,
+    CustomStatus,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LocalProfilePanel {
+    pub open: bool,
+    pub editing: bool,
+    pub field: ProfileField,
+    pub avatar_label: String,
+    pub banner: String,
+    pub about_me: String,
+    pub pronouns: String,
+    pub motd: String,
+    pub custom_status: String,
+    pub draft_name: String,
+    pub draft_avatar_label: String,
+    pub draft_banner: String,
+    pub draft_about_me: String,
+    pub draft_pronouns: String,
+    pub draft_motd: String,
+    pub draft_custom_status: String,
 }
 
 pub enum Popup {
