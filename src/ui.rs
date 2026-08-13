@@ -359,6 +359,7 @@ pub struct App {
     pub settings_open: bool,
     pub accent_input: String,
     pub selected_dm: Option<EndpointId>,
+    pub icon_style: IconStyle,
 }
 
 impl Default for App {
@@ -430,6 +431,7 @@ impl Default for App {
             settings_open: false,
             accent_input: "#6FAE9D".to_string(),
             selected_dm: None,
+            icon_style: IconStyle::from_env(),
         }
     }
 }
@@ -471,6 +473,86 @@ pub struct LocalProfilePanel {
     pub draft_pronouns: String,
     pub draft_motd: String,
     pub draft_custom_status: String,
+}
+
+// Keep the preference in App so every renderer uses one consistent glyph policy.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum IconStyle {
+    NerdFont,
+    #[default]
+    Unicode,
+    Ascii,
+}
+
+impl IconStyle {
+    pub fn from_env() -> Self {
+        match std::env::var("STARLING_ICON_STYLE").ok().as_deref() {
+            Some("nerd") | Some("nerdfont") => Self::NerdFont,
+            Some("ascii") => Self::Ascii,
+            Some("unicode") => Self::Unicode,
+            _ => Self::Unicode,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TerminalIcon {
+    Home,
+    Text,
+    Voice,
+    Call,
+    Video,
+    Members,
+}
+
+impl TerminalIcon {
+    fn nerd_font(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Home => "\u{f015}",
+            Self::Text => "\u{f075}",
+            Self::Voice => "\u{f130}",
+            Self::Call => "\u{f095}",
+            Self::Video => "\u{f03d}",
+            Self::Members => "\u{f0c0}",
+        })
+    }
+
+    fn unicode(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Home => "⌂",
+            Self::Text => "▤",
+            Self::Voice => "♫",
+            Self::Call => "☎",
+            Self::Video => "▣",
+            Self::Members => "♟",
+        })
+    }
+
+    fn ascii(self) -> &'static str {
+        match self {
+            Self::Home => "[H]",
+            Self::Text => "[T]",
+            Self::Voice => "[V]",
+            Self::Call => "[C]",
+            Self::Video => "[D]",
+            Self::Members => "[M]",
+        }
+    }
+
+    fn glyph(self, style: IconStyle) -> &'static str {
+        match style {
+            IconStyle::NerdFont => self
+                .nerd_font()
+                .or_else(|| self.unicode())
+                .unwrap_or_else(|| self.ascii()),
+            IconStyle::Unicode => self.unicode().unwrap_or_else(|| self.ascii()),
+            IconStyle::Ascii => self.ascii(),
+        }
+    }
+}
+
+fn icon_span(icon: TerminalIcon, style: IconStyle, color: Color) -> Span<'static> {
+    Span::styled(format!("{} ", icon.glyph(style)), Style::new().fg(color))
 }
 
 pub enum Popup {
