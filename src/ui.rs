@@ -358,6 +358,7 @@ pub struct App {
     pub profile_panel: LocalProfilePanel,
     pub settings_open: bool,
     pub accent_input: String,
+    pub settings_tab: SettingsTab,
     pub selected_dm: Option<EndpointId>,
     pub icon_style: IconStyle,
 }
@@ -429,6 +430,7 @@ impl Default for App {
             v2_view: V2View::Home,
             profile_panel: LocalProfilePanel::default(),
             settings_open: false,
+            settings_tab: SettingsTab::default(),
             accent_input: "#6FAE9D".to_string(),
             selected_dm: None,
             icon_style: IconStyle::from_env(),
@@ -453,6 +455,16 @@ pub enum ProfileField {
     Pronouns,
     Motd,
     CustomStatus,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SettingsTab {
+    #[default]
+    Account,
+    Voice,
+    Appearance,
+    Notifications,
+    Keybinds,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1875,7 +1887,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App) {
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .title(" SETTINGS / APPEARANCE ")
+            .title(" SETTINGS ")
             .border_style(Style::new().fg(app.palette.accent)),
         area,
     );
@@ -1883,11 +1895,49 @@ fn draw_settings_modal(f: &mut Frame, app: &App) {
         vertical: 1,
         horizontal: 2,
     });
-    let text = format!(
-        "Accent color\n{}\n\nEnter a #RRGGBB value.\n[ENTER APPLY]  [ESC CLOSE]",
-        app.accent_input
-    );
-    f.render_widget(Paragraph::new(text), inner);
+    let columns = Layout::horizontal([Constraint::Length(18), Constraint::Min(1)]).split(inner);
+
+    let tabs: Vec<ListItem> = [
+        (SettingsTab::Account, "My Account"),
+        (SettingsTab::Voice, "Voice & Video"),
+        (SettingsTab::Appearance, "Appearance"),
+        (SettingsTab::Notifications, "Notifications"),
+        (SettingsTab::Keybinds, "Keybinds"),
+    ]
+    .iter()
+    .map(|(tab, label)| {
+        let selected = app.settings_tab == *tab;
+        let style = if selected {
+            Style::new()
+                .fg(app.palette.selection)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(app.palette.text)
+        };
+        ListItem::new(Span::styled(label.to_string(), style))
+    })
+    .collect();
+    f.render_widget(List::new(tabs), columns[0]);
+
+    let content: String = match app.settings_tab {
+        SettingsTab::Account => {
+            "Display name\n  you\n\nEmail\n  you@starling.local".to_string()
+        }
+        SettingsTab::Voice => {
+            "Input device\n  Default\n\nOutput device\n  Default\n\nPush to Talk\n  Off\n\nNoise suppression\n  On".to_string()
+        }
+        SettingsTab::Appearance => format!(
+            "Theme\n  Dark\n\nAccent color\n  {}\n\nCompact mode\n  Off\n\nShow avatars\n  On\n\n\nEnter a #RRGGBB value.\n[ENTER APPLY]  [ESC CLOSE]",
+            app.accent_input
+        ),
+        SettingsTab::Notifications => {
+            "Desktop notifications\n  On\n\nMute @everyone\n  Off\n\nSounds\n  On".to_string()
+        }
+        SettingsTab::Keybinds => {
+            "Mark server read\n  Shift + Esc\n\nToggle mute\n  Ctrl + Shift + M\n\nToggle deafen\n  Ctrl + Shift + D\n\nAnswer call\n  Ctrl + Enter".to_string()
+        }
+    };
+    f.render_widget(Paragraph::new(content), columns[1]);
 }
 
 fn draw_create_room_popup(f: &mut Frame, app: &App) {

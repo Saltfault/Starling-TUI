@@ -218,7 +218,35 @@ fn handle_settings_key(
     key: &KeyEvent,
 ) -> anyhow::Result<()> {
     match key.code {
-        KeyCode::Enter => {
+        KeyCode::Left => {
+            let tabs = [
+                ui::SettingsTab::Account,
+                ui::SettingsTab::Voice,
+                ui::SettingsTab::Appearance,
+                ui::SettingsTab::Notifications,
+                ui::SettingsTab::Keybinds,
+            ];
+            let pos = tabs
+                .iter()
+                .position(|t| *t == app.settings_tab)
+                .unwrap_or(0);
+            app.settings_tab = tabs[pos.saturating_sub(1)];
+        }
+        KeyCode::Right => {
+            let tabs = [
+                ui::SettingsTab::Account,
+                ui::SettingsTab::Voice,
+                ui::SettingsTab::Appearance,
+                ui::SettingsTab::Notifications,
+                ui::SettingsTab::Keybinds,
+            ];
+            let pos = tabs
+                .iter()
+                .position(|t| *t == app.settings_tab)
+                .unwrap_or(0);
+            app.settings_tab = tabs[(pos + 1).min(tabs.len() - 1)];
+        }
+        KeyCode::Enter if app.settings_tab == ui::SettingsTab::Appearance => {
             let value = app.accent_input.clone();
             if ui::apply_accent_color(app, &value) {
                 profile.accent_color = value;
@@ -227,10 +255,10 @@ fn handle_settings_key(
                 app.error_message = Some("Use #RRGGBB".into());
             }
         }
-        KeyCode::Backspace => {
+        KeyCode::Backspace if app.settings_tab == ui::SettingsTab::Appearance => {
             app.accent_input.pop();
         }
-        KeyCode::Char(c) => {
+        KeyCode::Char(c) if app.settings_tab == ui::SettingsTab::Appearance => {
             if "#0123456789abcdefABCDEF".contains(c) && app.accent_input.len() < 7 {
                 app.accent_input.push(c);
             }
