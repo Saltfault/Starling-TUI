@@ -1437,6 +1437,10 @@ fn handle_normal_key(
             }
         }
 
+        KeyCode::Char('v' | 'V') if app.in_call => {
+            toggle_call_video(app, cmd_tx);
+        }
+
         KeyCode::Char(c) => {
             app.input = sanitize::sanitize_message(&format!("{}{}", app.input, c));
         }
@@ -1841,6 +1845,16 @@ fn handle_mouse_click(
     }
 
     Ok(())
+}
+
+fn toggle_call_video(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
+    app.show_video = !app.show_video;
+    #[cfg(feature = "video")]
+    if app.show_video {
+        let _ = cmd_tx.send(Command::StartVideo(app.peers.clone()));
+    } else {
+        let _ = cmd_tx.send(Command::StopVideo);
+    }
 }
 
 fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {

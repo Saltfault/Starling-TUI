@@ -1164,15 +1164,7 @@ pub fn toolbar_buttons(app: &App) -> Vec<(ToolbarAction, &'static str, u16, u16)
     .chain({
         #[cfg(feature = "video")]
         {
-            vec![(
-                ToolbarAction::Video,
-                if app.show_video {
-                    "Video off"
-                } else {
-                    "Video on"
-                },
-            )]
-            .into_iter()
+            std::iter::empty()
         }
         #[cfg(not(feature = "video"))]
         {
@@ -1880,6 +1872,59 @@ fn draw_button_bar(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(status, Style::new().fg(app.palette.dim)));
     }
     f.render_widget(Line::from(spans), area);
+}
+
+fn draw_call_overlay(f: &mut Frame, app: &App) {
+    let area = centered(f.area(), 62, 14);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" CALL ")
+            .border_style(Style::new().fg(app.palette.accent)),
+        area,
+    );
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .split(inner);
+    f.render_widget(Paragraph::new(app.active_title()), rows[0]);
+    let tiles = app
+        .peers
+        .iter()
+        .map(|peer| {
+            let name = app.peer_display_name(peer);
+            let video = if app.show_video { " VIDEO" } else { " VOICE" };
+            ListItem::new(Line::from(vec![
+                Span::styled(name, Style::new().fg(app.palette.text)),
+                Span::styled(video, Style::new().fg(app.palette.dim)),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(
+        List::new(tiles).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" participants "),
+        ),
+        rows[1],
+    );
+    let mute = if app.muted { "[UNMUTE]" } else { "[MUTE]" };
+    let video = if app.show_video {
+        "[VIDEO OFF]"
+    } else {
+        "[VIDEO ON]"
+    };
+    f.render_widget(
+        Paragraph::new(format!("{mute}  {video}  [HANG UP]")),
+        rows[2],
+    );
 }
 
 pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
