@@ -1294,39 +1294,6 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
             }),
     )])));
 
-    for (index, flock) in app.flocks.iter().enumerate() {
-        let active = matches!(app.selection, Selection::Flock(i) if i == index)
-            && matches!(app.v2_view, V2View::Space);
-        let label = if flock.name.is_empty() {
-            "Flock".to_string()
-        } else {
-            flock.name.clone()
-        };
-        let initial = label
-            .chars()
-            .next()
-            .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_default();
-        let unread = flock.unread > 0;
-        let icon = format!("({initial}{})", if unread { "•" } else { " " });
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            icon,
-            Style::new()
-                .fg(if active {
-                    Color::Rgb(255, 255, 255)
-                } else if unread {
-                    app.palette.accent
-                } else {
-                    app.palette.dim
-                })
-                .add_modifier(if active || unread {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        )])));
-    }
-
     for (index, roost) in app.roosts.iter().enumerate() {
         let active = matches!(app.selection, Selection::Channel(ri, _) if ri == index)
             && matches!(app.v2_view, V2View::Space);
@@ -1418,7 +1385,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
         for peer in app
             .peers
             .iter()
-            .take(chunks[1].height.saturating_sub(2) as usize)
+            .take(chunks[1].height.saturating_sub(4) as usize)
         {
             let name = app.peer_display_name(peer);
             let selected = app.selected_dm == Some(*peer);
@@ -1449,6 +1416,40 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(status_char, Style::new().fg(app.palette.success())),
                 Span::styled(format!(" {}", name), Style::new().fg(fg).bg(bg)),
             ])));
+        }
+        if !app.flocks.is_empty() {
+            items.push(ListItem::new(Line::from(vec![Span::styled(
+                "GROUPS",
+                Style::new()
+                    .fg(app.palette.muted)
+                    .add_modifier(Modifier::BOLD),
+            )])));
+            for (index, flock) in app.flocks.iter().enumerate() {
+                let selected = matches!(app.selection, Selection::Flock(i) if i == index);
+                let fg = if selected {
+                    app.palette.fg_2
+                } else {
+                    app.palette.text
+                };
+                let bg = if selected {
+                    Color::Rgb(78, 80, 88)
+                } else {
+                    app.palette.surface
+                };
+                let mut spans = vec![
+                    Span::styled("+ ", Style::new().fg(app.palette.dim).bg(bg)),
+                    Span::styled(flock.name.clone(), Style::new().fg(fg).bg(bg)),
+                ];
+                if flock.unread > 0 {
+                    spans.push(Span::styled(
+                        format!(" {}", flock.unread),
+                        Style::new()
+                            .fg(Color::Rgb(255, 255, 255))
+                            .bg(Color::Rgb(242, 63, 67)),
+                    ));
+                }
+                items.push(ListItem::new(Line::from(spans)));
+            }
         }
     } else {
         match app.selection {
@@ -1551,7 +1552,7 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(1),
+        Constraint::Length(2),
     ])
     .split(area);
 
@@ -1577,7 +1578,11 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::raw("  "),
         Span::styled(topic, Style::new().fg(app.palette.muted)),
+        Span::raw(" "),
+        Span::styled("♀", Style::new().fg(app.palette.muted)),
+        Span::raw(" 🔔 ✆"),
     ]))
+    .alignment(Alignment::Left)
     .block(
         Block::default()
             .borders(Borders::BOTTOM)
@@ -1751,7 +1756,8 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
-    let inner = area.inner(Margin {
+    let input_bg = app.palette.surface;
+    let outer = area.inner(Margin {
         horizontal: 1,
         vertical: 0,
     });
@@ -1766,22 +1772,24 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
         }
         V2View::Space => format!("Message #{}", app.active_title()),
     };
-    let input_text = if app.input.is_empty() {
-        format!("+ {}  ✉ ▶", placeholder)
+    let display = if app.input.is_empty() {
+        format!("+  {} ", placeholder)
     } else {
-        format!("+ {} ✉ ▶", app.input)
+        format!("+  {} ", app.input)
     };
     let input_color = if app.input.is_empty() {
         app.palette.dim
     } else {
         app.palette.text
     };
+    let right = format!(" 🎁 😊 ➤");
+    let full = format!("{}{}", display, right);
 
     f.render_widget(
-        Paragraph::new(input_text)
-            .style(Style::new().fg(input_color).bg(app.palette.surface))
+        Paragraph::new(full)
+            .style(Style::new().fg(input_color).bg(input_bg))
             .wrap(Wrap { trim: false }),
-        inner,
+        outer,
     );
     f.render_widget(
         Paragraph::new("").block(
