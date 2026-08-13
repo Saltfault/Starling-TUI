@@ -10,7 +10,7 @@ use starling::protocol::{RoostId, SpaceId};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-const DEFAULT_ACCENT: Color = Color::Rgb(111, 174, 157);
+const DEFAULT_ACCENT: Color = Color::Rgb(88, 101, 242);
 const DEFAULT_AUTHOR: Color = Color::Rgb(244, 138, 82);
 const DEFAULT_SELECTION: Color = Color::Rgb(224, 210, 103);
 const DEFAULT_DIM: Color = Color::Rgb(95, 104, 98);
@@ -44,9 +44,9 @@ impl Default for Palette {
             dim: DEFAULT_DIM,
             channel: DEFAULT_CHANNEL,
             invite: DEFAULT_INVITE,
-            hover: Color::Rgb(131, 194, 177),
-            active: Color::Rgb(126, 189, 172),
-            focus_ring: Color::Rgb(180, 230, 214),
+            hover: Color::Rgb(105, 118, 245),
+            active: Color::Rgb(88, 101, 242),
+            focus_ring: Color::Rgb(160, 170, 255),
         }
     }
 }
@@ -431,7 +431,7 @@ impl Default for App {
             profile_panel: LocalProfilePanel::default(),
             settings_open: false,
             settings_tab: SettingsTab::default(),
-            accent_input: "#6FAE9D".to_string(),
+            accent_input: "#5865F2".to_string(),
             selected_dm: None,
             icon_style: IconStyle::from_env(),
         }
