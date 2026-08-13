@@ -291,6 +291,7 @@ const NOTICE_DURATION: Duration = Duration::from_secs(4);
 
 pub struct App {
     pub name: String,
+    pub tag: String,
     pub pronouns: String,
     pub flocks: Vec<FlockView>,
     pub roosts: Vec<RoostView>,
@@ -364,6 +365,7 @@ pub struct App {
     pub profile_panel: LocalProfilePanel,
     pub settings_open: bool,
     pub notifications_muted: bool,
+    pub call_title: String,
     pub accent_input: String,
     pub settings_tab: SettingsTab,
     pub selected_dm: Option<EndpointId>,
@@ -374,6 +376,7 @@ impl Default for App {
     fn default() -> Self {
         Self {
             name: String::new(),
+            tag: "#7134".to_string(),
             pronouns: String::new(),
             flocks: Vec::new(),
             roosts: Vec::new(),
@@ -441,6 +444,7 @@ impl Default for App {
             settings_open: false,
             settings_tab: SettingsTab::default(),
             notifications_muted: false,
+            call_title: "Call".to_string(),
             accent_input: "#5865F2".to_string(),
             selected_dm: None,
             icon_style: IconStyle::from_env(),
@@ -1453,33 +1457,56 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
     let rail_bg = Color::Rgb(30, 31, 34);
     let pill_bg = Color::Rgb(43, 45, 49);
     let active_bg = Color::Rgb(88, 101, 242);
-    let muted = Color::Rgb(148, 155, 164);
     let fg = Color::Rgb(242, 243, 245);
 
-    let mut items = Vec::new();
+    f.render_widget(
+        Block::default()
+            .borders(Borders::RIGHT)
+            .border_style(Style::new().fg(Color::Rgb(49, 51, 56)).bg(rail_bg))
+            .bg(rail_bg),
+        area,
+    );
+
+    let pill_w = 6u16.min(area.width.saturating_sub(2)).max(4);
+    let pad_x = (area.width.saturating_sub(pill_w)) / 2;
     let home_active = matches!(app.v2_view, V2View::Home);
-    let home_label = TerminalIcon::Home.glyph(app.icon_style);
-    let home_bg = if home_active { active_bg } else { pill_bg };
-    let home_text_fg = if home_active {
-        Color::Rgb(255, 255, 255)
-    } else {
-        fg
+    let home_rect = Rect {
+        x: area.x + pad_x,
+        y: area.y + 1,
+        width: pill_w,
+        height: 3,
     };
-    let home_margin = if home_active { "▎" } else { "  " };
-    items.push(ListItem::new(Line::from(vec![
-        Span::styled(home_margin, Style::new().fg(rail_bg).bg(rail_bg)),
-        Span::styled(
-            format!("{} {} ", home_margin, home_label),
-            Style::new().fg(home_text_fg).bg(home_bg),
-        ),
-        Span::styled("", Style::new().bg(rail_bg)),
-    ])));
-    items.push(ListItem::new(Line::from(vec![Span::styled(
-        "─────────",
-        Style::new().fg(muted),
-    )])));
+    draw_server_pill(
+        f,
+        &TerminalIcon::Home.glyph(app.icon_style),
+        home_active,
+        false,
+        home_rect,
+        rail_bg,
+        pill_bg,
+        active_bg,
+        fg,
+    );
+
+    let mut y = home_rect.y + home_rect.height + 1;
+    let divider = "─".repeat(pill_w as usize);
+    if y + 1 < area.y + area.height {
+        f.render_widget(
+            Paragraph::new(divider).style(Style::new().fg(Color::Rgb(63, 65, 71)).bg(rail_bg)),
+            Rect {
+                x: area.x + pad_x,
+                y,
+                width: pill_w,
+                height: 1,
+            },
+        );
+        y += 1;
+    }
 
     for (index, roost) in app.roosts.iter().enumerate() {
+        if y + 3 > area.y + area.height {
+            break;
+        }
         let active = matches!(app.selection, Selection::Channel(ri, _) if ri == index)
             && matches!(app.v2_view, V2View::Space);
         let unread = roost.unread > 0;
@@ -1493,46 +1520,63 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
                 .map(|c| c.to_uppercase().to_string())
                 .unwrap_or_else(|| "R".to_string())
         };
-        let bg = if active { active_bg } else { pill_bg };
-        let text_fg = if active || unread {
-            Color::Rgb(255, 255, 255)
-        } else {
-            fg
+        let pill_rect = Rect {
+            x: area.x + pad_x,
+            y,
+            width: pill_w,
+            height: 3,
         };
-        let margin = if active {
-            "▎"
-        } else if unread {
-            "●"
-        } else {
-            " "
-        };
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(
-                margin,
-                Style::new()
-                    .fg(if unread {
-                        Color::Rgb(255, 255, 255)
-                    } else {
-                        rail_bg
-                    })
-                    .bg(rail_bg),
-            ),
-            Span::styled(
-                format!(" {} {} ", margin, label),
-                Style::new().fg(text_fg).bg(bg),
-            ),
-            Span::styled("", Style::new().bg(rail_bg)),
-        ])));
+        draw_server_pill(
+            f, &label, active, unread, pill_rect, rail_bg, pill_bg, active_bg, fg,
+        );
+        y += pill_rect.height + 1;
     }
-    f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::RIGHT)
-                .border_style(Style::new().fg(muted).bg(rail_bg))
-                .bg(rail_bg),
-        ),
-        area,
-    );
+}
+
+fn draw_server_pill(
+    f: &mut Frame,
+    label: &str,
+    active: bool,
+    unread: bool,
+    area: Rect,
+    rail_bg: Color,
+    pill_bg: Color,
+    active_bg: Color,
+    fg: Color,
+) {
+    let bg = if active { active_bg } else { pill_bg };
+    let text_fg = if active || unread {
+        Color::Rgb(255, 255, 255)
+    } else {
+        fg
+    };
+    let indicator = if active {
+        "▎"
+    } else if unread {
+        "●"
+    } else {
+        " "
+    };
+    let indicator_color = if active || unread {
+        Color::Rgb(255, 255, 255)
+    } else {
+        rail_bg
+    };
+    let centered = format!("{:^<1$}", label, area.width as usize);
+    let lines: Vec<Line> = (0..area.height)
+        .map(|row| {
+            let text = if row == area.height / 2 {
+                centered.clone()
+            } else {
+                " ".repeat(area.width as usize)
+            };
+            Line::from(vec![
+                Span::styled(indicator, Style::new().fg(indicator_color).bg(rail_bg)),
+                Span::styled(text, Style::new().fg(text_fg).bg(bg)),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(Text::from(lines)).bg(rail_bg), area);
 }
 
 fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
@@ -1835,9 +1879,22 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         TerminalIcon::Bell
     }
     .glyph(app.icon_style);
+    let pin_icon = TerminalIcon::Pin.glyph(app.icon_style);
     let call_icon = TerminalIcon::Call.glyph(app.icon_style);
     let more_icon = TerminalIcon::More.glyph(app.icon_style);
     let hash_icon = TerminalIcon::Hash.glyph(app.icon_style);
+
+    let button_group = format!(
+        "{} {} {} {} {}",
+        thread_icon, bell_icon, pin_icon, call_icon, more_icon
+    );
+    let available = chunks[0].width.saturating_sub(2) as usize;
+    let title_len = title.chars().count() + 2; // icon + title
+    let topic_len = topic.chars().count();
+    let group_len = button_group.chars().count();
+    let spacer_w = available.saturating_sub(title_len + topic_len + group_len + 2);
+    let spacer = " ".repeat(spacer_w);
+
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             format!("{} ", hash_icon),
@@ -1859,11 +1916,9 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::Rgb(148, 155, 164))
                 .bg(Color::Rgb(49, 51, 56)),
         ),
+        Span::styled(spacer, Style::new().bg(Color::Rgb(49, 51, 56))),
         Span::styled(
-            format!(
-                "    {} {} {}  {}",
-                thread_icon, bell_icon, call_icon, more_icon
-            ),
+            button_group,
             Style::new()
                 .fg(Color::Rgb(148, 155, 164))
                 .bg(Color::Rgb(49, 51, 56)),
@@ -2112,28 +2167,52 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
     let send_icon = TerminalIcon::Send.glyph(app.icon_style);
 
-    let body = if app.input.is_empty() {
-        format!("{} {}  {}", plus_icon, gift_icon, placeholder)
+    let value = if app.input.is_empty() {
+        placeholder.clone()
     } else {
-        format!("{} {}  {}", plus_icon, gift_icon, app.input)
+        app.input.clone()
     };
     let input_color = if app.input.is_empty() {
         Color::Rgb(148, 155, 164)
     } else {
         Color::Rgb(219, 222, 225)
     };
-    let content = format!("{} {} {}", body, emoji_icon, send_icon);
 
+    let inner = outer.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    let bar_text = format!("{}  {}  {} {}", plus_icon, gift_icon, value, emoji_icon);
     f.render_widget(
-        Paragraph::new(content)
+        Paragraph::new(bar_text)
             .style(Style::new().fg(input_color).bg(input_bg))
             .wrap(Wrap { trim: false })
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::new().fg(border_color))
-                    .bg(input_bg),
-            ),
+            .alignment(Alignment::Left),
+        Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width.saturating_sub(3),
+            height: inner.height,
+        },
+    );
+    f.render_widget(
+        Paragraph::new(send_icon)
+            .style(Style::new().fg(app.palette.accent).bg(input_bg))
+            .alignment(Alignment::Right),
+        Rect {
+            x: inner.x + inner.width.saturating_sub(3),
+            y: inner.y,
+            width: 3,
+            height: inner.height,
+        },
+    );
+    f.render_widget(
+        Paragraph::new(" ").style(Style::new().bg(input_bg)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(border_color))
+                .bg(input_bg),
+        ),
         outer,
     );
 }
