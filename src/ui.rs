@@ -1455,6 +1455,86 @@ fn draw_roosts(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
+    let mut items = Vec::new();
+    let home_style = if matches!(app.v2_view, V2View::Home) {
+        Style::new()
+            .fg(app.palette.selection)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(app.palette.text)
+    };
+    items.push(ListItem::new(Line::from(vec![
+        Span::styled("> ", Style::new().fg(app.palette.accent)),
+        icon_span(TerminalIcon::Home, app.icon_style, app.palette.accent),
+        Span::styled("HOME", home_style),
+    ])));
+
+    for (index, flock) in app.flocks.iter().enumerate() {
+        let selected = matches!(app.selection, Selection::Flock(i) if i == index)
+            && matches!(app.v2_view, V2View::Space);
+        let label = if flock.name.is_empty() {
+            "FLOCK"
+        } else {
+            flock.name.as_str()
+        };
+        let unread = if flock.unread > 0 {
+            format!(" <{}>", flock.unread)
+        } else {
+            String::new()
+        };
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                if selected { "> " } else { "  " },
+                Style::new().fg(app.palette.accent),
+            ),
+            Span::styled(
+                format!("[{}]", label),
+                Style::new().fg(if selected {
+                    app.palette.selection
+                } else {
+                    app.palette.text
+                }),
+            ),
+            Span::styled(unread, Style::new().fg(app.palette.selection)),
+        ])));
+    }
+
+    for (index, roost) in app.roosts.iter().enumerate() {
+        let selected = matches!(app.selection, Selection::Channel(ri, _) if ri == index)
+            && matches!(app.v2_view, V2View::Space);
+        let label = if roost.name.is_empty() {
+            "ROOST"
+        } else {
+            roost.name.as_str()
+        };
+        let unread = if roost.unread > 0 {
+            format!(" <{}>", roost.unread)
+        } else {
+            String::new()
+        };
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                if selected { "> " } else { "  " },
+                Style::new().fg(app.palette.accent),
+            ),
+            Span::styled(
+                format!("[{}]", label),
+                Style::new().fg(if selected {
+                    app.palette.selection
+                } else {
+                    app.palette.text
+                }),
+            ),
+            Span::styled(unread, Style::new().fg(app.palette.selection)),
+        ])));
+    }
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::ALL).title(" servers ")),
+        area,
+    );
+}
+
 #[cfg(feature = "video")]
 fn draw_video_grid(f: &mut Frame, app: &App, area: Rect) {
     let mut tiles: Vec<(String, Option<&RgbImage>)> = Vec::new();
