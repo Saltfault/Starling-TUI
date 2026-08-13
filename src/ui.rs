@@ -1430,46 +1430,39 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
-    fn rail_icon(active: bool, unread: bool, label: &str, _palette: &Palette) -> Line<'static> {
-        let bg = if active {
-            Color::Rgb(88, 101, 242)
-        } else {
-            Color::Rgb(43, 45, 49)
-        };
-        let fg = if active {
-            Color::Rgb(255, 255, 255)
-        } else if unread {
-            Color::Rgb(255, 255, 255)
-        } else {
-            Color::Rgb(242, 243, 245)
-        };
-        let indicator = if active {
-            "▎"
-        } else if unread {
-            "●"
-        } else {
-            " "
-        };
-        let text = format!("{} {} ", indicator, label);
-        Line::from(vec![Span::styled(text, Style::new().fg(fg).bg(bg))])
-    }
+    let rail_bg = Color::Rgb(30, 31, 34);
+    let pill_bg = Color::Rgb(43, 45, 49);
+    let active_bg = Color::Rgb(88, 101, 242);
+    let muted = Color::Rgb(148, 155, 164);
+    let fg = Color::Rgb(242, 243, 245);
 
     let mut items = Vec::new();
     let home_active = matches!(app.v2_view, V2View::Home);
-    items.push(ListItem::new(rail_icon(
-        home_active,
-        false,
-        TerminalIcon::Home.glyph(app.icon_style),
-        &app.palette,
-    )));
+    let home_label = TerminalIcon::Home.glyph(app.icon_style);
+    let home_bg = if home_active { active_bg } else { pill_bg };
+    let home_text_fg = if home_active {
+        Color::Rgb(255, 255, 255)
+    } else {
+        fg
+    };
+    let home_margin = if home_active { "▎" } else { "  " };
+    items.push(ListItem::new(Line::from(vec![
+        Span::styled(home_margin, Style::new().fg(rail_bg).bg(rail_bg)),
+        Span::styled(
+            format!("{} {} ", home_margin, home_label),
+            Style::new().fg(home_text_fg).bg(home_bg),
+        ),
+        Span::styled("", Style::new().bg(rail_bg)),
+    ])));
     items.push(ListItem::new(Line::from(vec![Span::styled(
         "─────────",
-        Style::new().fg(Color::Rgb(63, 65, 71)),
+        Style::new().fg(muted),
     )])));
 
     for (index, roost) in app.roosts.iter().enumerate() {
         let active = matches!(app.selection, Selection::Channel(ri, _) if ri == index)
             && matches!(app.v2_view, V2View::Space);
+        let unread = roost.unread > 0;
         let label = if roost.name.is_empty() {
             "R".to_string()
         } else {
@@ -1480,24 +1473,43 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
                 .map(|c| c.to_uppercase().to_string())
                 .unwrap_or_else(|| "R".to_string())
         };
-        let unread = roost.unread > 0;
-        items.push(ListItem::new(rail_icon(
-            active,
-            unread,
-            &label,
-            &app.palette,
-        )));
+        let bg = if active { active_bg } else { pill_bg };
+        let text_fg = if active || unread {
+            Color::Rgb(255, 255, 255)
+        } else {
+            fg
+        };
+        let margin = if active {
+            "▎"
+        } else if unread {
+            "●"
+        } else {
+            " "
+        };
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                margin,
+                Style::new()
+                    .fg(if unread {
+                        Color::Rgb(255, 255, 255)
+                    } else {
+                        rail_bg
+                    })
+                    .bg(rail_bg),
+            ),
+            Span::styled(
+                format!(" {} {} ", margin, label),
+                Style::new().fg(text_fg).bg(bg),
+            ),
+            Span::styled("", Style::new().bg(rail_bg)),
+        ])));
     }
     f.render_widget(
         List::new(items).block(
             Block::default()
                 .borders(Borders::RIGHT)
-                .border_style(
-                    Style::new()
-                        .fg(Color::Rgb(63, 65, 71))
-                        .bg(Color::Rgb(30, 31, 34)),
-                )
-                .bg(Color::Rgb(30, 31, 34)),
+                .border_style(Style::new().fg(muted).bg(rail_bg))
+                .bg(rail_bg),
         ),
         area,
     );
@@ -1928,8 +1940,9 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_members(f: &mut Frame, app: &App, area: Rect) {
     let mut items = Vec::new();
+    let members_icon = TerminalIcon::Members.glyph(app.icon_style);
     items.push(ListItem::new(Line::from(vec![Span::styled(
-        "MEMBERS",
+        format!("{} MEMBERS", members_icon),
         Style::new()
             .fg(Color::Rgb(148, 155, 164))
             .add_modifier(Modifier::BOLD)
@@ -1968,13 +1981,20 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
             BirdStatus::InCall => in_call.push(peer),
         }
     }
-    let groups = [("Online", &online), ("Idle", &idle), ("In Call", &in_call)];
-    for (label, members) in groups {
-        if members.is_empty() {
-            continue;
-        }
+    let sections = [
+        ("Online", online.as_slice()),
+        ("Idle", idle.as_slice()),
+        ("In Call", in_call.as_slice()),
+    ];
+
+    for (label, members) in sections {
+        let header = if label.is_empty() {
+            format!("Members — {}", members.len())
+        } else {
+            format!("{} — {}", label, members.len())
+        };
         items.push(ListItem::new(Line::from(vec![Span::styled(
-            format!("{} — {}", label, members.len()),
+            header,
             Style::new()
                 .fg(Color::Rgb(148, 155, 164))
                 .add_modifier(Modifier::BOLD)
@@ -2021,6 +2041,18 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     let input_bg = Color::Rgb(56, 58, 64);
+    // Draw top border across the whole chat bottom.
+    f.render_widget(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(
+                Style::new()
+                    .fg(Color::Rgb(63, 65, 71))
+                    .bg(Color::Rgb(49, 51, 56)),
+            )
+            .bg(Color::Rgb(49, 51, 56)),
+        area,
+    );
     let outer = area.inner(Margin {
         horizontal: 1,
         vertical: 0,
@@ -2046,38 +2078,26 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     };
     let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
     let gift_icon = TerminalIcon::Gift.glyph(app.icon_style);
-    let left = format!("{} {}  ", plus_icon, gift_icon);
+    let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
+    let send_icon = TerminalIcon::Send.glyph(app.icon_style);
+
     let body = if app.input.is_empty() {
-        format!("{}{}", left, placeholder)
+        format!("{} {}  {}", plus_icon, gift_icon, placeholder)
     } else {
-        format!("{}{}", left, app.input)
+        format!("{} {}  {}", plus_icon, gift_icon, app.input)
     };
     let input_color = if app.input.is_empty() {
         Color::Rgb(148, 155, 164)
     } else {
         Color::Rgb(219, 222, 225)
     };
-    let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
-    let send_icon = TerminalIcon::Send.glyph(app.icon_style);
-    let right = format!(" {} {} ", emoji_icon, send_icon);
-    let content = format!("{}{}", body, right);
+    let content = format!("{} {} {}", body, emoji_icon, send_icon);
 
     f.render_widget(
         Paragraph::new(content)
             .style(Style::new().fg(input_color).bg(input_bg))
             .wrap(Wrap { trim: false }),
         outer,
-    );
-    f.render_widget(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(
-                Style::new()
-                    .fg(Color::Rgb(63, 65, 71))
-                    .bg(Color::Rgb(49, 51, 56)),
-            )
-            .bg(Color::Rgb(49, 51, 56)),
-        area,
     );
 }
 
@@ -2228,20 +2248,27 @@ fn draw_menu_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_settings_modal(f: &mut Frame, app: &App) {
-    let area = centered(f.area(), 70, 18);
+    let area = centered(f.area(), 80, 20);
     f.render_widget(Clear, area);
+    let modal_bg = Color::Rgb(43, 45, 49);
+    let nav_bg = Color::Rgb(37, 39, 42);
+    let border_fg = Color::Rgb(63, 65, 71);
+    let text = Color::Rgb(219, 222, 225);
+    let muted = Color::Rgb(148, 155, 164);
+    let fg_2 = Color::Rgb(242, 243, 245);
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
             .title(" SETTINGS ")
-            .border_style(Style::new().fg(app.palette.accent)),
+            .border_style(Style::new().fg(border_fg).bg(modal_bg))
+            .bg(modal_bg),
         area,
     );
     let inner = area.inner(Margin {
         vertical: 1,
-        horizontal: 2,
+        horizontal: 1,
     });
-    let columns = Layout::horizontal([Constraint::Length(18), Constraint::Min(1)]).split(inner);
+    let columns = Layout::horizontal([Constraint::Length(22), Constraint::Min(1)]).split(inner);
 
     let tabs: Vec<ListItem> = [
         (SettingsTab::Account, "My Account"),
@@ -2253,27 +2280,40 @@ fn draw_settings_modal(f: &mut Frame, app: &App) {
     .iter()
     .map(|(tab, label)| {
         let selected = app.settings_tab == *tab;
-        let style = if selected {
-            Style::new()
-                .fg(app.palette.selection)
-                .add_modifier(Modifier::BOLD)
+        let bg = if selected {
+            Color::Rgb(58, 60, 66)
         } else {
-            Style::new().fg(app.palette.text)
+            nav_bg
         };
-        ListItem::new(Span::styled(label.to_string(), style))
+        let style = if selected {
+            Style::new().fg(fg_2).add_modifier(Modifier::BOLD).bg(bg)
+        } else {
+            Style::new().fg(muted).bg(bg)
+        };
+        ListItem::new(Span::styled(label.to_string(), style)).bg(bg)
     })
     .collect();
-    f.render_widget(List::new(tabs), columns[0]);
+    f.render_widget(
+        List::new(tabs).block(
+            Block::default()
+                .borders(Borders::RIGHT)
+                .border_style(Style::new().fg(border_fg).bg(nav_bg))
+                .bg(nav_bg),
+        ),
+        columns[0],
+    );
 
-    let content: String = match app.settings_tab {
-        SettingsTab::Account => {
-            "Display name\n  you\n\nEmail\n  you@starling.local".to_string()
-        }
+    let content = Paragraph::new(match app.settings_tab {
+        SettingsTab::Account => format!(
+            "Display name\n  {}\n\nEmail\n  you@starling.local\n\nAvatar label\n  {}\n\n[ESC] close",
+            app.name,
+            app.profile_panel.avatar_label
+        ),
         SettingsTab::Voice => {
             "Input device\n  Default\n\nOutput device\n  Default\n\nPush to Talk\n  Off\n\nNoise suppression\n  On".to_string()
         }
         SettingsTab::Appearance => format!(
-            "Theme\n  Dark\n\nAccent color\n  {}\n\nIcon style\n  {}\n\nCompact mode\n  Off\n\nShow avatars\n  On\n\n\nEnter a #RRGGBB value.\n[ENTER APPLY]  [TAB cycle icons]  [ESC CLOSE]",
+            "Theme\n  Dark\n\nAccent color\n  {}\n\nIcon style\n  {}\n\nCompact mode\n  Off\n\nShow avatars\n  On\n\n[ENTER] apply accent  [TAB] cycle icons  [ESC] close",
             app.accent_input, app.icon_style.label()
         ),
         SettingsTab::Notifications => {
@@ -2282,8 +2322,10 @@ fn draw_settings_modal(f: &mut Frame, app: &App) {
         SettingsTab::Keybinds => {
             "Mark server read\n  Shift + Esc\n\nToggle mute\n  Ctrl + Shift + M\n\nToggle deafen\n  Ctrl + Shift + D\n\nAnswer call\n  Ctrl + Enter".to_string()
         }
-    };
-    f.render_widget(Paragraph::new(content), columns[1]);
+    })
+    .style(Style::new().fg(text).bg(modal_bg))
+    .wrap(Wrap { trim: true });
+    f.render_widget(content, columns[1]);
 }
 
 fn draw_create_room_popup(f: &mut Frame, app: &App) {
@@ -2583,13 +2625,16 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_profile_modal(f: &mut Frame, app: &App) {
-    let area = centered(f.area(), 70, 22);
+    let area = centered(f.area(), 70, 20);
     f.render_widget(Clear, area);
+    let modal_bg = Color::Rgb(43, 45, 49);
+    let border_fg = Color::Rgb(63, 65, 71);
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
             .title(" PROFILE ")
-            .border_style(Style::new().fg(app.palette.accent)),
+            .border_style(Style::new().fg(border_fg).bg(modal_bg))
+            .bg(modal_bg),
         area,
     );
     let inner = area.inner(Margin {
@@ -2597,36 +2642,129 @@ fn draw_profile_modal(f: &mut Frame, app: &App) {
         horizontal: 2,
     });
     let p = &app.profile_panel;
-    let avatar = if p.avatar_label.is_empty() {
-        "STARLING"
+    let banner_line = if p.banner.is_empty() {
+        "──────── banner ────────".to_string()
     } else {
-        p.avatar_label.as_str()
+        p.banner.clone()
     };
-    let lines = if p.editing {
-        vec![
-            format!("Banner: {}", p.draft_banner),
-            format!("Avatar: {}", p.draft_avatar_label),
-            format!("Name: {}", p.draft_name),
-            format!("Status: {}", p.draft_custom_status),
-            format!("About Me: {}", p.draft_about_me),
-            format!("Pronouns: {}", p.draft_pronouns),
-            format!("MOTD: {}", p.draft_motd),
-            format!(
-                "Editing: {:?}  [TAB FIELD] [ENTER SAVE] [ESC CANCEL]",
-                p.field
+    let avatar_text = if p.avatar_label.is_empty() {
+        initials(&p.draft_name)
+    } else {
+        p.avatar_label.clone()
+    };
+    let name_text = if p.editing {
+        p.draft_name.clone()
+    } else {
+        app.name.clone()
+    };
+    let status_text = if p.editing {
+        p.draft_custom_status.clone()
+    } else {
+        p.custom_status.clone()
+    };
+    let pronouns_text = if p.editing {
+        p.draft_pronouns.clone()
+    } else {
+        p.pronouns.clone()
+    };
+    let about_text = if p.editing {
+        p.draft_about_me.clone()
+    } else {
+        p.about_me.clone()
+    };
+    let motd_text = if p.editing {
+        p.draft_motd.clone()
+    } else {
+        p.motd.clone()
+    };
+    let accent = app.palette.accent;
+
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            banner_line.clone(),
+            Style::new().fg(accent).bg(Color::Rgb(78, 80, 88)),
+        )]),
+        Line::from(vec![
+            Span::styled(
+                format!(" {} ", avatar_text),
+                Style::new().bg(accent).fg(Color::Rgb(255, 255, 255)),
             ),
-        ]
+            Span::styled("  ", Style::new().bg(modal_bg)),
+            Span::styled(
+                name_text,
+                Style::new()
+                    .fg(Color::Rgb(242, 243, 245))
+                    .add_modifier(Modifier::BOLD)
+                    .bg(modal_bg),
+            ),
+        ]),
+    ];
+    if !status_text.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                " {} {}",
+                TerminalIcon::Online.glyph(app.icon_style),
+                status_text
+            ),
+            Style::new().fg(Color::Rgb(148, 155, 164)).bg(modal_bg),
+        )]));
+    }
+    if !pronouns_text.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Pronouns: ",
+                Style::new().fg(Color::Rgb(148, 155, 164)).bg(modal_bg),
+            ),
+            Span::styled(
+                pronouns_text,
+                Style::new().fg(Color::Rgb(219, 222, 225)).bg(modal_bg),
+            ),
+        ]));
+    }
+    if !about_text.is_empty() {
+        lines.push(Line::from(vec![]));
+        lines.push(Line::from(vec![Span::styled(
+            "About Me",
+            Style::new()
+                .fg(Color::Rgb(242, 243, 245))
+                .add_modifier(Modifier::BOLD)
+                .bg(modal_bg),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            about_text,
+            Style::new().fg(Color::Rgb(219, 222, 225)).bg(modal_bg),
+        )]));
+    }
+    if !motd_text.is_empty() {
+        lines.push(Line::from(vec![]));
+        lines.push(Line::from(vec![Span::styled(
+            "MOTD",
+            Style::new()
+                .fg(Color::Rgb(242, 243, 245))
+                .add_modifier(Modifier::BOLD)
+                .bg(modal_bg),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            motd_text,
+            Style::new().fg(Color::Rgb(219, 222, 225)).bg(modal_bg),
+        )]));
+    }
+
+    lines.push(Line::from(vec![]));
+    let footer = if p.editing {
+        format!(
+            "Field: {:?} | [TAB] next | [ENTER] save | [ESC] cancel",
+            p.field
+        )
     } else {
-        vec![
-            format!("{}  {}  [{}]", avatar, p.draft_name, p.custom_status),
-            format!("Banner: {}", p.banner),
-            format!("About Me: {}", p.about_me),
-            format!("Pronouns: {}", p.pronouns),
-            format!("MOTD: {}", p.motd),
-            "[E EDIT]  [ESC CLOSE]".to_string(),
-        ]
+        "[E] edit | [ESC] close".to_string()
     };
-    f.render_widget(Paragraph::new(lines.join("\n")), inner);
+    lines.push(Line::from(vec![Span::styled(
+        footer,
+        Style::new().fg(Color::Rgb(148, 155, 164)).bg(modal_bg),
+    )]));
+
+    f.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 fn draw_context_menu(f: &mut Frame, app: &App) {
