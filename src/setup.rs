@@ -326,6 +326,7 @@ fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn pkg_config_exists(lib: &str) -> bool {
     std::process::Command::new("pkg-config")
         .args(["--exists", lib])

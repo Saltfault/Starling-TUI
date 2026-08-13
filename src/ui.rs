@@ -11,11 +11,11 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 const DEFAULT_ACCENT: Color = Color::Rgb(88, 101, 242);
-const DEFAULT_AUTHOR: Color = Color::Rgb(244, 138, 82);
-const DEFAULT_SELECTION: Color = Color::Rgb(224, 210, 103);
-const DEFAULT_DIM: Color = Color::Rgb(95, 104, 98);
-const DEFAULT_CHANNEL: Color = Color::Rgb(154, 163, 157);
-const DEFAULT_INVITE: Color = Color::Rgb(78, 201, 143);
+const DEFAULT_AUTHOR: Color = Color::Rgb(240, 178, 50);
+const DEFAULT_SELECTION: Color = Color::Rgb(242, 243, 245);
+const DEFAULT_DIM: Color = Color::Rgb(148, 155, 164);
+const DEFAULT_CHANNEL: Color = Color::Rgb(148, 155, 164);
+const DEFAULT_INVITE: Color = Color::Rgb(35, 165, 90);
 
 pub struct Palette {
     pub text: Color,
@@ -35,9 +35,9 @@ pub struct Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self {
-            text: Color::Rgb(207, 214, 210),
-            background: None,
-            border: Color::Rgb(51, 59, 55),
+            text: Color::Rgb(219, 222, 225),
+            background: Some(Color::Rgb(49, 51, 56)),
+            border: Color::Rgb(63, 65, 71),
             accent: DEFAULT_ACCENT,
             author: DEFAULT_AUTHOR,
             selection: DEFAULT_SELECTION,
@@ -1481,7 +1481,12 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
         items.push(ListItem::new(Line::from(spans)));
     }
     f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title(" servers ")),
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .bg(Color::Rgb(30, 31, 34))
+                .title(" servers "),
+        ),
         area,
     );
 }
@@ -1566,7 +1571,12 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     }
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
     f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title(" sidebar ")),
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .bg(Color::Rgb(43, 45, 49))
+                .title(" sidebar "),
+        ),
         chunks[0],
     );
     let footer = Line::from(vec![
@@ -1708,7 +1718,12 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         area.height.saturating_sub(2),
     );
     f.render_widget(
-        List::new(rows).block(Block::default().borders(Borders::ALL).title(" chat ")),
+        List::new(rows).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .bg(Color::Rgb(49, 51, 56))
+                .title(" chat "),
+        ),
         body,
     );
 }
@@ -1776,7 +1791,12 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
         }
     }
     f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title(" members ")),
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .bg(Color::Rgb(43, 45, 49))
+                .title(" members "),
+        ),
         area,
     );
 }

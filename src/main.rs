@@ -85,7 +85,7 @@ fn apply_profile(app: &mut App, profile: &starling::config::Profile) {
         palette.border = color;
     }
     palette.background = if profile.bg_color.is_empty() {
-        None
+        Some(ui::hex_to_color(starling::config::DEFAULT_BG_COLOR).unwrap())
     } else {
         ui::hex_to_color(&profile.bg_color)
     };
