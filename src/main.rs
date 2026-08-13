@@ -1925,20 +1925,6 @@ fn handle_mouse_click(
                     ToolbarAction::Mute => {
                         muted_flag.store(app.muted, Ordering::Relaxed);
                     }
-                    #[cfg(feature = "video")]
-                    ToolbarAction::Video => {
-                        if app.show_video {
-                            if cmd_tx.send(Command::StopVideo).is_ok() {
-                                app.show_video = false;
-                                app.local_video_frame = None;
-                            }
-                        } else if cmd_tx.send(Command::StartVideo(app.peers.clone())).is_ok() {
-                            app.show_video = true;
-                            app.error_message = Some("Starting camera...".into());
-                        } else {
-                            app.error_message = Some("Video service is unavailable".into());
-                        }
-                    }
                 }
                 return Ok(());
             }
@@ -2163,47 +2149,6 @@ fn menu_item_at_size(term_w: u16, term_h: u16, col: u16, row: u16) -> Option<usi
 
     let idx = (inner_row - 1) as usize;
     (idx < MENU_ITEMS.len()).then_some(idx)
-}
-
-fn open_editor(
-    app: &mut App,
-    cmd_tx: &mpsc::UnboundedSender<Command>,
-    term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
-    editor: &str,
-) -> anyhow::Result<()> {
-    disable_raw_mode()?;
-    execute!(
-        std::io::stdout(),
-        Print(MOUSE_TRACKING_OFF),
-        LeaveAlternateScreen,
-        ct_event::DisableMouseCapture,
-        ct_event::DisableBracketedPaste
-    )?;
-    let result = std::process::Command::new(std::env::current_exe()?)
-        .arg(editor)
-        .status();
-    execute!(
-        std::io::stdout(),
-        EnterAlternateScreen,
-        ct_event::EnableMouseCapture,
-        ct_event::EnableBracketedPaste,
-        Print(MOUSE_TRACKING_ON)
-    )?;
-    enable_raw_mode()?;
-    term.clear()?;
-    if result.is_ok_and(|status| status.success()) {
-        if let Some(profile) = starling::config::Profile::load() {
-            apply_profile(app, &profile);
-            let _ = cmd_tx.send(Command::UpdateProfile {
-                name: profile.name,
-                input_device: profile.input_device,
-                camera_index: profile.camera_index,
-            });
-        }
-    } else {
-        app.error_message = Some(format!("{editor} editor failed"));
-    }
-    Ok(())
 }
 
 #[allow(unused_variables)]

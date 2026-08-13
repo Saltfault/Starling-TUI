@@ -279,17 +279,17 @@ pub async fn run(
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     muted: Arc<AtomicBool>,
     my_node_id: EndpointId,
-    mut name: String,
+    name: String,
     input_device: Option<String>,
     camera_index: Option<u32>,
     pronouns: String,
 ) -> anyhow::Result<()> {
     #[cfg(feature = "audio")]
-    let mut input_device = input_device;
+    let input_device = input_device;
     #[cfg(not(feature = "audio"))]
     let _ = (&muted, &input_device);
     #[cfg(feature = "video")]
-    let mut camera_index = camera_index;
+    let camera_index = camera_index;
     #[cfg(not(feature = "video"))]
     let _ = &camera_index;
     let secret = starling::config::Profile::load_or_create_secret();
@@ -603,26 +603,6 @@ pub async fn run(
                 {
                     let _ = evt_tx.send(AppEvent::Error(format!("join failed: {error}")));
                 }
-            }
-
-            Command::UpdateProfile {
-                name: new_name,
-                input_device: new_input_device,
-                camera_index: new_camera_index,
-            } => {
-                name = new_name;
-                #[cfg(feature = "audio")]
-                {
-                    input_device = new_input_device;
-                }
-                #[cfg(not(feature = "audio"))]
-                let _ = new_input_device;
-                #[cfg(feature = "video")]
-                {
-                    camera_index = new_camera_index;
-                }
-                #[cfg(not(feature = "video"))]
-                let _ = new_camera_index;
             }
 
             #[cfg(feature = "audio")]

@@ -259,10 +259,6 @@ impl SpringScroll {
         let index = self.current.round() as isize + visible_row as isize;
         (index >= 0).then_some(index as usize)
     }
-
-    fn rounded_offset(&self) -> isize {
-        self.current.round() as isize
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -273,8 +269,6 @@ pub enum ToolbarAction {
     Call,
     #[cfg(feature = "audio")]
     Mute,
-    #[cfg(feature = "video")]
-    Video,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -646,6 +640,7 @@ impl App {
         }
     }
 
+    #[cfg(test)]
     pub fn ordered_contexts(&self) -> impl Iterator<Item = &ContextView> {
         self.context_order
             .iter()
@@ -699,11 +694,6 @@ impl App {
 
     pub fn active_context(&self) -> Option<&ContextView> {
         self.active.and_then(|id| self.contexts.get(&id))
-    }
-
-    pub fn active_context_messages(&self) -> Option<&[ChatMessageView]> {
-        self.active_context()
-            .map(|context| context.messages.as_slice())
     }
 
     /// Returns the newest message timestamp for a flock or roost channel
@@ -1263,6 +1253,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     if matches!(app.v2_view, V2View::Space) {
         draw_members(f, app, columns[3]);
     }
+    draw_button_bar(f, app, chunks[2]);
     f.render_widget(
         Paragraph::new(app.input.as_str())
             .block(Block::default().borders(Borders::ALL).title(" message ")),
@@ -1276,6 +1267,27 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
     if app.settings_open {
         draw_settings_modal(f, app);
+    }
+    if app.show_role_submenu {
+        draw_role_submenu(f, app);
+    } else if app.show_context_menu {
+        draw_context_menu(f, app);
+    } else if app.show_add_channel {
+        draw_add_channel_popup(f, app);
+    } else if app.show_create_roost {
+        draw_create_roost_popup(f, app);
+    } else if app.show_create_room {
+        draw_create_room_popup(f, app);
+    } else if app.show_edit_flock {
+        draw_edit_flock_popup(f, app);
+    } else if app.show_join_room {
+        draw_join_room_popup(f, app);
+    } else if app.show_delete_confirm {
+        draw_delete_confirm_popup(f, app);
+    } else if app.show_menu {
+        draw_menu_popup(f, app);
+    } else if app.show_bird_profile {
+        draw_bird_profile_popup(f, app);
     }
 }
 
@@ -1301,182 +1313,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         ]);
         f.render_widget(line, header[1]);
     }
-}
-
-fn window_list_items<'a>(items: Vec<ListItem<'a>>, scroll: SpringScroll) -> Vec<ListItem<'a>> {
-    let offset = scroll.rounded_offset();
-    if offset < 0 {
-        std::iter::repeat_with(|| ListItem::new(""))
-            .take((-offset) as usize)
-            .chain(items)
-            .collect()
-    } else {
-        items.into_iter().skip(offset as usize).collect()
-    }
-}
-
-fn draw_flocks(f: &mut Frame, app: &App, area: Rect) {
-    let typed_items = app
-        .ordered_contexts()
-        .filter(|context| context.roost.is_none())
-        .map(|context| {
-            let selected = app.active == Some(context.id);
-            let mark = if selected { "> " } else { "  " };
-            let unread = if context.unread > 0 {
-                format!(" ({})", context.unread)
-            } else {
-                String::new()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(mark, Style::new().fg(app.palette.selection)),
-                Span::styled("\u{25AE} ", Style::new().fg(app.palette.accent)),
-                Span::styled(
-                    context.title.clone(),
-                    Style::new().fg(if selected {
-                        app.palette.selection
-                    } else {
-                        app.palette.text
-                    }),
-                ),
-                Span::styled(unread, Style::new().fg(app.palette.selection)),
-            ]))
-        });
-    // Skip legacy flocks that already have a typed context entry so the
-    // same flock does not appear twice in the sidebar.
-    let typed_secrets: std::collections::HashSet<&str> = app
-        .contexts
-        .values()
-        .filter_map(|ctx| ctx.secret.as_deref())
-        .collect();
-    let legacy_items = app
-        .flocks
-        .iter()
-        .enumerate()
-        .filter(|(_, fv)| !typed_secrets.contains(fv.code.as_str()))
-        .map(|(i, fv)| {
-            let sel = app.selection == Selection::Flock(i);
-            let mark = if sel { "> " } else { "  " };
-            let unread = if fv.unread > 0 {
-                format!(" ({})", fv.unread)
-            } else {
-                String::new()
-            };
-            let dot = flock_dot(&fv.code, app.palette.accent);
-            let label = if fv.name.is_empty() {
-                &fv.code[..12.min(fv.code.len())]
-            } else {
-                fv.name.as_str()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(mark, Style::new().fg(app.palette.selection)),
-                Span::styled("\u{25AE} ", Style::new().fg(dot)),
-                Span::styled(
-                    label.to_string(),
-                    Style::new().fg(if sel {
-                        app.palette.selection
-                    } else {
-                        app.palette.text
-                    }),
-                ),
-                Span::styled(unread, Style::new().fg(app.palette.selection)),
-            ]))
-        });
-    let items: Vec<ListItem> = typed_items.chain(legacy_items).collect();
-    let displayed_count = items.len();
-    let items = window_list_items(items, app.flock_scroll);
-
-    f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.palette.border))
-                .title(Span::styled(
-                    format!(" flocks ({}) ", displayed_count),
-                    Style::new().fg(app.palette.accent),
-                )),
-        ),
-        area,
-    );
-}
-
-fn draw_roosts(f: &mut Frame, app: &App, area: Rect) {
-    let mut items: Vec<ListItem> = Vec::new();
-    for (i, rv) in app.roosts.iter().enumerate() {
-        let expanded = app.expanded.contains(&i);
-        let head_sel = matches!(app.selection, Selection::Channel(ri, _) if ri == i);
-        let caret = if expanded { "\u{25BE} " } else { "\u{25B8} " };
-        let unread = if rv.unread > 0 {
-            format!(" ({})", rv.unread)
-        } else {
-            String::new()
-        };
-        let dot = flock_dot(&rv.code, app.palette.accent);
-        let name = if rv.name.is_empty() {
-            &rv.code[..12.min(rv.code.len())]
-        } else {
-            &rv.name[..]
-        };
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(caret, Style::new().fg(app.palette.dim)),
-            Span::styled("\u{25AE} ", Style::new().fg(dot)),
-            Span::styled(
-                name.to_string(),
-                Style::new()
-                    .fg(if head_sel {
-                        app.palette.selection
-                    } else {
-                        app.palette.text
-                    })
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(unread, Style::new().fg(app.palette.selection)),
-        ])));
-
-        if expanded {
-            for (ci, ch) in rv.channels.iter().enumerate() {
-                let sel = app.selection == Selection::Channel(i, ci);
-                let cu = if ch.unread > 0 {
-                    format!(" ({})", ch.unread)
-                } else {
-                    String::new()
-                };
-                items.push(ListItem::new(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(
-                        "#",
-                        Style::new().fg(if sel {
-                            app.palette.selection
-                        } else {
-                            app.palette.dim
-                        }),
-                    ),
-                    Span::styled(
-                        format!(" {}", ch.name),
-                        Style::new().fg(if sel {
-                            app.palette.selection
-                        } else {
-                            app.palette.channel
-                        }),
-                    ),
-                    Span::styled(cu, Style::new().fg(app.palette.selection)),
-                ])));
-            }
-        }
-    }
-
-    let items = window_list_items(items, app.roost_scroll);
-    f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.palette.border))
-                .title(Span::styled(
-                    format!(" roosts ({}) ", app.roosts.len()),
-                    Style::new().fg(app.palette.accent),
-                )),
-        ),
-        area,
-    );
 }
 
 fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
@@ -1620,89 +1456,6 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-#[cfg(feature = "video")]
-fn draw_video_grid(f: &mut Frame, app: &App, area: Rect) {
-    let mut tiles: Vec<(String, Option<&RgbImage>)> = Vec::new();
-    if app.show_video {
-        tiles.push((
-            format!("{} (you)", app.name),
-            app.local_video_frame.as_ref(),
-        ));
-    }
-    for (peer, frame) in &app.remote_video_frames {
-        tiles.push((app.peer_display_name(peer), Some(frame)));
-    }
-    if tiles.is_empty() {
-        return;
-    }
-
-    let mut columns = 1usize;
-    while columns * columns < tiles.len() {
-        columns += 1;
-    }
-    let rows = tiles.len().div_ceil(columns);
-    let row_areas = Layout::vertical(vec![Constraint::Ratio(1, rows as u32); rows]).split(area);
-    for (row, row_area) in row_areas.iter().enumerate() {
-        let column_areas = Layout::horizontal(vec![Constraint::Ratio(1, columns as u32); columns])
-            .split(*row_area);
-        for (column, tile_area) in column_areas.iter().enumerate() {
-            let index = row * columns + column;
-            let Some((name, frame)) = tiles.get(index) else {
-                continue;
-            };
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.palette.border))
-                .title(Span::styled(
-                    format!(" {name} "),
-                    Style::new().fg(app.palette.accent),
-                ));
-            let inner = block.inner(*tile_area);
-            f.render_widget(block, *tile_area);
-            if let Some(frame) = frame {
-                let lines = crate::video::frame_to_lines(frame, inner.width, inner.height);
-                f.render_widget(Paragraph::new(lines), inner);
-            } else {
-                f.render_widget(
-                    Paragraph::new("camera starting...").style(Style::new().fg(app.palette.dim)),
-                    inner,
-                );
-            }
-        }
-    }
-}
-
-fn draw_typed_messages(f: &mut Frame, app: &App, area: Rect) -> bool {
-    let Some(messages) = app.active_context_messages() else {
-        return false;
-    };
-    if messages.is_empty() {
-        return false;
-    }
-    let items = messages.iter().map(|message| {
-        ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("{}: ", message.author),
-                Style::new()
-                    .fg(app.palette.author)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(message.body.clone(), Style::new().fg(app.palette.text)),
-        ]))
-    });
-    let title = format!(" {} . {} birds ", app.active_title(), app.bird_count());
-    f.render_widget(
-        List::new(items.collect::<Vec<_>>()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.palette.border))
-                .title(Span::styled(title, Style::new().fg(app.palette.text))),
-        ),
-        area,
-    );
-    true
-}
-
 fn flattened_channels(app: &App) -> impl Iterator<Item = &FlockView> {
     app.roosts.iter().flat_map(|roost| roost.channels.iter())
 }
@@ -1750,15 +1503,21 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
             .active_messages()
             .iter()
             .map(|message| {
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("{}: ", message.msg.author),
-                        Style::new()
-                            .fg(app.palette.author)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(message.msg.body.clone(), Style::new().fg(app.palette.text)),
-                ]))
+                let mut spans = Vec::new();
+                if message.private {
+                    spans.push(Span::styled("🔒 ", Style::new().fg(app.palette.dim)));
+                }
+                spans.push(Span::styled(
+                    format!("{}: ", message.msg.author),
+                    Style::new()
+                        .fg(app.palette.author)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(
+                    message.msg.body.clone(),
+                    Style::new().fg(app.palette.text),
+                ));
+                ListItem::new(Line::from(spans))
             })
             .collect::<Vec<_>>(),
     };
@@ -1771,96 +1530,6 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         List::new(rows).block(Block::default().borders(Borders::ALL).title(" chat ")),
         body,
-    );
-}
-
-fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
-    #[cfg(feature = "video")]
-    let area = if app.show_video || !app.remote_video_frames.is_empty() {
-        let panes = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
-        draw_video_grid(f, app, panes[1]);
-        panes[0]
-    } else {
-        area
-    };
-
-    let items: Vec<ListItem> = app
-        .active_messages()
-        .iter()
-        .map(|m| {
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    if m.private { "⚷ " } else { "" },
-                    Style::new().fg(app.palette.selection),
-                ),
-                Span::styled(
-                    format!("{}: ", m.msg.author),
-                    Style::new()
-                        .fg(app.palette.author)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(m.msg.body.clone(), Style::new().fg(app.palette.text)),
-            ]))
-        })
-        .collect();
-
-    let title = format!(" {} . {} birds ", app.active_title(), app.bird_count());
-    f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.palette.border))
-                .title(Span::styled(title, Style::new().fg(app.palette.text))),
-        ),
-        area,
-    );
-}
-
-fn draw_birds(f: &mut Frame, app: &App, area: Rect) {
-    let mut items: Vec<ListItem> = Vec::new();
-    items.push(ListItem::new(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            format!("{} (you)", app.name),
-            Style::new()
-                .fg(app.palette.selection)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ])));
-
-    let active_peers = app.active_peers();
-
-    for (i, id) in active_peers.iter().enumerate() {
-        let sel = i == app.selected_peer;
-        let mark = if sel { "> " } else { "  " };
-        let (glyph, gc) = match app.peer_status.get(id) {
-            Some(BirdStatus::InCall) => ("~", app.palette.author),
-            Some(BirdStatus::Idle) => ("-", app.palette.dim),
-            _ => ("o", app.palette.accent),
-        };
-        let (r, g, b) = app.peer_roles.get(id).copied().unwrap_or((150, 150, 150));
-        let name_color = if sel {
-            app.palette.selection
-        } else {
-            Color::Rgb(r, g, b)
-        };
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(mark, Style::new().fg(app.palette.selection)),
-            Span::styled(format!("{glyph} "), Style::new().fg(gc)),
-            Span::styled(app.peer_display_name(id), Style::new().fg(name_color)),
-        ])));
-    }
-
-    let items = window_list_items(items, app.bird_scroll);
-    f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::new().fg(app.palette.border))
-                .title(Span::styled(" birds ", Style::new().fg(app.palette.accent))),
-        ),
-        area,
     );
 }
 
@@ -1963,36 +1632,85 @@ fn draw_call_overlay(f: &mut Frame, app: &App) {
     ])
     .split(inner);
     f.render_widget(Paragraph::new(app.active_title()), rows[0]);
-    let tiles = app
-        .peers
-        .iter()
-        .map(|peer| {
-            let name = app.peer_display_name(peer);
-            let video = if app.show_video { " VIDEO" } else { " VOICE" };
-            ListItem::new(Line::from(vec![
-                Span::styled(name, Style::new().fg(app.palette.text)),
-                Span::styled(video, Style::new().fg(app.palette.dim)),
-            ]))
-        })
-        .collect::<Vec<_>>();
-    f.render_widget(
-        List::new(tiles).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" participants "),
-        ),
-        rows[1],
-    );
-    let mute = if app.muted { "[UNMUTE]" } else { "[MUTE]" };
-    let video = if app.show_video {
-        "[VIDEO OFF]"
+    let frames_available = app.local_video_frame.is_some() || !app.remote_video_frames.is_empty();
+    if app.show_video && frames_available {
+        let mut tiles: Vec<(String, Option<&RgbImage>)> = Vec::new();
+        if let Some(frame) = app.local_video_frame.as_ref() {
+            tiles.push((format!("{} (you)", app.name), Some(frame)));
+        }
+        for (peer, frame) in &app.remote_video_frames {
+            tiles.push((app.peer_display_name(peer), Some(frame)));
+        }
+        draw_video_tiles(f, tiles, rows[1]);
     } else {
-        "[VIDEO ON]"
+        let tiles = app
+            .peers
+            .iter()
+            .map(|peer| {
+                let name = app.peer_display_name(peer);
+                let video = if app.show_video { " VIDEO" } else { " VOICE" };
+                ListItem::new(Line::from(vec![
+                    Span::styled(name, Style::new().fg(app.palette.text)),
+                    Span::styled(video, Style::new().fg(app.palette.dim)),
+                ]))
+            })
+            .collect::<Vec<_>>();
+        f.render_widget(
+            List::new(tiles).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" participants "),
+            ),
+            rows[1],
+        );
+    }
+    let mute = if app.muted { "UNMUTE" } else { "MUTE" };
+    let video = if app.show_video {
+        "VIDEO OFF"
+    } else {
+        "VIDEO ON"
     };
-    f.render_widget(
-        Paragraph::new(format!("{mute}  {video}  [HANG UP]")),
-        rows[2],
-    );
+    let controls = Line::from(vec![
+        icon_span(TerminalIcon::Voice, app.icon_style, app.palette.accent),
+        Span::styled(mute, Style::new().fg(app.palette.text)),
+        Span::raw("   "),
+        icon_span(TerminalIcon::Video, app.icon_style, app.palette.accent),
+        Span::styled(video, Style::new().fg(app.palette.text)),
+        Span::raw("   "),
+        icon_span(TerminalIcon::Call, app.icon_style, app.palette.accent),
+        Span::styled("HANG UP", Style::new().fg(app.palette.text)),
+    ]);
+    f.render_widget(controls, rows[2]);
+}
+
+fn draw_video_tiles(f: &mut Frame, tiles: Vec<(String, Option<&RgbImage>)>, area: Rect) {
+    if tiles.is_empty() {
+        return;
+    }
+    let mut columns = 1usize;
+    while columns * columns < tiles.len() {
+        columns += 1;
+    }
+    let grid_rows = tiles.len().div_ceil(columns);
+    let row_areas =
+        Layout::vertical(vec![Constraint::Ratio(1, grid_rows as u32); grid_rows]).split(area);
+    for (row_idx, row_area) in row_areas.iter().enumerate() {
+        let col_areas = Layout::horizontal(vec![Constraint::Ratio(1, columns as u32); columns])
+            .split(*row_area);
+        for (col_idx, tile_area) in col_areas.iter().enumerate() {
+            let idx = row_idx * columns + col_idx;
+            let Some((name, frame)) = tiles.get(idx) else {
+                continue;
+            };
+            let block = Block::default().borders(Borders::ALL).title(name.as_str());
+            let inner = block.inner(*tile_area);
+            f.render_widget(block, *tile_area);
+            if let Some(frame) = frame {
+                let lines = crate::video::frame_to_lines(frame, inner.width, inner.height);
+                f.render_widget(Paragraph::new(lines), inner);
+            }
+        }
+    }
 }
 
 pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -2535,13 +2253,6 @@ fn color_swatches(code: &str) -> Vec<Span<'static>> {
         spans.push(Span::raw(" "));
     }
     spans
-}
-
-fn flock_dot(code: &str, fallback: Color) -> Color {
-    parse_color_code(code)
-        .first()
-        .map(|&(r, g, b)| Color::Rgb(r, g, b))
-        .unwrap_or(fallback)
 }
 
 fn parse_color_code(code: &str) -> Vec<(u8, u8, u8)> {

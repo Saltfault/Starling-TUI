@@ -31,11 +31,6 @@ pub enum Command {
     CreateRoost {
         name: String,
     },
-    UpdateProfile {
-        name: String,
-        input_device: Option<String>,
-        camera_index: Option<u32>,
-    },
     #[cfg(feature = "audio")]
     StartCall(Vec<EndpointId>),
     #[cfg(feature = "audio")]
