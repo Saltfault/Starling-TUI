@@ -900,6 +900,14 @@ async fn main() -> anyhow::Result<()> {
                         copy_active_invite(&mut app, clipboard.as_mut(), Instant::now());
                         continue;
                     }
+                    if matches!(k.code, KeyCode::Char('m' | 'M'))
+                        && k.modifiers.contains(KeyModifiers::CONTROL)
+                        && k.modifiers.contains(KeyModifiers::SHIFT)
+                    {
+                        app.muted = !app.muted;
+                        muted_flag.store(app.muted, Ordering::Relaxed);
+                        continue;
+                    }
 
                     if app.profile_panel.open {
                         handle_profile_key(&mut app, &mut profile, k)?;
@@ -1951,6 +1959,7 @@ fn handle_mouse_click(
                     }
                     #[cfg(feature = "audio")]
                     ToolbarAction::Mute => {
+                        app.muted = !app.muted;
                         muted_flag.store(app.muted, Ordering::Relaxed);
                     }
                 }

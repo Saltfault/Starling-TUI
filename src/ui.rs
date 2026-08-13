@@ -1411,7 +1411,12 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
                     app.palette.text
                 }),
             ),
-            Span::styled(unread, Style::new().fg(app.palette.selection)),
+            Span::styled(
+                unread,
+                Style::new()
+                    .fg(Color::Rgb(242, 63, 67))
+                    .add_modifier(Modifier::BOLD),
+            ),
         ])));
     }
 
@@ -1441,7 +1446,12 @@ fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
                     app.palette.text
                 }),
             ),
-            Span::styled(unread, Style::new().fg(app.palette.selection)),
+            Span::styled(
+                unread,
+                Style::new()
+                    .fg(Color::Rgb(242, 63, 67))
+                    .add_modifier(Modifier::BOLD),
+            ),
         ])));
     }
     f.render_widget(
@@ -1532,10 +1542,37 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
             }
         }
     }
+    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
     f.render_widget(
         List::new(items).block(Block::default().borders(Borders::ALL).title(" sidebar ")),
-        area,
+        chunks[0],
     );
+    let footer = Line::from(vec![
+        Span::styled(
+            format!("{} ", initials(&app.name)),
+            Style::new()
+                .fg(app.palette.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            app.name.clone(),
+            Style::new()
+                .fg(app.palette.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            if app.muted { "[UNMUTE]" } else { "[MUTE]" },
+            Style::new().fg(if app.muted {
+                Color::Rgb(242, 63, 67)
+            } else {
+                app.palette.dim
+            }),
+        ),
+        Span::raw(" "),
+        Span::styled("[SETTINGS]", Style::new().fg(app.palette.dim)),
+    ]);
+    f.render_widget(footer, chunks[1]);
 }
 
 fn flattened_channels(app: &App) -> impl Iterator<Item = &FlockView> {
