@@ -835,6 +835,13 @@ async fn main() -> anyhow::Result<()> {
                 let event = ct_event::read()?;
 
                 if let Event::Paste(raw) = &event {
+                    if app.profile_panel.open && app.profile_panel.editing {
+                        profile_field_mut(&mut app.profile_panel).push_str(raw);
+                        continue;
+                    } else if app.settings_open {
+                        app.accent_input.push_str(raw);
+                        continue;
+                    }
                     if app.show_create_room {
                         app.create_flock_name =
                             sanitize::sanitize_name(&format!("{}{}", app.create_flock_name, raw));
@@ -866,6 +873,15 @@ async fn main() -> anyhow::Result<()> {
                         continue;
                     }
 
+                    if app.profile_panel.open {
+                        handle_profile_key(&mut app, &mut profile, k)?;
+                        continue;
+                    }
+                    if app.settings_open {
+                        handle_settings_key(&mut app, &mut profile, k)?;
+                        continue;
+                    }
+
                     let outcome = match app.active_popup() {
                         Popup::DeleteConfirm =>
                             Ok(handle_delete_confirm_key(&mut app, k)),
@@ -883,12 +899,6 @@ async fn main() -> anyhow::Result<()> {
                             handle_menu_key(&mut app, k, &cmd_tx, &mut term),
                         Popup::BirdProfile =>
                             Ok(handle_bird_profile_key(&mut app, k, &cmd_tx)),
-                        Popup::Profile =>
-                            handle_profile_key(&mut app, &mut profile, k),
-                        Popup::Settings => {
-                            handle_settings_key(&mut app, &mut profile, k)?;
-                            Ok(KeyOutcome::Handled)
-                        }
                         Popup::ContextMenu => {
                             handle_context_menu_key(&mut app, k, &cmd_tx)?;
                             Ok(KeyOutcome::Handled)
@@ -1521,6 +1531,13 @@ fn handle_normal_key(
             page_scroll(app, 1.0, crossterm::terminal::size()?.1);
         }
 
+        KeyCode::Esc if app.in_call => {
+            #[cfg(feature = "audio")]
+            let _ = cmd_tx.send(Command::HangUp);
+            app.in_call = false;
+            app.show_video = false;
+        }
+
         KeyCode::Esc => {
             app.show_menu = true;
             app.menu_selection = 0;
@@ -1579,6 +1596,15 @@ fn handle_normal_key(
 
         KeyCode::Char('p' | 'P') => {
             open_profile(app);
+        }
+
+        KeyCode::Char('h' | 'H') => app.open_home(),
+        KeyCode::Char(',') => {
+            app.accent_input = match app.palette.accent {
+                ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
+                _ => "#6FAE9D".to_string(),
+            };
+            app.settings_open = true;
         }
 
         KeyCode::Char(c) => {
@@ -1780,7 +1806,7 @@ fn handle_mouse_scroll(app: &mut App, col: u16, row: u16, delta: f32) -> anyhow:
         Some(ScrollPanel::Flocks)
     } else if col < 26 && row >= roosts_top && row < roosts_top + roosts_h {
         Some(ScrollPanel::Roosts)
-    } else if col >= term_w.saturating_sub(24) && row >= flocks_top && row < flocks_top + birds_h {
+    } else if col >= term_w.saturating_sub(27) && row >= flocks_top && row < flocks_top + birds_h {
         Some(ScrollPanel::Birds)
     } else {
         None
@@ -1839,6 +1865,10 @@ fn handle_mouse_click(
     }
 
     if app.show_join_room {
+        return Ok(());
+    }
+
+    if handle_v2_mouse_click(app, col, row, term_w, term_h) {
         return Ok(());
     }
 
@@ -1968,23 +1998,81 @@ fn handle_mouse_click(
                 }
             }
         }
-    } else if col >= term_w.saturating_sub(24)
+    } else if col >= term_w.saturating_sub(27)
         && row > flocks_top
         && row < flocks_top + birds_h.saturating_sub(1)
     {
         app.scroll_focus = ScrollPanel::Birds;
         let visible_row = (row - flocks_top - 1) as usize;
-        if let Some(content_row) = app.bird_scroll.row_index(visible_row)
-            && content_row > 0
-            && content_row <= app.active_peers().len()
-        {
-            app.selected_peer = content_row - 1;
-            app.bird_profile_peer = app.selected_peer_id();
-            app.show_bird_profile = true;
+        if let Some(content_row) = app.bird_scroll.row_index(visible_row) {
+            if content_row == 0 {
+                open_profile(app);
+                return Ok(());
+            }
+            if content_row <= app.active_peers().len() {
+                app.selected_peer = content_row - 1;
+                app.bird_profile_peer = app.selected_peer_id();
+                app.show_bird_profile = true;
+            }
         }
     }
 
     Ok(())
+}
+
+fn handle_v2_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, term_h: u16) -> bool {
+    let body_top = 2;
+    let body_bottom = term_h.saturating_sub(4);
+    if row <= body_top || row >= body_bottom || col >= term_w.saturating_sub(27) {
+        return false;
+    }
+
+    if col < 12 {
+        let index = row.saturating_sub(body_top + 1) as usize;
+        if index == 0 {
+            app.open_home();
+            return true;
+        }
+        let flock_count = app.flocks.len();
+        if index <= flock_count {
+            app.select(Selection::Flock(index - 1));
+            return true;
+        }
+        let roost_index = index - 1 - flock_count;
+        if app
+            .roosts
+            .get(roost_index)
+            .is_some_and(|roost| !roost.channels.is_empty())
+        {
+            app.select(Selection::Channel(roost_index, 0));
+            return true;
+        }
+    }
+
+    if (12..40).contains(&col) {
+        if matches!(app.v2_view, ui::V2View::Home) {
+            let peer_index = row.saturating_sub(body_top + 2) as usize;
+            if let Some(peer) = app.peers.get(peer_index).copied() {
+                app.selected_dm = Some(peer);
+                return true;
+            }
+        } else if let Selection::Channel(roost_index, _) = app.selection {
+            let sidebar_row = row.saturating_sub(body_top + 1) as usize;
+            if sidebar_row > 0 {
+                let channel_index = sidebar_row - 1;
+                if app
+                    .roosts
+                    .get(roost_index)
+                    .and_then(|roost| roost.channels.get(channel_index))
+                    .is_some()
+                {
+                    app.select(Selection::Channel(roost_index, channel_index));
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn toggle_call_video(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
@@ -2005,7 +2093,7 @@ fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {
     let (flocks_top, _flocks_h, roosts_top, roosts_h, birds_h) = panel_geometry(term_h);
 
     // Hit-test: right side = birds panel
-    if col >= term_w.saturating_sub(24)
+    if col >= term_w.saturating_sub(27)
         && row > flocks_top
         && row < flocks_top + birds_h.saturating_sub(1)
     {

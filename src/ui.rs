@@ -572,8 +572,6 @@ pub enum Popup {
     BirdProfile,
     ContextMenu,
     RoleSubmenu,
-    Profile,
-    Settings,
     None,
 }
 
@@ -632,10 +630,6 @@ impl App {
             Popup::Menu
         } else if self.show_bird_profile {
             Popup::BirdProfile
-        } else if self.profile_panel.open {
-            Popup::Profile
-        } else if self.settings_open {
-            Popup::Settings
         } else {
             Popup::None
         }
@@ -916,6 +910,7 @@ impl App {
     pub fn select(&mut self, selection: Selection) {
         self.selection = selection;
         self.active = None;
+        self.v2_view = V2View::Space;
         match selection {
             Selection::Flock(i) => {
                 if let Some(flock) = self.flocks.get_mut(i) {
@@ -931,6 +926,11 @@ impl App {
                 }
             }
         }
+    }
+
+    pub fn open_home(&mut self) {
+        self.v2_view = V2View::Home;
+        self.active = None;
     }
 
     pub fn toggle_expand(&mut self, ri: usize) {
