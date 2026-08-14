@@ -841,6 +841,27 @@ pub async fn run(
                 });
             }
 
+            Command::RenameRoost { roost, name } => {
+                let ep = endpoint.clone();
+                let tx = evt_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(conn) = ep.connect(EndpointAddr::from(roost), MOD_ALPN).await else {
+                        return;
+                    };
+                    let Ok((mut send, mut recv)) = conn.open_bi().await else {
+                        return;
+                    };
+                    let req = ModRequest::Rename(name);
+                    let _ = send.write_all(&postcard::to_stdvec(&req).unwrap()).await;
+                    let _ = send.finish();
+                    if let Ok(bytes) = recv.read_to_end(1024).await
+                        && let Ok(Err(reason)) = postcard::from_bytes::<Result<(), String>>(&bytes)
+                    {
+                        let _ = tx.send(AppEvent::Notice(reason));
+                    }
+                });
+            }
+
             Command::DeleteMessage { roost, channel, id } => {
                 let ep = endpoint.clone();
                 let tx = evt_tx.clone();

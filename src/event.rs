@@ -72,6 +72,10 @@ pub enum Command {
         roost: EndpointId,
         channel: String,
     },
+    RenameRoost {
+        roost: EndpointId,
+        name: String,
+    },
     DeleteMessage {
         roost: EndpointId,
         channel: String,

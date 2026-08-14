@@ -35,11 +35,12 @@ use iroh::EndpointId;
 use std::sync::Arc;
 #[allow(unused_imports)]
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashSet;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use ui::{
     App, ContextMenuAction, ContextMenuTarget, FlockView, MENU_ITEMS, Popup, RoostView,
-    ScrollPanel, Selection,
+    ScrollPanel, Selection, SettingsTab,
 };
 use ratatui::layout::{Position, Rect};
 
@@ -225,9 +226,9 @@ fn handle_settings_key(
     match key.code {
         KeyCode::Left => {
             let tabs = [
-                ui::SettingsTab::Account,
+                SettingsTab::Account,
                 ui::SettingsTab::Voice,
-                ui::SettingsTab::Appearance,
+                SettingsTab::Appearance,
                 ui::SettingsTab::Notifications,
                 ui::SettingsTab::Keybinds,
             ];
@@ -239,9 +240,9 @@ fn handle_settings_key(
         }
         KeyCode::Right => {
             let tabs = [
-                ui::SettingsTab::Account,
+                SettingsTab::Account,
                 ui::SettingsTab::Voice,
-                ui::SettingsTab::Appearance,
+                SettingsTab::Appearance,
                 ui::SettingsTab::Notifications,
                 ui::SettingsTab::Keybinds,
             ];
@@ -251,7 +252,7 @@ fn handle_settings_key(
                 .unwrap_or(0);
             app.settings_tab = tabs[(pos + 1).min(tabs.len() - 1)];
         }
-        KeyCode::Enter if app.settings_tab == ui::SettingsTab::Appearance => {
+        KeyCode::Enter if app.settings_tab == SettingsTab::Appearance => {
             let value = app.accent_input.clone();
             if ui::apply_accent_color(app, &value) {
                 profile.accent_color = value;
@@ -260,13 +261,13 @@ fn handle_settings_key(
                 app.error_message = Some("Use #RRGGBB".into());
             }
         }
-        KeyCode::Tab if app.settings_tab == ui::SettingsTab::Appearance => {
+        KeyCode::Tab if app.settings_tab == SettingsTab::Appearance => {
             app.icon_style = app.icon_style.next();
         }
-        KeyCode::Backspace if app.settings_tab == ui::SettingsTab::Appearance => {
+        KeyCode::Backspace if app.settings_tab == SettingsTab::Appearance => {
             app.accent_input.pop();
         }
-        KeyCode::Char(c) if app.settings_tab == ui::SettingsTab::Appearance => {
+        KeyCode::Char(c) if app.settings_tab == SettingsTab::Appearance => {
             if "#0123456789abcdefABCDEF".contains(c) && app.accent_input.len() < 7 {
                 app.accent_input.push(c);
             }
@@ -447,27 +448,71 @@ async fn main() -> anyhow::Result<()> {
     } else if state_path.exists() {
         match persistence::load_public(&state_path) {
             Ok(saved) => {
+                // Seed flock/roost views from every saved descriptor, including
+                // those with join secrets, so spaces stay visible even while
+                // everyone is offline. The auto-rejoin refreshes them when
+                // peers come back; it never removes them.
+                let mut seen_roosts: HashSet<String> = HashSet::new();
                 for descriptor in &saved.contexts {
-                    // Contexts that carry a join secret will be re-created
-                    // properly when the auto-rejoin fires JoinedFlock.
-                    // Inserting them now would produce a stale Restoring
-                    // placeholder that duplicates the real entry.
-                    if descriptor.secret.is_some() {
+                    let Some(secret) = descriptor.secret.clone() else {
+                        app.insert_context(ui::ContextView {
+                            id: descriptor.space,
+                            title: descriptor.label.clone(),
+                            roost: match descriptor.space {
+                                starling::protocol::SpaceId::RoostChannel { roost, .. } => {
+                                    Some(roost)
+                                }
+                                starling::protocol::SpaceId::Flock(_) => None,
+                            },
+                            base_invite_display: None,
+                            messages: Vec::new(),
+                            unread: 0,
+                            state: ui::ContextState::Restoring,
+                            secret: None,
+                        });
                         continue;
-                    }
+                    };
+                    // Space with a join secret: re-create the view immediately
+                    // so it survives offline restarts.
                     app.insert_context(ui::ContextView {
                         id: descriptor.space,
                         title: descriptor.label.clone(),
                         roost: match descriptor.space {
-                            starling::protocol::SpaceId::RoostChannel { roost, .. } => Some(roost),
+                            starling::protocol::SpaceId::RoostChannel { roost, .. } => {
+                                Some(roost)
+                            }
                             starling::protocol::SpaceId::Flock(_) => None,
                         },
-                        base_invite_display: None,
+                        base_invite_display: Some(secret.clone()),
                         messages: Vec::new(),
                         unread: 0,
                         state: ui::ContextState::Restoring,
-                        secret: descriptor.secret.clone(),
+                        secret: Some(secret.clone()),
                     });
+                    match descriptor.space {
+                        starling::protocol::SpaceId::Flock(_) => {
+                            if !app.flocks.iter().any(|f| f.code == secret) {
+                                app.flocks.push(ui::FlockView {
+                                    code: secret.clone(),
+                                    name: descriptor.label.clone(),
+                                    messages: Vec::new(),
+                                    unread: 0,
+                                });
+                            }
+                        }
+                        starling::protocol::SpaceId::RoostChannel { .. } => {
+                            if !seen_roosts.contains(&secret) {
+                                seen_roosts.insert(secret.clone());
+                                app.roosts.push(ui::RoostView {
+                                    code: secret.clone(),
+                                    name: descriptor.label.clone(),
+                                    channels: Vec::new(),
+                                    unread: 0,
+                                    icon_path: None,
+                                });
+                            }
+                        }
+                    }
                 }
                 if let Some(active) = saved.active_space {
                     app.select_context(active);
@@ -687,7 +732,7 @@ async fn main() -> anyhow::Result<()> {
                         if app.roosts.iter().any(|roost| roost.code == code) {
                             continue;
                         }
-                        app.apply_roost_perms(&perms);
+                        app.apply_roost_perms(&code, &perms);
                         let roost_channels: Vec<(String, String)> = channels
                             .into_iter()
                             .map(|channel| {
@@ -742,7 +787,7 @@ async fn main() -> anyhow::Result<()> {
                         channels,
                         perms,
                     } => {
-                        app.apply_roost_perms(&perms);
+                        app.apply_roost_perms(&code, &perms);
                         if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
                             rv.name = name;
                             let mut previous: std::collections::HashMap<_, _> = rv
@@ -1084,6 +1129,9 @@ fn handle_create_room_key(
     match k.code {
         KeyCode::Enter if app.create_flock_code.is_some() => {
             if let Some(code) = app.create_flock_code.take() {
+                // The local user created this flock, so the management menu
+                // shows edit/delete for it even before anyone else joins.
+                app.flock_owners.insert(code.clone(), true);
                 let since = app.newest_ts(&code).unwrap_or(0);
                 let _ = cmd_tx.send(Command::Join { code, since });
             }
@@ -1172,8 +1220,8 @@ fn handle_edit_flock_key(
 ) -> KeyOutcome {
     match k.code {
         KeyCode::Enter => {
-            let name = std::mem::take(&mut app.edit_flock_name);
             let code = std::mem::take(&mut app.edit_flock_code);
+            let name = std::mem::take(&mut app.edit_flock_name);
             app.show_edit_flock = false;
             if !name.is_empty() {
                 // Update the legacy FlockView name
@@ -1191,6 +1239,16 @@ fn handle_edit_flock_key(
                 // Update roost name if this code belongs to a roost
                 if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
                     rv.name = name.clone();
+                    // Persist the rename on the roost server so it survives
+                    // restarts and propagates to other members.
+                    if let Some(roost_ep) = starling::net::decode_typed_code(&rv.code)
+                        .and_then(|t| starling::net::typed_code_node_id(&t))
+                    {
+                        let _ = cmd_tx.send(Command::RenameRoost {
+                            roost: roost_ep,
+                            name,
+                        });
+                    }
                 }
             }
         }
@@ -1367,6 +1425,71 @@ fn execute_context_action(
     cmd_tx: &mpsc::UnboundedSender<Command>,
     action: &ContextMenuAction,
 ) -> anyhow::Result<()> {
+    // Space management actions apply to flocks and roosts alike and never need
+    // a roost endpoint, so handle them before the endpoint guard.
+    match action {
+        ContextMenuAction::LeaveSpace => {
+            let Some(code) = app.context_menu_code() else {
+                return Ok(());
+            };
+            app.show_context_menu = false;
+            let is_roost = app.roosts.iter().any(|r| r.code == code);
+            if is_roost {
+                app.roosts.retain(|r| r.code != code);
+            } else {
+                app.flocks.retain(|f| f.code != code);
+            }
+            app.contexts.retain(|_, c| {
+                c.base_invite_display.as_deref() != Some(code.as_str())
+            });
+            app.context_order.retain(|id| app.contexts.contains_key(id));
+            app.presence.contexts.retain(|id, _| app.contexts.contains_key(id));
+            app.active = app.context_order.first().copied();
+            let _ = cmd_tx.send(Command::Leave { code });
+            return Ok(());
+        }
+        ContextMenuAction::DeleteSpace => {
+            let Some(code) = app.context_menu_code() else {
+                return Ok(());
+            };
+            app.show_context_menu = false;
+            let is_local_roost = app.roosts.iter().any(|r| r.code == code);
+            if is_local_roost {
+                // Destroy the local roost server data if we host it.
+                let _ = starling::roost::server::destroy_by_code(&code);
+            }
+            app.roosts.retain(|r| r.code != code);
+            app.flocks.retain(|f| f.code != code);
+            app.contexts.retain(|_, c| {
+                c.base_invite_display.as_deref() != Some(code.as_str())
+            });
+            app.context_order.retain(|id| app.contexts.contains_key(id));
+            app.presence.contexts.retain(|id, _| app.contexts.contains_key(id));
+            app.active = app.context_order.first().copied();
+            let _ = cmd_tx.send(Command::Leave { code });
+            return Ok(());
+        }
+        ContextMenuAction::EditSpace => {
+            let Some(code) = app.context_menu_code() else {
+                return Ok(());
+            };
+            app.show_context_menu = false;
+            app.edit_flock_code = code.clone();
+            app.edit_flock_name = app
+                .flocks
+                .iter()
+                .find(|f| f.code == code)
+                .map(|f| f.name.clone())
+                .or_else(|| {
+                    app.roosts.iter().find(|r| r.code == code).map(|r| r.name.clone())
+                })
+                .unwrap_or_default();
+            app.show_edit_flock = true;
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let Some(roost_ep) = app.context_menu_roost_endpoint() else {
         return Ok(());
     };
@@ -1441,6 +1564,10 @@ fn execute_context_action(
                 });
             }
         }
+        // Handled above the endpoint guard; unreachable here.
+        ContextMenuAction::LeaveSpace
+        | ContextMenuAction::EditSpace
+        | ContextMenuAction::DeleteSpace => {}
     }
     Ok(())
 }
@@ -1943,13 +2070,41 @@ fn handle_mouse_scroll(app: &mut App, col: u16, row: u16, delta: f32) -> anyhow:
     Ok(())
 }
 
+fn handle_settings_mouse_click(app: &mut App, modal: Rect, col: u16, row: u16) -> bool {
+    let tabs = [
+        SettingsTab::Account,
+        ui::SettingsTab::Voice,
+        SettingsTab::Appearance,
+        ui::SettingsTab::Notifications,
+        ui::SettingsTab::Keybinds,
+    ];
+    // Nav column: 22 wide, starts one cell inside the modal; each tab is one row.
+    let nav_x = modal.x + 1;
+    let nav_w = 22u16;
+    if col >= nav_x && col < nav_x + nav_w {
+        let tab_row = row.saturating_sub(modal.y + 1) as usize;
+        if let Some(tab) = tabs.get(tab_row) {
+            app.settings_tab = *tab;
+            return true;
+        }
+    }
+    // Click anywhere else inside the modal: consume so it does not leak to
+    // the underlying UI handlers.
+    true
+}
+
 fn handle_reference_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, term_h: u16) -> bool {
     let chat_left = 39u16;
     // Sidebar header row: open the menu.
     if row == 0 && (9..chat_left).contains(&col) { app.show_menu = true; app.menu_selection = 0; return true; }
     // Chat header row: right-side icons (members, bell, pin, call).
     if row <= 1 && col >= chat_left {
-        let right = term_w.saturating_sub(1);
+        let members_open = app.show_members
+            && (matches!(app.v2_view, ui::V2View::Space)
+                || (matches!(app.v2_view, ui::V2View::Home)
+                    && matches!(app.selection, Selection::Flock(_))
+                    && app.selected_dm.is_none()));
+        let right = term_w.saturating_sub(if members_open { 30 } else { 1 });
         if col >= right.saturating_sub(1) { app.in_call = true; app.call_title = "Call".into(); }
         else if col >= right.saturating_sub(4) { app.show_pinned = !app.show_pinned; }
         else if col >= right.saturating_sub(7) { app.show_notifications = !app.show_notifications; }
@@ -1962,23 +2117,32 @@ fn handle_reference_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, 
         let roost_index = (row.saturating_sub(5) / 4) as usize;
         if app.roosts.get(roost_index).is_some_and(|roost| !roost.channels.is_empty()) {
             app.select(Selection::Channel(roost_index, 0));
+            // Clicking a roost opens its management menu.
+            app.build_context_menu(ContextMenuTarget::Roost(roost_index));
+            app.show_context_menu = !app.context_menu_items.is_empty();
         }
         return true;
     }
-    // Sidebar list: peers then flocks in Home; channels in Space.
+    // Sidebar list: DM row 0 (header), then peers and flocks merged; channels in Space.
     if (9..chat_left).contains(&col) && row >= 2 && row < term_h.saturating_sub(4) {
         let list_index = (row - 2) as usize;
         if matches!(app.v2_view, ui::V2View::Home) {
+            if list_index == 0 {
+                return true; // DIRECT MESSAGES header
+            }
             let peer_count = app.peers.len();
-            if list_index >= 1 && list_index <= peer_count {
+            if list_index <= peer_count {
                 if let Some(peer) = app.peers.get(list_index - 1).copied() {
                     app.selected_dm = Some(peer);
                     return true;
                 }
-            } else if list_index > peer_count + 1 {
-                let flock_index = list_index - peer_count - 2;
+            } else {
+                let flock_index = list_index - peer_count - 1;
                 if flock_index < app.flocks.len() {
-                    app.select(Selection::Flock(flock_index));
+                    app.select_flock(flock_index);
+                    // Clicking a flock opens its management menu.
+                    app.build_context_menu(ContextMenuTarget::Flock(flock_index));
+                    app.show_context_menu = !app.context_menu_items.is_empty();
                     return true;
                 }
             }
@@ -2061,6 +2225,17 @@ fn handle_mouse_click(
     }
 
     if app.show_context_menu || app.show_role_submenu {
+        return Ok(());
+    }
+
+    // Settings modal: click a nav tab to switch, or click inside the content
+    // area to focus the accent input on the Appearance tab.
+    if app.settings_open
+        && let Some(modal) = ui::active_popup_rect(app, term_w, term_h)
+    {
+        if handle_settings_mouse_click(app, modal, col, row) {
+            return Ok(());
+        }
         return Ok(());
     }
 
@@ -2360,8 +2535,9 @@ fn activate_menu_item(
 #[cfg(test)]
 mod tests {
     use super::{
-        App, MENU_ITEMS, leave_context, menu_item_at_size, normalize_leave_code, open_create_room,
-        parse_join_arg, refresh_create_flock_code, update_menu_hover,
+        App, MENU_ITEMS, SettingsTab, handle_settings_mouse_click, leave_context,
+        menu_item_at_size, normalize_leave_code, open_create_room, parse_join_arg,
+        refresh_create_flock_code, update_menu_hover,
     };
 
     #[test]
@@ -2582,5 +2758,26 @@ mod tests {
         let after = load_protected(&protected_path).unwrap();
         assert_eq!(after.credentials.len(), 1);
         assert_eq!(after.credentials[0].name, "unrelated");
+    }
+
+    #[test]
+    fn settings_mouse_click_selects_tabs_and_consumes_clicks() {
+        let mut app = App::default();
+        app.settings_open = true;
+        // Settings modal: 80x20 centered on a 120x30 terminal.
+        let modal = ratatui::layout::Rect {
+            x: 20,
+            y: 5,
+            width: 80,
+            height: 20,
+        };
+        // Click the third nav row -> Appearance tab.
+        assert!(handle_settings_mouse_click(&mut app, modal, modal.x + 2, modal.y + 3));
+        assert_eq!(app.settings_tab, SettingsTab::Appearance);
+        // Click the first nav row -> Account tab.
+        assert!(handle_settings_mouse_click(&mut app, modal, modal.x + 2, modal.y + 1));
+        assert_eq!(app.settings_tab, SettingsTab::Account);
+        // Any click inside the modal is consumed (returns true).
+        assert!(handle_settings_mouse_click(&mut app, modal, modal.x + 40, modal.y + 10));
     }
 }

@@ -23,6 +23,7 @@ pub struct Palette {
     pub background: Option<Color>,
     pub border: Color,
     pub surface: Color,
+    pub surface_warm: Color,
     pub accent: Color,
     pub author: Color,
     pub selection: Color,
@@ -43,6 +44,7 @@ impl Default for Palette {
             background: Some(Color::Rgb(49, 51, 56)),
             border: Color::Rgb(63, 65, 71),
             surface: Color::Rgb(43, 45, 49),
+            surface_warm: Color::Rgb(30, 31, 34),
             accent: DEFAULT_ACCENT,
             author: DEFAULT_AUTHOR,
             selection: DEFAULT_SELECTION,
@@ -365,6 +367,10 @@ pub struct App {
     pub settings_tab: SettingsTab,
     pub selected_dm: Option<EndpointId>,
     pub reference_dm_selected: usize,
+    /// Flock join code -> true when the local user created this flock.
+    pub flock_owners: HashMap<String, bool>,
+    /// Roost join code -> owner endpoint, from the roost's `PermState`.
+    pub roost_owners: HashMap<String, EndpointId>,
     pub show_pinned: bool,
     pub show_notifications: bool,
     pub show_members: bool,
@@ -447,6 +453,8 @@ impl Default for App {
             accent_input: "#5865F2".to_string(),
             selected_dm: None,
             reference_dm_selected: 4,
+            flock_owners: HashMap::new(),
+            roost_owners: HashMap::new(),
             show_pinned: false,
             show_notifications: false,
             show_members: true,
@@ -785,6 +793,7 @@ pub enum Popup {
 pub enum ContextMenuTarget {
     Roost(usize),
     RoostChannel(usize, usize),
+    Flock(usize),
     Bird(EndpointId),
 }
 
@@ -800,6 +809,9 @@ pub enum ContextMenuAction {
     RemoveRoles,
     TransferOwnership,
     DeleteMessage,
+    LeaveSpace,
+    EditSpace,
+    DeleteSpace,
 }
 
 /// One entry in the context menu.
@@ -960,9 +972,16 @@ impl App {
 
     /// Refresh the client's view of its own permissions and peer role colors
     /// from a roost's `PermState`. UX-only; the roost re-checks every action.
-    pub fn apply_roost_perms(&mut self, perms: &starling::roost::perms::PermState) {
+    pub fn apply_roost_perms(
+        &mut self,
+        code: &str,
+        perms: &starling::roost::perms::PermState,
+    ) {
         if let Some(my_id) = self.node_id {
             self.my_perms = perms.effective(&my_id);
+        }
+        if let Some(owner) = perms.owner {
+            self.roost_owners.insert(code.to_string(), owner);
         }
         self.peer_roles.clear();
         for (&id, role_indices) in &perms.members {
@@ -1119,6 +1138,17 @@ impl App {
         }
     }
 
+    /// Select a flock while keeping the Friends (Home) sidebar visible, so the
+    /// flock does not vanish from the DM list.
+    pub fn select_flock(&mut self, index: usize) {
+        self.selection = Selection::Flock(index);
+        self.active = None;
+        self.v2_view = V2View::Home;
+        if let Some(flock) = self.flocks.get_mut(index) {
+            flock.unread = 0;
+        }
+    }
+
     pub fn open_home(&mut self) {
         self.v2_view = V2View::Home;
         self.active = None;
@@ -1260,6 +1290,50 @@ impl App {
                             enabled: true,
                         });
                     }
+                    // Local owner or roost admin may edit/delete the roost.
+                    let can_admin = self.node_id.is_some_and(|id| {
+                        self.roost_owners.get(&rv.code) == Some(&id)
+                            || perms.contains(starling::roost::perms::Perm::ADMIN)
+                    });
+                    self.context_menu_items.push(ContextMenuItem {
+                        label: "Leave Roost".into(),
+                        action: ContextMenuAction::LeaveSpace,
+                        enabled: true,
+                    });
+                    if can_admin {
+                        self.context_menu_items.push(ContextMenuItem {
+                            label: "Edit Roost".into(),
+                            action: ContextMenuAction::EditSpace,
+                            enabled: true,
+                        });
+                        self.context_menu_items.push(ContextMenuItem {
+                            label: "Delete Roost".into(),
+                            action: ContextMenuAction::DeleteSpace,
+                            enabled: true,
+                        });
+                    }
+                }
+            }
+            ContextMenuTarget::Flock(index) => {
+                if let Some(fv) = self.flocks.get(index) {
+                    let is_owner = self.flock_owners.get(&fv.code).copied().unwrap_or(false);
+                    self.context_menu_items.push(ContextMenuItem {
+                        label: "Leave Flock".into(),
+                        action: ContextMenuAction::LeaveSpace,
+                        enabled: true,
+                    });
+                    if is_owner {
+                        self.context_menu_items.push(ContextMenuItem {
+                            label: "Edit Flock".into(),
+                            action: ContextMenuAction::EditSpace,
+                            enabled: true,
+                        });
+                        self.context_menu_items.push(ContextMenuItem {
+                            label: "Delete Flock".into(),
+                            action: ContextMenuAction::DeleteSpace,
+                            enabled: true,
+                        });
+                    }
                 }
             }
             ContextMenuTarget::RoostChannel(_ri, _ci) => {
@@ -1332,6 +1406,19 @@ impl App {
                 let roost_id = ctx.roost?;
                 Some(EndpointId::from_bytes(&roost_id.0).ok()?)
             }
+            ContextMenuTarget::Flock(_) => None,
+        }
+    }
+
+    /// Join code (base roost code or flock code) of the current menu target,
+    /// or the active context when the target is a bird.
+    pub fn context_menu_code(&self) -> Option<String> {
+        let target = self.context_menu_target.as_ref()?;
+        match target {
+            ContextMenuTarget::Roost(ri) => self.roosts.get(*ri).map(|rv| rv.code.clone()),
+            ContextMenuTarget::RoostChannel(ri, _) => self.roosts.get(*ri).map(|rv| rv.code.clone()),
+            ContextMenuTarget::Flock(i) => self.flocks.get(*i).map(|fv| fv.code.clone()),
+            ContextMenuTarget::Bird(_) => self.active_code().map(str::to_owned),
         }
     }
 }
@@ -1380,11 +1467,17 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // Reference proportions (CSS px -> terminal cols at ~8px/cell):
     // rail 72px ~9, sidebar 240px ~30, members 240px ~30.
-    let columns = if matches!(app.v2_view, V2View::Home) {
+    let members_visible = app.show_members
+        && (matches!(app.v2_view, V2View::Space)
+            || (matches!(app.v2_view, V2View::Home)
+                && matches!(app.selection, Selection::Flock(_))
+                && app.selected_dm.is_none()));
+    let columns = if members_visible {
         Layout::horizontal([
             Constraint::Length(9),
             Constraint::Length(30),
             Constraint::Min(1),
+            Constraint::Length(30),
         ])
         .split(area)
     } else {
@@ -1392,7 +1485,6 @@ pub fn draw(f: &mut Frame, app: &App) {
             Constraint::Length(9),
             Constraint::Length(30),
             Constraint::Min(1),
-            Constraint::Length(30),
         ])
         .split(area)
     };
@@ -1400,7 +1492,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_server_rail(f, app, columns[0]);
     draw_sidebar(f, app, columns[1]);
     draw_chat(f, app, columns[2]);
-    if matches!(app.v2_view, V2View::Space) && app.show_members {
+    if members_visible {
         draw_members(f, app, columns[3]);
     }
     if app.show_pinned {
@@ -1442,7 +1534,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
-    let rail_bg = app.palette.background.unwrap_or(Color::Rgb(30, 31, 34));
+    let rail_bg = app.palette.surface_warm;
     let pill_bg = app.palette.surface;
     let active_bg = app.palette.accent;
     let fg = app.palette.fg_2;
@@ -1490,7 +1582,7 @@ fn draw_server_pill(
     } else {
         rail_bg
     };
-    let centered = format!("{:^<1$}", label, area.width as usize);
+    let centered = format!("{:^1$}", label, area.width as usize);
     let lines: Vec<Line> = (0..area.height)
         .map(|row| {
             let text = if row == area.height / 2 {
@@ -1498,8 +1590,13 @@ fn draw_server_pill(
             } else {
                 " ".repeat(area.width as usize)
             };
+            let indicator_span = if row == area.height / 2 {
+                Span::styled(indicator, Style::new().fg(indicator_color).bg(rail_bg))
+            } else {
+                Span::styled(" ", Style::new().bg(rail_bg))
+            };
             Line::from(vec![
-                Span::styled(indicator, Style::new().fg(indicator_color).bg(rail_bg)),
+                indicator_span,
                 Span::styled(text, Style::new().fg(text_fg).bg(bg)),
             ])
         })
@@ -1531,21 +1628,18 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
             };
             items.push(ListItem::new(Line::from(vec![Span::styled(format!(" {} ", initials(&name)), Style::new().fg(fg_2).bg(app.palette.accent)), Span::styled(format!(" {status_glyph} "), Style::new().fg(status_color).bg(row_bg)), Span::styled(name, Style::new().fg(if active { fg_2 } else { text }).bg(row_bg))])).bg(row_bg));
         }
-        if !app.flocks.is_empty() {
-            items.push(ListItem::new(Line::from(Span::styled("GROUPS", Style::new().fg(muted).add_modifier(Modifier::BOLD)))));
-            for (index, flock) in app.flocks.iter().enumerate() {
-                let active = matches!(app.selection, Selection::Flock(i) if i == index);
-                let row_bg = if active { selected_bg } else { bg };
-                let icon = flock_icon(&flock.name);
-                let mut spans = vec![
-                    Span::styled(format!(" {} ", icon), Style::new().fg(fg_2).bg(app.palette.accent)),
-                    Span::styled(flock.name.clone(), Style::new().fg(if active { fg_2 } else { text }).bg(row_bg)),
-                ];
-                if flock.unread > 0 {
-                    spans.push(Span::styled(format!(" {}", flock.unread), Style::new().fg(Color::White).bg(Color::Rgb(242, 63, 67))));
-                }
-                items.push(ListItem::new(Line::from(spans)).bg(row_bg));
+        for (index, flock) in app.flocks.iter().enumerate() {
+            let active = matches!(app.selection, Selection::Flock(i) if i == index);
+            let row_bg = if active { selected_bg } else { bg };
+            let icon = TerminalIcon::Group.glyph(app.icon_style);
+            let mut spans = vec![
+                Span::styled(format!(" {} ", icon), Style::new().fg(fg_2).bg(app.palette.accent)),
+                Span::styled(flock.name.clone(), Style::new().fg(if active { fg_2 } else { text }).bg(row_bg)),
+            ];
+            if flock.unread > 0 {
+                spans.push(Span::styled(format!(" {}", flock.unread), Style::new().fg(Color::White).bg(Color::Rgb(242, 63, 67))));
             }
+            items.push(ListItem::new(Line::from(spans)).bg(row_bg));
         }
     } else if let Selection::Channel(ri, ci) = app.selection { if let Some(roost) = app.roosts.get(ri) { items.push(ListItem::new(Line::from(Span::styled("TEXT CHANNELS", Style::new().fg(muted).add_modifier(Modifier::BOLD))))); for (index, channel) in roost.channels.iter().enumerate() { let active = index == ci; let row_bg = if active { selected_bg } else { bg }; items.push(ListItem::new(Line::from(Span::styled(format!("# {}", channel.name), Style::new().fg(if active { fg_2 } else { text }).bg(row_bg)))).bg(row_bg)); } } }
     f.render_widget(List::new(items).block(Block::default().bg(bg)), rows[1]);
@@ -1578,8 +1672,11 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let fg_2 = Color::Rgb(242, 243, 245);
     let muted = Color::Rgb(148, 155, 164);
     let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(1), Constraint::Length(3)]).split(area);
-    let is_dm = matches!(app.v2_view, V2View::Home);
-    let title = if is_dm {
+    let is_dm = matches!(app.v2_view, V2View::Home) && app.selected_dm.is_some();
+    let is_flock = matches!(app.selection, Selection::Flock(i) if i < app.flocks.len());
+    let title = if is_flock {
+        app.active_title()
+    } else if is_dm {
         match app.selected_dm {
             Some(peer) => format!("@ {}", app.peer_display_name(&peer)),
             None => "Messages".to_string(),
@@ -1587,13 +1684,15 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     } else {
         app.active_title()
     };
-    let subtitle = if is_dm {
+    let subtitle = if is_flock || matches!(app.v2_view, V2View::Space) {
+        format!("{} members", app.active_peers().len() + 1)
+    } else if is_dm {
         app.selected_dm
             .and_then(|peer| app.peer_status.get(&peer))
             .map(|status| format!("{status:?}").to_lowercase())
             .unwrap_or_default()
     } else {
-        format!("{} members", app.active_peers().len() + 1)
+        String::new()
     };
     let icons = format!("{}  {}  {}  {}", TerminalIcon::Members.glyph(app.icon_style), TerminalIcon::Bell.glyph(app.icon_style), TerminalIcon::Pin.glyph(app.icon_style), TerminalIcon::Call.glyph(app.icon_style));
     let header = Line::from(vec![
@@ -1602,7 +1701,7 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(format!("{}{icons}", " ".repeat((area.width as usize).saturating_sub(title.chars().count() + subtitle.chars().count() + icons.chars().count() + 4))), Style::new().fg(muted).bg(bg)),
     ]);
     f.render_widget(Paragraph::new(header).block(Block::default().borders(Borders::BOTTOM).border_style(Style::new().fg(border)).bg(bg)), rows[0]);
-    let mut message_rows = Vec::new();
+    let mut message_lines: Vec<Line> = Vec::new();
     let messages = app.active_messages();
     if messages.is_empty() {
         let empty = if is_dm {
@@ -1610,18 +1709,37 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
                 Some(peer) => format!("This is the beginning of your conversation with @{}.", app.peer_display_name(&peer)),
                 None => "Select a peer to begin a direct message.".to_string(),
             }
-        } else {
+        } else if is_flock {
             format!("Welcome to {}! This is the start of the conversation.", title)
+        } else if matches!(app.v2_view, V2View::Space) {
+            format!("Welcome to {}! This is the start of the conversation.", title)
+        } else {
+            "Select a peer to begin a direct message.".to_string()
         };
-        message_rows.push(ListItem::new(Line::from(Span::styled(empty, Style::new().fg(muted).bg(bg)))));
+        message_lines.push(Line::from(Span::styled(empty, Style::new().fg(muted).bg(bg))));
     } else {
-        message_rows.push(ListItem::new(Line::from(Span::styled("──────────────────── TODAY ────────────────────", Style::new().fg(muted).bg(bg)))));
+        message_lines.push(Line::from(Span::styled("──────────────────── TODAY ────────────────────", Style::new().fg(muted).bg(bg))));
         for message in messages {
             let prefix = if message.private { format!("{} ", TerminalIcon::Lock.glyph(app.icon_style)) } else { String::new() };
-            message_rows.push(ListItem::new(Text::from(vec![Line::from(vec![Span::styled(format!(" {} ", initials(&message.msg.author)), Style::new().fg(Color::White).bg(app.palette.accent)), Span::styled(format!(" {}", message.msg.author), Style::new().fg(fg_2).add_modifier(Modifier::BOLD)), Span::styled(format!("  {}", format_ts(message.msg.ts)), Style::new().fg(muted))]), Line::from(Span::styled(format!("{prefix}{}", message.msg.body), Style::new().fg(text)))])));
+            message_lines.push(Line::from(vec![Span::styled(format!(" {} ", initials(&message.msg.author)), Style::new().fg(Color::White).bg(app.palette.accent)), Span::styled(format!(" {}", message.msg.author), Style::new().fg(fg_2).add_modifier(Modifier::BOLD)), Span::styled(format!("  {}", format_ts(message.msg.ts)), Style::new().fg(muted))]));
+            message_lines.push(Line::from(Span::styled(format!("{prefix}{}", message.msg.body), Style::new().fg(text).bg(bg))));
         }
     }
-    f.render_widget(List::new(message_rows).block(Block::default().bg(bg)), rows[1]);
+    // Center the message content vertically in the chat body.
+    let content_h = message_lines.len() as u16;
+    let pad_top = (rows[1].height.saturating_sub(content_h)) / 2;
+    let mut lines = Vec::with_capacity(rows[1].height as usize);
+    for _ in 0..pad_top {
+        lines.push(Line::from(""));
+    }
+    lines.extend(message_lines);
+    while (lines.len() as u16) < rows[1].height {
+        lines.push(Line::from(""));
+    }
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).block(Block::default().bg(bg)),
+        rows[1],
+    );
     draw_message_bar(f, app, rows[2]);
 }
 
@@ -1661,7 +1779,9 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
         vertical: 0,
     });
 
-    let placeholder = if matches!(app.v2_view, V2View::Home) {
+    let placeholder = if matches!(app.selection, Selection::Flock(_)) {
+        format!("Message {}", app.active_title())
+    } else if matches!(app.v2_view, V2View::Home) {
         match app.selected_dm {
             Some(peer) => format!("Message @{}", app.peer_display_name(&peer)),
             None => "Message".to_string(),
@@ -3143,6 +3263,7 @@ mod tests {
         assert!(text.contains("DIRECT MESSAGES"));
         assert!(text.contains("Select a peer"));
         assert!(!text.contains("PR merged"));
+        assert!(!text.contains("GROUPS"));
     }
 
 #[test]
@@ -3158,11 +3279,11 @@ fn home_view_renders_flock_row_and_dynamic_title() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| super::draw(f, &app)).unwrap();
     let text = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
-    assert!(text.contains("GROUPS"));
+    assert!(!text.contains("GROUPS"));
     assert!(text.contains("99s"));
     assert!(text.contains("Ramhaug"));
     assert!(text.contains("#7134"));
-    assert!(text.contains("Select a peer"));
+    assert!(text.contains("Welcome to 99s"));
 }
 
 
@@ -3228,6 +3349,108 @@ fn popup_dismissal_helpers_work() {
     // Full dismiss from the parent menu.
     dismiss_active_popup(&mut app);
     assert!(!app.show_context_menu);
+}
+
+#[test]
+fn flock_selection_keeps_row_and_shows_members() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut app = App::default();
+    app.name = "Ramhaug".into();
+    app.tag = "#7134".into();
+    app.v2_view = V2View::Home;
+    app.flocks.push(FlockView { code: "99s".into(), name: "99s".into(), messages: vec![], unread: 0 });
+    app.select_flock(0);
+    assert!(matches!(app.v2_view, V2View::Home));
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| super::draw(f, &app)).unwrap();
+    let text = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
+    // Flock row stays visible and selected; no GROUPS label; members panel present.
+    assert!(text.contains("99s"));
+    assert!(!text.contains("GROUPS"));
+    assert!(text.contains("MEMBERS"));
+    // The active pill indicator is not stacked on every rail row.
+    let buf = terminal.backend().buffer();
+    let area = buf.area();
+    let cells = buf.content();
+    let full_width = area.width as usize;
+    let mut indicator_rows = 0;
+    for y in 1..6 {
+        let ch = cells[y * full_width + 1].symbol();
+        if ch == "\u{22ee}" { indicator_rows += 1; }
+    }
+    assert_eq!(indicator_rows, 1, "active indicator must appear once, got {indicator_rows} rows");
+}
+
+#[test]
+fn rail_is_darkest_and_flock_uses_group_icon() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut app = App::default();
+    app.v2_view = V2View::Home;
+    app.flocks.push(FlockView { code: "935".into(), name: "935".into(), messages: vec![], unread: 0 });
+    app.select_flock(0);
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| super::draw(f, &app)).unwrap();
+    let buf = terminal.backend().buffer();
+    let area = buf.area();
+    let cells = buf.content();
+    let full_width = area.width as usize;
+    // Rail background must be the darkest surface.
+    let rail_cell = &cells[0 * full_width + 3];
+    let side_cell = &cells[0 * full_width + 12];
+    let rail_bg = rail_cell.bg;
+    let side_bg = side_cell.bg;
+    assert!(rail_bg != side_bg, "rail and sidebar must differ");
+    // No caret fill artifacts around the home pill.
+    let home_row: String = (0..full_width).map(|x| cells[2 * full_width + x].symbol().to_string()).collect();
+    assert!(!home_row.contains("^^^^"), "caret fill leaked: {home_row:?}");
+    // Flock row uses a group glyph, not the flock's first letter.
+    let flock_row: String = (0..full_width).map(|x| cells[3 * full_width + x].symbol().to_string()).collect();
+    assert!(flock_row.contains("935"), "flock name missing: {flock_row:?}");
+    assert!(!flock_row.starts_with(" 9 "), "flock avatar must be a group glyph, got: {flock_row:?}");
+    let _ = rail_bg;
+}
+
+#[test]
+fn flock_roost_management_menu_shows_owner_actions() {
+    let mut app = App::default();
+    app.node_id = Some(iroh::SecretKey::generate().public());
+    app.flocks.push(FlockView { code: "F1".into(), name: "My Flock".into(), messages: vec![], unread: 0 });
+    app.flock_owners.insert("F1".into(), true);
+    app.roosts.push(RoostView { code: "R1".into(), name: "My Roost".into(), channels: vec![], unread: 0, icon_path: None });
+    app.roost_owners.insert("R1".into(), app.node_id.unwrap());
+
+    // Owner flock: Leave + Edit + Delete.
+    app.build_context_menu(ContextMenuTarget::Flock(0));
+    let labels: Vec<&str> = app.context_menu_items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(labels, vec!["Leave Flock", "Edit Flock", "Delete Flock"]);
+
+    // Owner roost: management actions present.
+    app.build_context_menu(ContextMenuTarget::Roost(0));
+    let labels: Vec<&str> = app.context_menu_items.iter().map(|i| i.label.as_str()).collect();
+    assert!(labels.contains(&"Leave Roost"));
+    assert!(labels.contains(&"Edit Roost"));
+    assert!(labels.contains(&"Delete Roost"));
+
+    // Non-owner flock: only Leave.
+    app.flock_owners.insert("F1".into(), false);
+    app.build_context_menu(ContextMenuTarget::Flock(0));
+    let labels: Vec<&str> = app.context_menu_items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(labels, vec!["Leave Flock"]);
+}
+
+#[test]
+fn context_menu_code_resolves_flock_and_roost() {
+    let mut app = App::default();
+    app.flocks.push(FlockView { code: "FLOCK-CODE".into(), name: "F".into(), messages: vec![], unread: 0 });
+    app.roosts.push(RoostView { code: "ROOST-CODE".into(), name: "R".into(), channels: vec![], unread: 0, icon_path: None });
+    app.context_menu_target = Some(ContextMenuTarget::Flock(0));
+    assert_eq!(app.context_menu_code().as_deref(), Some("FLOCK-CODE"));
+    app.context_menu_target = Some(ContextMenuTarget::Roost(0));
+    assert_eq!(app.context_menu_code().as_deref(), Some("ROOST-CODE"));
 }
 
 }
