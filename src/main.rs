@@ -41,6 +41,7 @@ use ui::{
     App, ContextMenuAction, ContextMenuTarget, FlockView, MENU_ITEMS, Popup, RoostView,
     ScrollPanel, Selection,
 };
+use ratatui::layout::{Position, Rect};
 
 const MOUSE_TRACKING_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
 const MOUSE_TRACKING_OFF: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
@@ -707,6 +708,7 @@ async fn main() -> anyhow::Result<()> {
                                 })
                                 .collect(),
                             unread: 0,
+                            icon_path: None,
                         });
                         // Create ContextViews for each roost channel (V1 tracking).
                         if let Some(typed) = starling::net::decode_typed_code(&code)
@@ -1567,6 +1569,14 @@ fn handle_normal_key(
             }
         }
 
+        KeyCode::Up if matches!(app.v2_view, ui::V2View::Home) && !app.input_focus => {
+            app.reference_dm_selected = app.reference_dm_selected.saturating_sub(1);
+        }
+        KeyCode::Down if matches!(app.v2_view, ui::V2View::Home) && !app.input_focus => {
+            app.reference_dm_selected = (app.reference_dm_selected + 1).min(4);
+        }
+        KeyCode::Enter if matches!(app.v2_view, ui::V2View::Home) && !app.input_focus => {}
+
         KeyCode::Up if k.modifiers.contains(KeyModifiers::ALT) => {
             let nav = nav_items(app);
             if let Some(pos) = nav.iter().position(|s| *s == app.selection)
@@ -1615,6 +1625,12 @@ fn handle_normal_key(
             app.input.clear();
         }
 
+        KeyCode::Esc if app.show_pinned => {
+            app.show_pinned = false;
+        }
+        KeyCode::Esc if app.show_notifications => {
+            app.show_notifications = false;
+        }
         KeyCode::Esc => {
             app.show_menu = true;
             app.menu_selection = 0;
@@ -1660,13 +1676,17 @@ fn handle_normal_key(
             if let (Some(roost_id), Some(target)) =
                 (app.selected_roost_endpoint_id(), app.selected_peer_id())
             {
-                let _ = cmd_tx.send(Command::Kick {
-                    roost: roost_id,
-                    target,
-                });
+                let _ = cmd_tx.send(Command::Kick { roost: roost_id, target });
             }
         }
 
+        KeyCode::Char('m' | 'M') if app.in_call && !app.input_focus => {
+            app.muted = !app.muted;
+        }
+        KeyCode::Char('c' | 'C') if app.in_call && !app.input_focus => {
+            app.in_call = false;
+            app.show_video = false;
+        }
         KeyCode::Char('v' | 'V') if app.in_call && !app.input_focus => {
             toggle_call_video(app, cmd_tx);
         }
@@ -1923,17 +1943,101 @@ fn handle_mouse_scroll(app: &mut App, col: u16, row: u16, delta: f32) -> anyhow:
     Ok(())
 }
 
-#[allow(unused_variables)]
+fn handle_reference_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, term_h: u16) -> bool {
+    let chat_left = 39u16;
+    // Sidebar header row: open the menu.
+    if row == 0 && (9..chat_left).contains(&col) { app.show_menu = true; app.menu_selection = 0; return true; }
+    // Chat header row: right-side icons (members, bell, pin, call).
+    if row <= 1 && col >= chat_left {
+        let right = term_w.saturating_sub(1);
+        if col >= right.saturating_sub(1) { app.in_call = true; app.call_title = "Call".into(); }
+        else if col >= right.saturating_sub(4) { app.show_pinned = !app.show_pinned; }
+        else if col >= right.saturating_sub(7) { app.show_notifications = !app.show_notifications; }
+        else if col >= right.saturating_sub(10) { app.show_members = !app.show_members; }
+        return true;
+    }
+    // Server rail: home pill (rows 1-3) then roosts (rows 5+).
+    if col < 9 && row >= 1 && row < term_h.saturating_sub(4) {
+        if row <= 3 { app.open_home(); return true; }
+        let roost_index = (row.saturating_sub(5) / 4) as usize;
+        if app.roosts.get(roost_index).is_some_and(|roost| !roost.channels.is_empty()) {
+            app.select(Selection::Channel(roost_index, 0));
+        }
+        return true;
+    }
+    // Sidebar list: peers then flocks in Home; channels in Space.
+    if (9..chat_left).contains(&col) && row >= 2 && row < term_h.saturating_sub(4) {
+        let list_index = (row - 2) as usize;
+        if matches!(app.v2_view, ui::V2View::Home) {
+            let peer_count = app.peers.len();
+            if list_index >= 1 && list_index <= peer_count {
+                if let Some(peer) = app.peers.get(list_index - 1).copied() {
+                    app.selected_dm = Some(peer);
+                    return true;
+                }
+            } else if list_index > peer_count + 1 {
+                let flock_index = list_index - peer_count - 2;
+                if flock_index < app.flocks.len() {
+                    app.select(Selection::Flock(flock_index));
+                    return true;
+                }
+            }
+        } else if let Selection::Channel(ri, _) = app.selection {
+            let channel_index = list_index.saturating_sub(1);
+            if app.roosts.get(ri).and_then(|roost| roost.channels.get(channel_index)).is_some() {
+                app.select(Selection::Channel(ri, channel_index));
+                return true;
+            }
+        }
+        return true;
+    }
+    // Sidebar footer: profile row, then controls (mic, headset, settings).
+    if (9..39).contains(&col) && row >= term_h.saturating_sub(4) {
+        if row == term_h.saturating_sub(3) { app.profile_panel.open = true; return true; }
+        if row == term_h.saturating_sub(2) {
+            let rel = col.saturating_sub(9);
+            if rel < 3 { app.muted = !app.muted; }
+            else if rel < 6 { app.deafened = !app.deafened; app.muted = app.deafened; }
+            else { app.settings_open = true; }
+            return true;
+        }
+        return true;
+    }
+    // Composer / chat body: focus the input.
+    if row >= term_h.saturating_sub(3) && col >= chat_left { app.input_focus = true; return true; }
+    false
+}
+
 fn handle_mouse_click(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
-    muted_flag: &Arc<AtomicBool>,
-    clipboard: Option<&mut clipboard::SystemClipboard>,
+    _muted_flag: &Arc<AtomicBool>,
+    _clipboard: Option<&mut clipboard::SystemClipboard>,
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     col: u16,
     row: u16,
 ) -> anyhow::Result<()> {
     let (term_w, term_h) = crossterm::terminal::size()?;
+
+    // Popup dismissal: X button in the top-right, or click outside the popup.
+    if let Some(popup) = ui::active_popup_rect(app, term_w, term_h) {
+        let x_glyph = ui::TerminalIcon::Close.glyph(app.icon_style);
+        let x_w = x_glyph.chars().count() as u16;
+        let x_rect = Rect {
+            x: popup.right().saturating_sub(x_w),
+            y: popup.y,
+            width: x_w,
+            height: 1,
+        };
+        if x_rect.contains(Position::new(col, row)) {
+            ui::dismiss_active_popup(app);
+            return Ok(());
+        }
+        if !popup.contains(Position::new(col, row)) {
+            ui::dismiss_active_popup(app);
+            return Ok(());
+        }
+    }
 
     if app.show_menu {
         if let Some(idx) = menu_item_at_size(term_w, term_h, col, row) {
@@ -1960,7 +2064,10 @@ fn handle_mouse_click(
         return Ok(());
     }
 
-    if app.show_create_room {
+    if handle_reference_mouse_click(app, col, row, term_w, term_h) {
+        return Ok(());
+    }
+    if handle_v2_mouse_click(app, col, row, term_w, term_h) {
         return Ok(());
     }
 
@@ -1969,10 +2076,6 @@ fn handle_mouse_click(
     }
 
     if app.show_join_room {
-        return Ok(());
-    }
-
-    if handle_v2_mouse_click(app, col, row, term_w, term_h) {
         return Ok(());
     }
 
@@ -2035,6 +2138,7 @@ fn handle_mouse_click(
         app.scroll_focus = ScrollPanel::Birds;
         let visible_row = (row - flocks_top - 1) as usize;
         if let Some(content_row) = app.bird_scroll.row_index(visible_row) {
+
             if content_row == 0 {
                 open_profile(app);
                 return Ok(());
@@ -2116,6 +2220,15 @@ fn toggle_call_video(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
 }
 
 fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {
+    // Right-click on an open popup: back one level in submenus, else dismiss.
+    if let Ok((term_w, term_h)) = crossterm::terminal::size()
+        && let Some(popup) = ui::active_popup_rect(app, term_w, term_h)
+        && popup.contains(Position::new(col, row))
+    {
+        ui::dismiss_active_popup_one_level(app);
+        return Ok(());
+    }
+
     app.show_context_menu = false;
     app.show_role_submenu = false;
 
