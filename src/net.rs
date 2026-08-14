@@ -285,10 +285,12 @@ pub async fn run(
     pronouns: String,
 ) -> anyhow::Result<()> {
     #[cfg(feature = "audio")]
+    #[allow(clippy::redundant_locals)]
     let input_device = input_device;
     #[cfg(not(feature = "audio"))]
     let _ = (&muted, &input_device);
     #[cfg(feature = "video")]
+    #[allow(clippy::redundant_locals)]
     let camera_index = camera_index;
     #[cfg(not(feature = "video"))]
     let _ = &camera_index;

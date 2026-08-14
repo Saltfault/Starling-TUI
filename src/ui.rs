@@ -58,7 +58,6 @@ impl Default for Palette {
     }
 }
 
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemberProfile {
     pub endpoint: EndpointId,
@@ -750,19 +749,32 @@ impl TerminalIcon {
     }
 }
 
-
 fn initials(name: &str) -> String {
     let trimmed = name.trim();
-    if trimmed.is_empty() { return "?".to_string(); }
-    trimmed.split_whitespace().take(2).filter_map(|part| part.chars().next()).map(|c| c.to_uppercase().to_string()).collect()
+    if trimmed.is_empty() {
+        return "?".to_string();
+    }
+    trimmed
+        .split_whitespace()
+        .take(2)
+        .filter_map(|part| part.chars().next())
+        .map(|c| c.to_uppercase().to_string())
+        .collect()
 }
 
 fn flock_icon(name: &str) -> String {
     let trimmed = name.trim();
-    let initials_text = trimmed.split_whitespace().filter_map(|part| part.chars().next()).take(2).collect::<String>();
-    if initials_text.chars().count() <= trimmed.chars().count() { initials_text } else { trimmed.to_string() }
+    let initials_text = trimmed
+        .split_whitespace()
+        .filter_map(|part| part.chars().next())
+        .take(2)
+        .collect::<String>();
+    if initials_text.chars().count() <= trimmed.chars().count() {
+        initials_text
+    } else {
+        trimmed.to_string()
+    }
 }
-
 
 fn format_ts(ts: i64) -> String {
     use chrono::TimeZone;
@@ -972,11 +984,7 @@ impl App {
 
     /// Refresh the client's view of its own permissions and peer role colors
     /// from a roost's `PermState`. UX-only; the roost re-checks every action.
-    pub fn apply_roost_perms(
-        &mut self,
-        code: &str,
-        perms: &starling::roost::perms::PermState,
-    ) {
+    pub fn apply_roost_perms(&mut self, code: &str, perms: &starling::roost::perms::PermState) {
         if let Some(my_id) = self.node_id {
             self.my_perms = perms.effective(&my_id);
         }
@@ -1104,7 +1112,11 @@ impl App {
             return context.title.clone();
         }
         match self.selection {
-            Selection::Flock(i) => self.flocks.get(i).map(|f| f.name.clone()).unwrap_or_default(),
+            Selection::Flock(i) => self
+                .flocks
+                .get(i)
+                .map(|f| f.name.clone())
+                .unwrap_or_default(),
             Selection::Channel(ri, ci) => self
                 .roosts
                 .get(ri)
@@ -1416,7 +1428,9 @@ impl App {
         let target = self.context_menu_target.as_ref()?;
         match target {
             ContextMenuTarget::Roost(ri) => self.roosts.get(*ri).map(|rv| rv.code.clone()),
-            ContextMenuTarget::RoostChannel(ri, _) => self.roosts.get(*ri).map(|rv| rv.code.clone()),
+            ContextMenuTarget::RoostChannel(ri, _) => {
+                self.roosts.get(*ri).map(|rv| rv.code.clone())
+            }
             ContextMenuTarget::Flock(i) => self.flocks.get(*i).map(|fv| fv.code.clone()),
             ContextMenuTarget::Bird(_) => self.active_code().map(str::to_owned),
         }
@@ -1535,35 +1549,61 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 fn draw_server_rail(f: &mut Frame, app: &App, area: Rect) {
     let rail_bg = app.palette.surface_warm;
-    let pill_bg = app.palette.surface;
-    let active_bg = app.palette.accent;
-    let fg = app.palette.fg_2;
-    f.render_widget(Block::default().borders(Borders::RIGHT).border_style(Style::new().fg(app.palette.border).bg(rail_bg)).bg(rail_bg), area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::RIGHT)
+            .border_style(Style::new().fg(app.palette.border).bg(rail_bg))
+            .bg(rail_bg),
+        area,
+    );
     let pill_w = 6u16.min(area.width.saturating_sub(2)).max(4);
     let pad_x = (area.width.saturating_sub(pill_w)) / 2;
-    let home_rect = Rect { x: area.x + pad_x, y: area.y + 1, width: pill_w, height: 3 };
-    draw_server_pill(f, &TerminalIcon::Home.glyph(app.icon_style), matches!(app.v2_view, V2View::Home), false, home_rect, rail_bg, pill_bg, active_bg, fg, app.icon_style);
+    let home_rect = Rect {
+        x: area.x + pad_x,
+        y: area.y + 1,
+        width: pill_w,
+        height: 3,
+    };
+    draw_server_pill(
+        f,
+        app,
+        TerminalIcon::Home.glyph(app.icon_style),
+        matches!(app.v2_view, V2View::Home),
+        false,
+        home_rect,
+    );
     let mut y = home_rect.bottom() + 1;
     for (index, roost) in app.roosts.iter().enumerate() {
-        if y + 3 > area.bottom() { break; }
-        let rect = Rect { x: area.x + pad_x, y, width: pill_w, height: 3 };
-        let label = if roost.icon_path.is_some() { TerminalIcon::Video.glyph(app.icon_style) } else { &flock_icon(&roost.name) };
-        draw_server_pill(f, label, matches!(app.selection, Selection::Channel(i, _) if i == index), roost.unread > 0, rect, rail_bg, pill_bg, active_bg, fg, app.icon_style);
+        if y + 3 > area.bottom() {
+            break;
+        }
+        let rect = Rect {
+            x: area.x + pad_x,
+            y,
+            width: pill_w,
+            height: 3,
+        };
+        let label = if roost.icon_path.is_some() {
+            TerminalIcon::Video.glyph(app.icon_style)
+        } else {
+            &flock_icon(&roost.name)
+        };
+        draw_server_pill(
+            f,
+            app,
+            label,
+            matches!(app.selection, Selection::Channel(i, _) if i == index),
+            roost.unread > 0,
+            rect,
+        );
         y += 4;
     }
 }
-fn draw_server_pill(
-    f: &mut Frame,
-    label: &str,
-    active: bool,
-    unread: bool,
-    area: Rect,
-    rail_bg: Color,
-    pill_bg: Color,
-    active_bg: Color,
-    fg: Color,
-    icon_style: IconStyle,
-) {
+fn draw_server_pill(f: &mut Frame, app: &App, label: &str, active: bool, unread: bool, area: Rect) {
+    let rail_bg = app.palette.background.unwrap_or(Color::Rgb(30, 31, 34));
+    let pill_bg = app.palette.surface;
+    let active_bg = app.palette.accent;
+    let fg = app.palette.fg_2;
     let bg = if active { active_bg } else { pill_bg };
     let text_fg = if active || unread {
         Color::Rgb(255, 255, 255)
@@ -1571,9 +1611,9 @@ fn draw_server_pill(
         fg
     };
     let indicator = if active {
-        TerminalIcon::More.glyph(icon_style)
+        TerminalIcon::More.glyph(app.icon_style)
     } else if unread {
-        TerminalIcon::Online.glyph(icon_style)
+        TerminalIcon::Online.glyph(app.icon_style)
     } else {
         " "
     };
@@ -1611,14 +1651,45 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let fg_2 = app.palette.fg_2;
     let muted = app.palette.muted;
     let selected_bg = app.palette.active;
-    let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(1), Constraint::Length(4)]).split(area);
-    f.render_widget(Paragraph::new(if matches!(app.v2_view, V2View::Home) { "Friends" } else { "Server" }).style(Style::new().fg(fg_2).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::BOTTOM).border_style(Style::new().fg(border)).bg(bg)), rows[0]);
-    let mut items = vec![ListItem::new(Line::from(vec![Span::styled("DIRECT MESSAGES", Style::new().fg(muted).add_modifier(Modifier::BOLD)), Span::styled("  +", Style::new().fg(muted))]))];
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(4),
+    ])
+    .split(area);
+    f.render_widget(
+        Paragraph::new(if matches!(app.v2_view, V2View::Home) {
+            "Friends"
+        } else {
+            "Server"
+        })
+        .style(Style::new().fg(fg_2).add_modifier(Modifier::BOLD))
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::new().fg(border))
+                .bg(bg),
+        ),
+        rows[0],
+    );
+    let mut items = vec![ListItem::new(Line::from(vec![
+        Span::styled(
+            "DIRECT MESSAGES",
+            Style::new().fg(muted).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  +", Style::new().fg(muted)),
+    ]))];
     if matches!(app.v2_view, V2View::Home) {
         for (index, peer) in app.peers.iter().enumerate() {
             let name = app.peer_display_name(peer);
-            let active = app.selected_dm == Some(*peer) || (app.selected_dm.is_none() && index == app.reference_dm_selected);
-            let status_color = match app.peer_status.get(peer) { Some(BirdStatus::Online) => Color::Rgb(35, 165, 90), Some(BirdStatus::Idle) => Color::Rgb(240, 178, 50), Some(BirdStatus::InCall) => Color::Rgb(88, 101, 242), None => muted };
+            let active = app.selected_dm == Some(*peer)
+                || (app.selected_dm.is_none() && index == app.reference_dm_selected);
+            let status_color = match app.peer_status.get(peer) {
+                Some(BirdStatus::Online) => Color::Rgb(35, 165, 90),
+                Some(BirdStatus::Idle) => Color::Rgb(240, 178, 50),
+                Some(BirdStatus::InCall) => Color::Rgb(88, 101, 242),
+                None => muted,
+            };
             let row_bg = if active { selected_bg } else { bg };
             let status_glyph = match app.peer_status.get(peer) {
                 Some(BirdStatus::Online) => TerminalIcon::Online.glyph(app.icon_style),
@@ -1626,39 +1697,105 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
                 Some(BirdStatus::InCall) => TerminalIcon::InCall.glyph(app.icon_style),
                 None => TerminalIcon::Dnd.glyph(app.icon_style),
             };
-            items.push(ListItem::new(Line::from(vec![Span::styled(format!(" {} ", initials(&name)), Style::new().fg(fg_2).bg(app.palette.accent)), Span::styled(format!(" {status_glyph} "), Style::new().fg(status_color).bg(row_bg)), Span::styled(name, Style::new().fg(if active { fg_2 } else { text }).bg(row_bg))])).bg(row_bg));
+            items.push(
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", initials(&name)),
+                        Style::new().fg(fg_2).bg(app.palette.accent),
+                    ),
+                    Span::styled(
+                        format!(" {status_glyph} "),
+                        Style::new().fg(status_color).bg(row_bg),
+                    ),
+                    Span::styled(
+                        name,
+                        Style::new().fg(if active { fg_2 } else { text }).bg(row_bg),
+                    ),
+                ]))
+                .bg(row_bg),
+            );
         }
         for (index, flock) in app.flocks.iter().enumerate() {
             let active = matches!(app.selection, Selection::Flock(i) if i == index);
             let row_bg = if active { selected_bg } else { bg };
             let icon = TerminalIcon::Group.glyph(app.icon_style);
             let mut spans = vec![
-                Span::styled(format!(" {} ", icon), Style::new().fg(fg_2).bg(app.palette.accent)),
-                Span::styled(flock.name.clone(), Style::new().fg(if active { fg_2 } else { text }).bg(row_bg)),
+                Span::styled(
+                    format!(" {} ", icon),
+                    Style::new().fg(fg_2).bg(app.palette.accent),
+                ),
+                Span::styled(
+                    flock.name.clone(),
+                    Style::new().fg(if active { fg_2 } else { text }).bg(row_bg),
+                ),
             ];
             if flock.unread > 0 {
-                spans.push(Span::styled(format!(" {}", flock.unread), Style::new().fg(Color::White).bg(Color::Rgb(242, 63, 67))));
+                spans.push(Span::styled(
+                    format!(" {}", flock.unread),
+                    Style::new().fg(Color::White).bg(Color::Rgb(242, 63, 67)),
+                ));
             }
             items.push(ListItem::new(Line::from(spans)).bg(row_bg));
         }
-    } else if let Selection::Channel(ri, ci) = app.selection { if let Some(roost) = app.roosts.get(ri) { items.push(ListItem::new(Line::from(Span::styled("TEXT CHANNELS", Style::new().fg(muted).add_modifier(Modifier::BOLD))))); for (index, channel) in roost.channels.iter().enumerate() { let active = index == ci; let row_bg = if active { selected_bg } else { bg }; items.push(ListItem::new(Line::from(Span::styled(format!("# {}", channel.name), Style::new().fg(if active { fg_2 } else { text }).bg(row_bg)))).bg(row_bg)); } } }
+    } else if let Selection::Channel(ri, ci) = app.selection
+        && let Some(roost) = app.roosts.get(ri)
+    {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "TEXT CHANNELS",
+            Style::new().fg(muted).add_modifier(Modifier::BOLD),
+        ))));
+        for (index, channel) in roost.channels.iter().enumerate() {
+            let active = index == ci;
+            let row_bg = if active { selected_bg } else { bg };
+            items.push(
+                ListItem::new(Line::from(Span::styled(
+                    format!("# {}", channel.name),
+                    Style::new().fg(if active { fg_2 } else { text }).bg(row_bg),
+                )))
+                .bg(row_bg),
+            );
+        }
+    }
     f.render_widget(List::new(items).block(Block::default().bg(bg)), rows[1]);
-    let mic_icon = if app.muted { TerminalIcon::MicMuted } else { TerminalIcon::Mic };
-    let headset_icon = if app.deafened { TerminalIcon::Deafened } else { TerminalIcon::Headset };
+    let mic_icon = if app.muted {
+        TerminalIcon::MicMuted
+    } else {
+        TerminalIcon::Mic
+    };
+    let headset_icon = if app.deafened {
+        TerminalIcon::Deafened
+    } else {
+        TerminalIcon::Headset
+    };
     let mic_glyph = mic_icon.glyph(app.icon_style);
     let headset_glyph = headset_icon.glyph(app.icon_style);
     let settings_glyph = TerminalIcon::Settings.glyph(app.icon_style);
     let footer = Text::from(vec![
         Line::from(vec![
-            Span::styled(format!(" {} ", initials(&app.name)), Style::new().fg(Color::White).bg(app.palette.accent)),
-            Span::styled(format!(" {}", app.name), Style::new().fg(fg_2).add_modifier(Modifier::BOLD).bg(bg)),
+            Span::styled(
+                format!(" {} ", initials(&app.name)),
+                Style::new().fg(Color::White).bg(app.palette.accent),
+            ),
+            Span::styled(
+                format!(" {}", app.name),
+                Style::new().fg(fg_2).add_modifier(Modifier::BOLD).bg(bg),
+            ),
             Span::styled(format!(" {}", app.tag), Style::new().fg(muted).bg(bg)),
         ]),
-        Line::from(vec![
-            Span::styled(format!(" {mic_glyph}  {headset_glyph}  {settings_glyph}"), Style::new().fg(muted).bg(bg)),
-        ]),
+        Line::from(vec![Span::styled(
+            format!(" {mic_glyph}  {headset_glyph}  {settings_glyph}"),
+            Style::new().fg(muted).bg(bg),
+        )]),
     ]);
-    f.render_widget(Paragraph::new(footer).block(Block::default().borders(Borders::TOP).border_style(Style::new().fg(border)).bg(bg)), rows[2]);
+    f.render_widget(
+        Paragraph::new(footer).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::new().fg(border))
+                .bg(bg),
+        ),
+        rows[2],
+    );
 }
 
 fn flattened_channels(app: &App) -> impl Iterator<Item = &FlockView> {
@@ -1671,7 +1808,12 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let text = Color::Rgb(219, 222, 225);
     let fg_2 = Color::Rgb(242, 243, 245);
     let muted = Color::Rgb(148, 155, 164);
-    let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(1), Constraint::Length(3)]).split(area);
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(3),
+    ])
+    .split(area);
     let is_dm = matches!(app.v2_view, V2View::Home) && app.selected_dm.is_some();
     let is_flock = matches!(app.selection, Selection::Flock(i) if i < app.flocks.len());
     let title = if is_flock {
@@ -1694,35 +1836,90 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     } else {
         String::new()
     };
-    let icons = format!("{}  {}  {}  {}", TerminalIcon::Members.glyph(app.icon_style), TerminalIcon::Bell.glyph(app.icon_style), TerminalIcon::Pin.glyph(app.icon_style), TerminalIcon::Call.glyph(app.icon_style));
+    let icons = format!(
+        "{}  {}  {}  {}",
+        TerminalIcon::Members.glyph(app.icon_style),
+        TerminalIcon::Bell.glyph(app.icon_style),
+        TerminalIcon::Pin.glyph(app.icon_style),
+        TerminalIcon::Call.glyph(app.icon_style)
+    );
     let header = Line::from(vec![
-        Span::styled(title.clone(), Style::new().fg(fg_2).add_modifier(Modifier::BOLD).bg(bg)),
+        Span::styled(
+            title.clone(),
+            Style::new().fg(fg_2).add_modifier(Modifier::BOLD).bg(bg),
+        ),
         Span::styled(format!("  {subtitle}"), Style::new().fg(muted).bg(bg)),
-        Span::styled(format!("{}{icons}", " ".repeat((area.width as usize).saturating_sub(title.chars().count() + subtitle.chars().count() + icons.chars().count() + 4))), Style::new().fg(muted).bg(bg)),
+        Span::styled(
+            format!(
+                "{}{icons}",
+                " ".repeat((area.width as usize).saturating_sub(
+                    title.chars().count() + subtitle.chars().count() + icons.chars().count() + 4
+                ))
+            ),
+            Style::new().fg(muted).bg(bg),
+        ),
     ]);
-    f.render_widget(Paragraph::new(header).block(Block::default().borders(Borders::BOTTOM).border_style(Style::new().fg(border)).bg(bg)), rows[0]);
+    f.render_widget(
+        Paragraph::new(header).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::new().fg(border))
+                .bg(bg),
+        ),
+        rows[0],
+    );
     let mut message_lines: Vec<Line> = Vec::new();
     let messages = app.active_messages();
     if messages.is_empty() {
         let empty = if is_dm {
             match app.selected_dm {
-                Some(peer) => format!("This is the beginning of your conversation with @{}.", app.peer_display_name(&peer)),
+                Some(peer) => format!(
+                    "This is the beginning of your conversation with @{}.",
+                    app.peer_display_name(&peer)
+                ),
                 None => "Select a peer to begin a direct message.".to_string(),
             }
-        } else if is_flock {
-            format!("Welcome to {}! This is the start of the conversation.", title)
-        } else if matches!(app.v2_view, V2View::Space) {
-            format!("Welcome to {}! This is the start of the conversation.", title)
+        } else if is_flock || matches!(app.v2_view, V2View::Space) {
+            format!(
+                "Welcome to {}! This is the start of the conversation.",
+                title
+            )
         } else {
             "Select a peer to begin a direct message.".to_string()
         };
-        message_lines.push(Line::from(Span::styled(empty, Style::new().fg(muted).bg(bg))));
+        message_lines.push(Line::from(Span::styled(
+            empty,
+            Style::new().fg(muted).bg(bg),
+        )));
     } else {
-        message_lines.push(Line::from(Span::styled("──────────────────── TODAY ────────────────────", Style::new().fg(muted).bg(bg))));
+        message_lines.push(Line::from(Span::styled(
+            "──────────────────── TODAY ────────────────────",
+            Style::new().fg(muted).bg(bg),
+        )));
         for message in messages {
-            let prefix = if message.private { format!("{} ", TerminalIcon::Lock.glyph(app.icon_style)) } else { String::new() };
-            message_lines.push(Line::from(vec![Span::styled(format!(" {} ", initials(&message.msg.author)), Style::new().fg(Color::White).bg(app.palette.accent)), Span::styled(format!(" {}", message.msg.author), Style::new().fg(fg_2).add_modifier(Modifier::BOLD)), Span::styled(format!("  {}", format_ts(message.msg.ts)), Style::new().fg(muted))]));
-            message_lines.push(Line::from(Span::styled(format!("{prefix}{}", message.msg.body), Style::new().fg(text).bg(bg))));
+            let prefix = if message.private {
+                format!("{} ", TerminalIcon::Lock.glyph(app.icon_style))
+            } else {
+                String::new()
+            };
+            message_lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" {} ", initials(&message.msg.author)),
+                    Style::new().fg(Color::White).bg(app.palette.accent),
+                ),
+                Span::styled(
+                    format!(" {}", message.msg.author),
+                    Style::new().fg(fg_2).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  {}", format_ts(message.msg.ts)),
+                    Style::new().fg(muted),
+                ),
+            ]));
+            message_lines.push(Line::from(Span::styled(
+                format!("{prefix}{}", message.msg.body),
+                Style::new().fg(text).bg(bg),
+            )));
         }
     }
     // Center the message content vertically in the chat body.
@@ -1748,16 +1945,36 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
     let muted = Color::Rgb(148, 155, 164);
     let text = Color::Rgb(219, 222, 225);
     let mut lines = vec![
-        Line::from(Span::styled("MEMBERS", Style::new().fg(muted).add_modifier(Modifier::BOLD))),
-        Line::from(Span::styled(format!(" {}  {}", initials(&app.name), app.name), Style::new().fg(text))),
-        Line::from(Span::styled(format!("Online — {}", app.active_peers().len() + 1), Style::new().fg(muted).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "MEMBERS",
+            Style::new().fg(muted).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!(" {}  {}", initials(&app.name), app.name),
+            Style::new().fg(text),
+        )),
+        Line::from(Span::styled(
+            format!("Online — {}", app.active_peers().len() + 1),
+            Style::new().fg(muted).add_modifier(Modifier::BOLD),
+        )),
     ];
     for peer in app.active_peers() {
         let name = app.peer_display_name(&peer);
-        lines.push(Line::from(Span::styled(format!(" {}  {}", initials(&name), name), Style::new().fg(text))));
+        lines.push(Line::from(Span::styled(
+            format!(" {}  {}", initials(&name), name),
+            Style::new().fg(text),
+        )));
     }
     lines.truncate(area.height as usize);
-    f.render_widget(Paragraph::new(Text::from(lines)).block(Block::default().borders(Borders::LEFT).border_style(Style::new().fg(Color::Rgb(63, 65, 71))).bg(bg)), area);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).block(
+            Block::default()
+                .borders(Borders::LEFT)
+                .border_style(Style::new().fg(Color::Rgb(63, 65, 71)))
+                .bg(bg),
+        ),
+        area,
+    );
 }
 
 fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
@@ -1847,21 +2064,82 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
 fn draw_call_overlay(f: &mut Frame, app: &App) {
     let area = centered(f.area(), 62, 14);
     f.render_widget(Clear, area);
-    f.render_widget(Block::default().borders(Borders::ALL).title(" Call ").border_style(Style::new().fg(app.palette.border)).bg(Color::Rgb(30, 31, 34)), area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Call ")
+            .border_style(Style::new().fg(app.palette.border))
+            .bg(Color::Rgb(30, 31, 34)),
+        area,
+    );
     draw_popup_close(f, area, app.icon_style);
-    let inner = area.inner(Margin { vertical: 1, horizontal: 2 });
-    let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(1), Constraint::Length(2)]).split(inner);
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .split(inner);
     let participant_count = app.peers.len() + 1;
-    f.render_widget(Paragraph::new(Line::from(vec![Span::styled(if app.call_title.is_empty() { "Call" } else { &app.call_title }, Style::new().fg(Color::Rgb(242, 243, 245)).add_modifier(Modifier::BOLD)), Span::styled(format!("  {participant_count} participants"), Style::new().fg(Color::Rgb(148, 155, 164)))])), rows[0]);
-    let mut lines = vec![Line::from(vec![Span::styled(format!(" {} ", initials(&app.name)), Style::new().fg(Color::White).bg(app.palette.accent)), Span::styled(format!("  {}", app.name), Style::new().fg(Color::Rgb(219, 222, 225)))])];
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                if app.call_title.is_empty() {
+                    "Call"
+                } else {
+                    &app.call_title
+                },
+                Style::new()
+                    .fg(Color::Rgb(242, 243, 245))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {participant_count} participants"),
+                Style::new().fg(Color::Rgb(148, 155, 164)),
+            ),
+        ])),
+        rows[0],
+    );
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!(" {} ", initials(&app.name)),
+            Style::new().fg(Color::White).bg(app.palette.accent),
+        ),
+        Span::styled(
+            format!("  {}", app.name),
+            Style::new().fg(Color::Rgb(219, 222, 225)),
+        ),
+    ])];
     for peer in &app.peers {
         let name = app.peer_display_name(peer);
-        lines.push(Line::from(vec![Span::styled(format!(" {} ", initials(&name)), Style::new().fg(Color::White).bg(app.palette.accent)), Span::styled(format!("  {name}"), Style::new().fg(Color::Rgb(219, 222, 225)))]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" {} ", initials(&name)),
+                Style::new().fg(Color::White).bg(app.palette.accent),
+            ),
+            Span::styled(
+                format!("  {name}"),
+                Style::new().fg(Color::Rgb(219, 222, 225)),
+            ),
+        ]));
     }
-    f.render_widget(Paragraph::new(Text::from(lines)).block(Block::default().borders(Borders::ALL).title(" participants ")), rows[1]);
-    f.render_widget(Paragraph::new("[M] mute   [V] video   [C] disconnect").style(Style::new().fg(Color::Rgb(219, 222, 225))), rows[2]);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" participants "),
+        ),
+        rows[1],
+    );
+    f.render_widget(
+        Paragraph::new("[M] mute   [V] video   [C] disconnect")
+            .style(Style::new().fg(Color::Rgb(219, 222, 225))),
+        rows[2],
+    );
 }
-
 
 pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let w = width.min(area.width);
@@ -1893,46 +2171,49 @@ fn draw_popup_close(f: &mut Frame, area: Rect, icon_style: IconStyle) {
 /// precedence. Returns `None` when no popup is open.
 pub fn active_popup_rect(app: &App, term_w: u16, term_h: u16) -> Option<Rect> {
     let area = Rect::new(0, 0, term_w, term_h);
-    if app.show_pinned {
-        Some(centered(area, 40, 6))
-    } else if app.show_notifications {
-        Some(centered(area, 40, 6))
-    } else if app.in_call {
-        Some(centered(area, 62, 14))
-    } else if app.profile_panel.open {
+    if app.show_pinned || app.show_notifications {
+        return Some(centered(area, 40, 6));
+    }
+    if app.in_call {
+        return Some(centered(area, 62, 14));
+    }
+    if app.profile_panel.open {
         let width = 50u16.min(term_w.saturating_sub(4)).max(30);
         let height = 18u16.min(term_h.saturating_sub(4)).max(10);
-        Some(Rect {
+        return Some(Rect {
             x: 2,
             y: term_h.saturating_sub(height + 2),
             width,
             height,
-        })
-    } else if app.settings_open {
-        Some(centered(area, 80, 20))
-    } else if app.show_role_submenu {
-        Some(centered(area, 24, 4))
-    } else if app.show_context_menu {
-        Some(centered(area, 28, app.context_menu_items.len() as u16 + 2))
-    } else if app.show_add_channel {
-        Some(centered(area, 60, 8))
-    } else if app.show_create_roost {
-        Some(centered(area, 60, 8))
-    } else if app.show_create_room {
-        Some(centered(area, 60, 8))
-    } else if app.show_edit_flock {
-        Some(centered(area, 60, 10))
-    } else if app.show_join_room {
-        Some(centered(area, 60, 8))
-    } else if app.show_delete_confirm {
-        Some(centered(area, 60, 8))
-    } else if app.show_menu {
-        Some(centered(area, 28, MENU_ITEMS.len() as u16 + 2))
-    } else if app.show_bird_profile {
-        Some(centered(area, 40, 7))
-    } else {
-        None
+        });
     }
+    if app.settings_open {
+        return Some(centered(area, 80, 20));
+    }
+    if app.show_role_submenu {
+        return Some(centered(area, 24, 4));
+    }
+    if app.show_context_menu {
+        return Some(centered(area, 28, app.context_menu_items.len() as u16 + 2));
+    }
+    if app.show_add_channel
+        || app.show_create_roost
+        || app.show_create_room
+        || app.show_join_room
+        || app.show_delete_confirm
+    {
+        return Some(centered(area, 60, 8));
+    }
+    if app.show_edit_flock {
+        return Some(centered(area, 60, 10));
+    }
+    if app.show_menu {
+        return Some(centered(area, 28, MENU_ITEMS.len() as u16 + 2));
+    }
+    if app.show_bird_profile {
+        return Some(centered(area, 40, 7));
+    }
+    None
 }
 
 /// Fully dismiss the active popup (X button / outside click).
@@ -2547,7 +2828,11 @@ fn draw_profile_modal(f: &mut Frame, app: &App) {
             ),
             Span::styled("  ", Style::new().bg(modal_bg)),
             Span::styled(
-                format!("{} {}", TerminalIcon::Online.glyph(app.icon_style), status_text),
+                format!(
+                    "{} {}",
+                    TerminalIcon::Online.glyph(app.icon_style),
+                    status_text
+                ),
                 Style::new().fg(Color::Rgb(148, 155, 164)).bg(modal_bg),
             ),
         ]),
@@ -2744,6 +3029,7 @@ fn draw_input_popup(f: &mut Frame, title: &str, prompt: &str, value: &str, hint:
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -3253,204 +3539,322 @@ mod tests {
     }
     #[test]
     fn home_view_renders_empty_state_without_live_peers() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
         let app = App::default();
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| super::draw(f, &app)).unwrap();
-        let text = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
         assert!(text.contains("DIRECT MESSAGES"));
         assert!(text.contains("Select a peer"));
         assert!(!text.contains("PR merged"));
         assert!(!text.contains("GROUPS"));
     }
 
-#[test]
-fn home_view_renders_flock_row_and_dynamic_title() {
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-    let mut app = App::default();
-    app.name = "Ramhaug".into();
-    app.tag = "#7134".into();
-    app.v2_view = V2View::Home;
-    app.flocks.push(FlockView { code: "99s".into(), name: "99s".into(), messages: vec![], unread: 0 });
-    let backend = TestBackend::new(120, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| super::draw(f, &app)).unwrap();
-    let text = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
-    assert!(!text.contains("GROUPS"));
-    assert!(text.contains("99s"));
-    assert!(text.contains("Ramhaug"));
-    assert!(text.contains("#7134"));
-    assert!(text.contains("Welcome to 99s"));
-}
-
-
-#[test]
-fn header_buttons_toggle_pinned_notifications_and_members() {
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-    let mut app = App::default();
-    app.v2_view = V2View::Space;
-    app.roosts.push(RoostView { code: "S".into(), name: "Starling".into(), channels: vec![FlockView { code: "S/general".into(), name: "general".into(), messages: vec![], unread: 0 }], unread: 0, icon_path: None });
-    app.selection = Selection::Channel(0, 0);
-    let backend = TestBackend::new(120, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| super::draw(f, &app)).unwrap();
-    let text = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
-    assert!(text.contains("MEMBERS"));
-    app.show_pinned = true;
-    terminal.draw(|f| super::draw(f, &app)).unwrap();
-    let text = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
-    assert!(text.contains("Pinned Messages"));
-    app.show_pinned = false;
-    app.show_notifications = true;
-    terminal.draw(|f| super::draw(f, &app)).unwrap();
-    let text = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
-    assert!(text.contains("Notifications"));
-    app.show_notifications = false;
-    app.show_members = false;
-    terminal.draw(|f| super::draw(f, &app)).unwrap();
-    let text = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
-    assert!(!text.contains("MEMBERS"));
-}
-
-#[test]
-fn popup_dismissal_helpers_work() {
-    let mut app = App::default();
-    app.settings_open = true;
-    dismiss_active_popup(&mut app);
-    assert!(!app.settings_open);
-
-    app.show_pinned = true;
-    dismiss_active_popup(&mut app);
-    assert!(!app.show_pinned);
-
-    app.show_notifications = true;
-    dismiss_active_popup(&mut app);
-    assert!(!app.show_notifications);
-
-    app.in_call = true;
-    dismiss_active_popup(&mut app);
-    assert!(!app.in_call);
-
-    app.profile_panel.open = true;
-    dismiss_active_popup(&mut app);
-    assert!(!app.profile_panel.open);
-
-    // Submenu right-click: back one level, keep the parent menu.
-    app.show_context_menu = true;
-    app.show_role_submenu = true;
-    dismiss_active_popup_one_level(&mut app);
-    assert!(!app.show_role_submenu);
-    assert!(app.show_context_menu);
-
-    // Full dismiss from the parent menu.
-    dismiss_active_popup(&mut app);
-    assert!(!app.show_context_menu);
-}
-
-#[test]
-fn flock_selection_keeps_row_and_shows_members() {
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-    let mut app = App::default();
-    app.name = "Ramhaug".into();
-    app.tag = "#7134".into();
-    app.v2_view = V2View::Home;
-    app.flocks.push(FlockView { code: "99s".into(), name: "99s".into(), messages: vec![], unread: 0 });
-    app.select_flock(0);
-    assert!(matches!(app.v2_view, V2View::Home));
-    let backend = TestBackend::new(120, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| super::draw(f, &app)).unwrap();
-    let text = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
-    // Flock row stays visible and selected; no GROUPS label; members panel present.
-    assert!(text.contains("99s"));
-    assert!(!text.contains("GROUPS"));
-    assert!(text.contains("MEMBERS"));
-    // The active pill indicator is not stacked on every rail row.
-    let buf = terminal.backend().buffer();
-    let area = buf.area();
-    let cells = buf.content();
-    let full_width = area.width as usize;
-    let mut indicator_rows = 0;
-    for y in 1..6 {
-        let ch = cells[y * full_width + 1].symbol();
-        if ch == "\u{22ee}" { indicator_rows += 1; }
+    #[test]
+    fn home_view_renders_flock_row_and_dynamic_title() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = App::default();
+        app.name = "Ramhaug".into();
+        app.tag = "#7134".into();
+        app.v2_view = V2View::Home;
+        app.flocks.push(FlockView {
+            code: "99s".into(),
+            name: "99s".into(),
+            messages: vec![],
+            unread: 0,
+        });
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!text.contains("GROUPS"));
+        assert!(text.contains("99s"));
+        assert!(text.contains("Ramhaug"));
+        assert!(text.contains("#7134"));
+        assert!(text.contains("Welcome to 99s"));
     }
-    assert_eq!(indicator_rows, 1, "active indicator must appear once, got {indicator_rows} rows");
-}
 
-#[test]
-fn rail_is_darkest_and_flock_uses_group_icon() {
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-    let mut app = App::default();
-    app.v2_view = V2View::Home;
-    app.flocks.push(FlockView { code: "935".into(), name: "935".into(), messages: vec![], unread: 0 });
-    app.select_flock(0);
-    let backend = TestBackend::new(120, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| super::draw(f, &app)).unwrap();
-    let buf = terminal.backend().buffer();
-    let area = buf.area();
-    let cells = buf.content();
-    let full_width = area.width as usize;
-    // Rail background must be the darkest surface.
-    let rail_cell = &cells[0 * full_width + 3];
-    let side_cell = &cells[0 * full_width + 12];
-    let rail_bg = rail_cell.bg;
-    let side_bg = side_cell.bg;
-    assert!(rail_bg != side_bg, "rail and sidebar must differ");
-    // No caret fill artifacts around the home pill.
-    let home_row: String = (0..full_width).map(|x| cells[2 * full_width + x].symbol().to_string()).collect();
-    assert!(!home_row.contains("^^^^"), "caret fill leaked: {home_row:?}");
-    // Flock row uses a group glyph, not the flock's first letter.
-    let flock_row: String = (0..full_width).map(|x| cells[3 * full_width + x].symbol().to_string()).collect();
-    assert!(flock_row.contains("935"), "flock name missing: {flock_row:?}");
-    assert!(!flock_row.starts_with(" 9 "), "flock avatar must be a group glyph, got: {flock_row:?}");
-    let _ = rail_bg;
-}
+    #[test]
+    fn header_buttons_toggle_pinned_notifications_and_members() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = App::default();
+        app.v2_view = V2View::Space;
+        app.roosts.push(RoostView {
+            code: "S".into(),
+            name: "Starling".into(),
+            channels: vec![FlockView {
+                code: "S/general".into(),
+                name: "general".into(),
+                messages: vec![],
+                unread: 0,
+            }],
+            unread: 0,
+            icon_path: None,
+        });
+        app.selection = Selection::Channel(0, 0);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("MEMBERS"));
+        app.show_pinned = true;
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Pinned Messages"));
+        app.show_pinned = false;
+        app.show_notifications = true;
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Notifications"));
+        app.show_notifications = false;
+        app.show_members = false;
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!text.contains("MEMBERS"));
+    }
 
-#[test]
-fn flock_roost_management_menu_shows_owner_actions() {
-    let mut app = App::default();
-    app.node_id = Some(iroh::SecretKey::generate().public());
-    app.flocks.push(FlockView { code: "F1".into(), name: "My Flock".into(), messages: vec![], unread: 0 });
-    app.flock_owners.insert("F1".into(), true);
-    app.roosts.push(RoostView { code: "R1".into(), name: "My Roost".into(), channels: vec![], unread: 0, icon_path: None });
-    app.roost_owners.insert("R1".into(), app.node_id.unwrap());
+    #[test]
+    fn popup_dismissal_helpers_work() {
+        let mut app = App::default();
+        app.settings_open = true;
+        dismiss_active_popup(&mut app);
+        assert!(!app.settings_open);
 
-    // Owner flock: Leave + Edit + Delete.
-    app.build_context_menu(ContextMenuTarget::Flock(0));
-    let labels: Vec<&str> = app.context_menu_items.iter().map(|i| i.label.as_str()).collect();
-    assert_eq!(labels, vec!["Leave Flock", "Edit Flock", "Delete Flock"]);
+        app.show_pinned = true;
+        dismiss_active_popup(&mut app);
+        assert!(!app.show_pinned);
 
-    // Owner roost: management actions present.
-    app.build_context_menu(ContextMenuTarget::Roost(0));
-    let labels: Vec<&str> = app.context_menu_items.iter().map(|i| i.label.as_str()).collect();
-    assert!(labels.contains(&"Leave Roost"));
-    assert!(labels.contains(&"Edit Roost"));
-    assert!(labels.contains(&"Delete Roost"));
+        app.show_notifications = true;
+        dismiss_active_popup(&mut app);
+        assert!(!app.show_notifications);
 
-    // Non-owner flock: only Leave.
-    app.flock_owners.insert("F1".into(), false);
-    app.build_context_menu(ContextMenuTarget::Flock(0));
-    let labels: Vec<&str> = app.context_menu_items.iter().map(|i| i.label.as_str()).collect();
-    assert_eq!(labels, vec!["Leave Flock"]);
-}
+        app.in_call = true;
+        dismiss_active_popup(&mut app);
+        assert!(!app.in_call);
 
-#[test]
-fn context_menu_code_resolves_flock_and_roost() {
-    let mut app = App::default();
-    app.flocks.push(FlockView { code: "FLOCK-CODE".into(), name: "F".into(), messages: vec![], unread: 0 });
-    app.roosts.push(RoostView { code: "ROOST-CODE".into(), name: "R".into(), channels: vec![], unread: 0, icon_path: None });
-    app.context_menu_target = Some(ContextMenuTarget::Flock(0));
-    assert_eq!(app.context_menu_code().as_deref(), Some("FLOCK-CODE"));
-    app.context_menu_target = Some(ContextMenuTarget::Roost(0));
-    assert_eq!(app.context_menu_code().as_deref(), Some("ROOST-CODE"));
-}
+        app.profile_panel.open = true;
+        dismiss_active_popup(&mut app);
+        assert!(!app.profile_panel.open);
 
+        // Submenu right-click: back one level, keep the parent menu.
+        app.show_context_menu = true;
+        app.show_role_submenu = true;
+        dismiss_active_popup_one_level(&mut app);
+        assert!(!app.show_role_submenu);
+        assert!(app.show_context_menu);
+
+        // Full dismiss from the parent menu.
+        dismiss_active_popup(&mut app);
+        assert!(!app.show_context_menu);
+    }
+
+    #[test]
+    fn flock_selection_keeps_row_and_shows_members() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = App::default();
+        app.name = "Ramhaug".into();
+        app.tag = "#7134".into();
+        app.v2_view = V2View::Home;
+        app.flocks.push(FlockView {
+            code: "99s".into(),
+            name: "99s".into(),
+            messages: vec![],
+            unread: 0,
+        });
+        app.select_flock(0);
+        assert!(matches!(app.v2_view, V2View::Home));
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        // Flock row stays visible and selected; no GROUPS label; members panel present.
+        assert!(text.contains("99s"));
+        assert!(!text.contains("GROUPS"));
+        assert!(text.contains("MEMBERS"));
+        // The active pill indicator is not stacked on every rail row.
+        let buf = terminal.backend().buffer();
+        let area = buf.area();
+        let cells = buf.content();
+        let full_width = area.width as usize;
+        let mut indicator_rows = 0;
+        for y in 1..6 {
+            let ch = cells[y * full_width + 1].symbol();
+            if ch == "\u{22ee}" {
+                indicator_rows += 1;
+            }
+        }
+        assert_eq!(
+            indicator_rows, 1,
+            "active indicator must appear once, got {indicator_rows} rows"
+        );
+    }
+
+    #[test]
+    fn rail_is_darkest_and_flock_uses_group_icon() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = App::default();
+        app.v2_view = V2View::Home;
+        app.flocks.push(FlockView {
+            code: "935".into(),
+            name: "935".into(),
+            messages: vec![],
+            unread: 0,
+        });
+        app.select_flock(0);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let area = buf.area();
+        let cells = buf.content();
+        let full_width = area.width as usize;
+        // Rail background must be the darkest surface.
+        let rail_cell = &cells[3];
+        let side_cell = &cells[12];
+        let rail_bg = rail_cell.bg;
+        let side_bg = side_cell.bg;
+        assert!(rail_bg != side_bg, "rail and sidebar must differ");
+        // No caret fill artifacts around the home pill.
+        let home_row: String = (0..full_width)
+            .map(|x| cells[2 * full_width + x].symbol().to_string())
+            .collect();
+        assert!(
+            !home_row.contains("^^^^"),
+            "caret fill leaked: {home_row:?}"
+        );
+        // Flock row uses a group glyph, not the flock's first letter.
+        let flock_row: String = (0..full_width)
+            .map(|x| cells[3 * full_width + x].symbol().to_string())
+            .collect();
+        assert!(
+            flock_row.contains("935"),
+            "flock name missing: {flock_row:?}"
+        );
+        assert!(
+            !flock_row.starts_with(" 9 "),
+            "flock avatar must be a group glyph, got: {flock_row:?}"
+        );
+        let _ = rail_bg;
+    }
+
+    #[test]
+    fn flock_roost_management_menu_shows_owner_actions() {
+        let mut app = App::default();
+        app.node_id = Some(iroh::SecretKey::generate().public());
+        app.flocks.push(FlockView {
+            code: "F1".into(),
+            name: "My Flock".into(),
+            messages: vec![],
+            unread: 0,
+        });
+        app.flock_owners.insert("F1".into(), true);
+        app.roosts.push(RoostView {
+            code: "R1".into(),
+            name: "My Roost".into(),
+            channels: vec![],
+            unread: 0,
+            icon_path: None,
+        });
+        app.roost_owners.insert("R1".into(), app.node_id.unwrap());
+
+        // Owner flock: Leave + Edit + Delete.
+        app.build_context_menu(ContextMenuTarget::Flock(0));
+        let labels: Vec<&str> = app
+            .context_menu_items
+            .iter()
+            .map(|i| i.label.as_str())
+            .collect();
+        assert_eq!(labels, vec!["Leave Flock", "Edit Flock", "Delete Flock"]);
+
+        // Owner roost: management actions present.
+        app.build_context_menu(ContextMenuTarget::Roost(0));
+        let labels: Vec<&str> = app
+            .context_menu_items
+            .iter()
+            .map(|i| i.label.as_str())
+            .collect();
+        assert!(labels.contains(&"Leave Roost"));
+        assert!(labels.contains(&"Edit Roost"));
+        assert!(labels.contains(&"Delete Roost"));
+
+        // Non-owner flock: only Leave.
+        app.flock_owners.insert("F1".into(), false);
+        app.build_context_menu(ContextMenuTarget::Flock(0));
+        let labels: Vec<&str> = app
+            .context_menu_items
+            .iter()
+            .map(|i| i.label.as_str())
+            .collect();
+        assert_eq!(labels, vec!["Leave Flock"]);
+    }
+
+    #[test]
+    fn context_menu_code_resolves_flock_and_roost() {
+        let mut app = App::default();
+        app.flocks.push(FlockView {
+            code: "FLOCK-CODE".into(),
+            name: "F".into(),
+            messages: vec![],
+            unread: 0,
+        });
+        app.roosts.push(RoostView {
+            code: "ROOST-CODE".into(),
+            name: "R".into(),
+            channels: vec![],
+            unread: 0,
+            icon_path: None,
+        });
+        app.context_menu_target = Some(ContextMenuTarget::Flock(0));
+        assert_eq!(app.context_menu_code().as_deref(), Some("FLOCK-CODE"));
+        app.context_menu_target = Some(ContextMenuTarget::Roost(0));
+        assert_eq!(app.context_menu_code().as_deref(), Some("ROOST-CODE"));
+    }
 }

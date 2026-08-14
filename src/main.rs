@@ -31,18 +31,18 @@ use crossterm::{
 use event::{AppEvent, Command};
 #[allow(unused_imports)]
 use iroh::EndpointId;
+use ratatui::layout::{Position, Rect};
+use std::collections::HashSet;
 #[allow(unused_imports)]
 use std::sync::Arc;
 #[allow(unused_imports)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::collections::HashSet;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use ui::{
     App, ContextMenuAction, ContextMenuTarget, FlockView, MENU_ITEMS, Popup, RoostView,
     ScrollPanel, Selection, SettingsTab,
 };
-use ratatui::layout::{Position, Rect};
 
 const MOUSE_TRACKING_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
 const MOUSE_TRACKING_OFF: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
@@ -478,9 +478,7 @@ async fn main() -> anyhow::Result<()> {
                         id: descriptor.space,
                         title: descriptor.label.clone(),
                         roost: match descriptor.space {
-                            starling::protocol::SpaceId::RoostChannel { roost, .. } => {
-                                Some(roost)
-                            }
+                            starling::protocol::SpaceId::RoostChannel { roost, .. } => Some(roost),
                             starling::protocol::SpaceId::Flock(_) => None,
                         },
                         base_invite_display: Some(secret.clone()),
@@ -1439,11 +1437,12 @@ fn execute_context_action(
             } else {
                 app.flocks.retain(|f| f.code != code);
             }
-            app.contexts.retain(|_, c| {
-                c.base_invite_display.as_deref() != Some(code.as_str())
-            });
+            app.contexts
+                .retain(|_, c| c.base_invite_display.as_deref() != Some(code.as_str()));
             app.context_order.retain(|id| app.contexts.contains_key(id));
-            app.presence.contexts.retain(|id, _| app.contexts.contains_key(id));
+            app.presence
+                .contexts
+                .retain(|id, _| app.contexts.contains_key(id));
             app.active = app.context_order.first().copied();
             let _ = cmd_tx.send(Command::Leave { code });
             return Ok(());
@@ -1460,11 +1459,12 @@ fn execute_context_action(
             }
             app.roosts.retain(|r| r.code != code);
             app.flocks.retain(|f| f.code != code);
-            app.contexts.retain(|_, c| {
-                c.base_invite_display.as_deref() != Some(code.as_str())
-            });
+            app.contexts
+                .retain(|_, c| c.base_invite_display.as_deref() != Some(code.as_str()));
             app.context_order.retain(|id| app.contexts.contains_key(id));
-            app.presence.contexts.retain(|id, _| app.contexts.contains_key(id));
+            app.presence
+                .contexts
+                .retain(|id, _| app.contexts.contains_key(id));
             app.active = app.context_order.first().copied();
             let _ = cmd_tx.send(Command::Leave { code });
             return Ok(());
@@ -1481,7 +1481,10 @@ fn execute_context_action(
                 .find(|f| f.code == code)
                 .map(|f| f.name.clone())
                 .or_else(|| {
-                    app.roosts.iter().find(|r| r.code == code).map(|r| r.name.clone())
+                    app.roosts
+                        .iter()
+                        .find(|r| r.code == code)
+                        .map(|r| r.name.clone())
                 })
                 .unwrap_or_default();
             app.show_edit_flock = true;
@@ -1803,7 +1806,10 @@ fn handle_normal_key(
             if let (Some(roost_id), Some(target)) =
                 (app.selected_roost_endpoint_id(), app.selected_peer_id())
             {
-                let _ = cmd_tx.send(Command::Kick { roost: roost_id, target });
+                let _ = cmd_tx.send(Command::Kick {
+                    roost: roost_id,
+                    target,
+                });
             }
         }
 
@@ -2093,10 +2099,20 @@ fn handle_settings_mouse_click(app: &mut App, modal: Rect, col: u16, row: u16) -
     true
 }
 
-fn handle_reference_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, term_h: u16) -> bool {
+fn handle_reference_mouse_click(
+    app: &mut App,
+    col: u16,
+    row: u16,
+    term_w: u16,
+    term_h: u16,
+) -> bool {
     let chat_left = 39u16;
     // Sidebar header row: open the menu.
-    if row == 0 && (9..chat_left).contains(&col) { app.show_menu = true; app.menu_selection = 0; return true; }
+    if row == 0 && (9..chat_left).contains(&col) {
+        app.show_menu = true;
+        app.menu_selection = 0;
+        return true;
+    }
     // Chat header row: right-side icons (members, bell, pin, call).
     if row <= 1 && col >= chat_left {
         let members_open = app.show_members
@@ -2105,17 +2121,30 @@ fn handle_reference_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, 
                     && matches!(app.selection, Selection::Flock(_))
                     && app.selected_dm.is_none()));
         let right = term_w.saturating_sub(if members_open { 30 } else { 1 });
-        if col >= right.saturating_sub(1) { app.in_call = true; app.call_title = "Call".into(); }
-        else if col >= right.saturating_sub(4) { app.show_pinned = !app.show_pinned; }
-        else if col >= right.saturating_sub(7) { app.show_notifications = !app.show_notifications; }
-        else if col >= right.saturating_sub(10) { app.show_members = !app.show_members; }
+        if col >= right.saturating_sub(1) {
+            app.in_call = true;
+            app.call_title = "Call".into();
+        } else if col >= right.saturating_sub(4) {
+            app.show_pinned = !app.show_pinned;
+        } else if col >= right.saturating_sub(7) {
+            app.show_notifications = !app.show_notifications;
+        } else if col >= right.saturating_sub(10) {
+            app.show_members = !app.show_members;
+        }
         return true;
     }
     // Server rail: home pill (rows 1-3) then roosts (rows 5+).
     if col < 9 && row >= 1 && row < term_h.saturating_sub(4) {
-        if row <= 3 { app.open_home(); return true; }
+        if row <= 3 {
+            app.open_home();
+            return true;
+        }
         let roost_index = (row.saturating_sub(5) / 4) as usize;
-        if app.roosts.get(roost_index).is_some_and(|roost| !roost.channels.is_empty()) {
+        if app
+            .roosts
+            .get(roost_index)
+            .is_some_and(|roost| !roost.channels.is_empty())
+        {
             app.select(Selection::Channel(roost_index, 0));
             // Clicking a roost opens its management menu.
             app.build_context_menu(ContextMenuTarget::Roost(roost_index));
@@ -2148,7 +2177,12 @@ fn handle_reference_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, 
             }
         } else if let Selection::Channel(ri, _) = app.selection {
             let channel_index = list_index.saturating_sub(1);
-            if app.roosts.get(ri).and_then(|roost| roost.channels.get(channel_index)).is_some() {
+            if app
+                .roosts
+                .get(ri)
+                .and_then(|roost| roost.channels.get(channel_index))
+                .is_some()
+            {
                 app.select(Selection::Channel(ri, channel_index));
                 return true;
             }
@@ -2157,18 +2191,29 @@ fn handle_reference_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, 
     }
     // Sidebar footer: profile row, then controls (mic, headset, settings).
     if (9..39).contains(&col) && row >= term_h.saturating_sub(4) {
-        if row == term_h.saturating_sub(3) { app.profile_panel.open = true; return true; }
+        if row == term_h.saturating_sub(3) {
+            app.profile_panel.open = true;
+            return true;
+        }
         if row == term_h.saturating_sub(2) {
             let rel = col.saturating_sub(9);
-            if rel < 3 { app.muted = !app.muted; }
-            else if rel < 6 { app.deafened = !app.deafened; app.muted = app.deafened; }
-            else { app.settings_open = true; }
+            if rel < 3 {
+                app.muted = !app.muted;
+            } else if rel < 6 {
+                app.deafened = !app.deafened;
+                app.muted = app.deafened;
+            } else {
+                app.settings_open = true;
+            }
             return true;
         }
         return true;
     }
     // Composer / chat body: focus the input.
-    if row >= term_h.saturating_sub(3) && col >= chat_left { app.input_focus = true; return true; }
+    if row >= term_h.saturating_sub(3) && col >= chat_left {
+        app.input_focus = true;
+        return true;
+    }
     false
 }
 
@@ -2313,7 +2358,6 @@ fn handle_mouse_click(
         app.scroll_focus = ScrollPanel::Birds;
         let visible_row = (row - flocks_top - 1) as usize;
         if let Some(content_row) = app.bird_scroll.row_index(visible_row) {
-
             if content_row == 0 {
                 open_profile(app);
                 return Ok(());
@@ -2533,6 +2577,7 @@ fn activate_menu_item(
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::{
         App, MENU_ITEMS, SettingsTab, handle_settings_mouse_click, leave_context,
@@ -2762,8 +2807,10 @@ mod tests {
 
     #[test]
     fn settings_mouse_click_selects_tabs_and_consumes_clicks() {
-        let mut app = App::default();
-        app.settings_open = true;
+        let mut app = App {
+            settings_open: true,
+            ..App::default()
+        };
         // Settings modal: 80x20 centered on a 120x30 terminal.
         let modal = ratatui::layout::Rect {
             x: 20,
@@ -2772,12 +2819,27 @@ mod tests {
             height: 20,
         };
         // Click the third nav row -> Appearance tab.
-        assert!(handle_settings_mouse_click(&mut app, modal, modal.x + 2, modal.y + 3));
+        assert!(handle_settings_mouse_click(
+            &mut app,
+            modal,
+            modal.x + 2,
+            modal.y + 3
+        ));
         assert_eq!(app.settings_tab, SettingsTab::Appearance);
         // Click the first nav row -> Account tab.
-        assert!(handle_settings_mouse_click(&mut app, modal, modal.x + 2, modal.y + 1));
+        assert!(handle_settings_mouse_click(
+            &mut app,
+            modal,
+            modal.x + 2,
+            modal.y + 1
+        ));
         assert_eq!(app.settings_tab, SettingsTab::Account);
         // Any click inside the modal is consumed (returns true).
-        assert!(handle_settings_mouse_click(&mut app, modal, modal.x + 40, modal.y + 10));
+        assert!(handle_settings_mouse_click(
+            &mut app,
+            modal,
+            modal.x + 40,
+            modal.y + 10
+        ));
     }
 }
