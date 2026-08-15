@@ -1742,7 +1742,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
         && let Some(roost) = app.roosts.get(ri)
     {
         items.push(ListItem::new(Line::from(Span::styled(
-            "TEXT CHANNELS",
+            "CHANNELS",
             Style::new().fg(muted).add_modifier(Modifier::BOLD),
         ))));
         for (index, channel) in roost.channels.iter().enumerate() {
