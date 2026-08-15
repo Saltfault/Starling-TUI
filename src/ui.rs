@@ -377,6 +377,11 @@ pub struct App {
     /// unread badge on the header bell and the rail/sidebar indicators.
     pub notifications: Vec<NotificationItem>,
     pub show_members: bool,
+    /// Toggles on when the terminal shrinks below the narrow breakpoint; the
+    /// header menu button restores the channel/friends list while narrow.
+    pub sidebar_hidden: bool,
+    /// Terminal width (cols) from the last frame; resizing is detected here.
+    pub terminal_width: u16,
     pub icon_style: IconStyle,
 }
 
@@ -474,6 +479,8 @@ impl Default for App {
             // Members start hidden; the header button opens them on demand.
             // On narrow (mobile) screens this keeps the chat full-width.
             show_members: false,
+            sidebar_hidden: false,
+            terminal_width: 0,
             icon_style: IconStyle::from_env(),
         }
     }
@@ -610,6 +617,7 @@ pub enum TerminalIcon {
     More,
     Video,
     Lock,
+    Menu,
 }
 
 impl TerminalIcon {
@@ -645,6 +653,7 @@ impl TerminalIcon {
             Self::More => "[...]",
             Self::Video => "[D]",
             Self::Lock => "[L]",
+            Self::Menu => "[MENU]",
         }
     }
 
@@ -680,6 +689,7 @@ impl TerminalIcon {
             Self::More => "\u{f142}",
             Self::Video => "\u{f03d}",
             Self::Lock => "\u{f023}",
+            Self::Menu => "\u{f0c9}",
         })
     }
 
@@ -715,6 +725,7 @@ impl TerminalIcon {
             Self::More => "⋮",
             Self::Video => "▣",
             Self::Lock => "🔒",
+            Self::Menu => "☰",
         })
     }
 
@@ -750,6 +761,7 @@ impl TerminalIcon {
             Self::More => "[...]",
             Self::Video => "[D]",
             Self::Lock => "[L]",
+            Self::Menu => "[M]",
         }
     }
 
@@ -1189,6 +1201,24 @@ impl App {
         self.active = None;
     }
 
+    /// Track the terminal width across frames and apply the responsive rules:
+    /// narrow screens auto-hide the channel/friends sidebar and members panel;
+    /// when the screen grows back to a large size both lists come back
+    /// automatically.
+    pub fn note_terminal_size(&mut self, width: u16) {
+        let grew_wide = self.terminal_width < MOBILE_BREAKPOINT && width >= MOBILE_BREAKPOINT;
+        self.terminal_width = width;
+        if width < NARROW_BREAKPOINT {
+            self.sidebar_hidden = true;
+            self.show_members = false;
+        } else if width < MOBILE_BREAKPOINT {
+            self.show_members = false;
+        } else if grew_wide {
+            self.sidebar_hidden = false;
+            self.show_members = true;
+        }
+    }
+
     /// Deliver an incoming message to a flock or roost channel, mirroring the
     /// `AppEvent::Message` handling in main(): append to the message list,
     /// mark unread when the space is not on screen, and record a notification
@@ -1545,6 +1575,9 @@ pub fn apply_accent_color(app: &mut App, hex: &str) -> bool {
 /// rail moves to the bottom of the screen, members hide unless explicitly
 /// opened, and the chat takes the full width.
 pub const MOBILE_BREAKPOINT: u16 = 80;
+/// Below this width even the sidebar (channel list / friends) is hidden and
+/// must be toggled back with the header menu button.
+pub const NARROW_BREAKPOINT: u16 = 56;
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -1559,6 +1592,10 @@ pub fn draw(f: &mut Frame, app: &App) {
             || (matches!(app.v2_view, V2View::Home)
                 && matches!(app.selection, Selection::Flock(_))
                 && app.selected_dm.is_none()));
+    // The channel list / friends sidebar is hidden on very narrow screens
+    // (see NARROW_BREAKPOINT) and can be restored with the header menu button.
+    let sidebar_visible = !app.sidebar_hidden
+        && (matches!(app.v2_view, V2View::Space) || matches!(app.v2_view, V2View::Home));
 
     if mobile {
         // Narrow layout: no rail column, no persistent sidebar. The home and
@@ -1575,7 +1612,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         let (chat_area, side) = if members_visible {
             let cols = Layout::horizontal([Constraint::Min(1), Constraint::Length(30)]).split(body);
             (cols[0], Some((cols[1], false)))
-        } else if matches!(app.v2_view, V2View::Home) {
+        } else if sidebar_visible {
+            // Friends list (Home) or channel list (Space) on the left.
             let cols = Layout::horizontal([Constraint::Length(30), Constraint::Min(1)]).split(body);
             (cols[1], Some((cols[0], true)))
         } else {
@@ -2023,8 +2061,13 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     } else {
         bell_glyph.to_string()
     };
+    let menu = if app.sidebar_hidden {
+        format!("{}  ", TerminalIcon::Menu.glyph(app.icon_style))
+    } else {
+        String::new()
+    };
     let icons = format!(
-        "{}  {}  {}  {}",
+        "{menu}{}  {}  {}  {}",
         TerminalIcon::Members.glyph(app.icon_style),
         bell,
         TerminalIcon::Pin.glyph(app.icon_style),
@@ -4125,6 +4168,74 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(text.contains("MEMBERS"));
+    }
+
+    #[test]
+    fn ultra_narrow_hides_sidebar_and_growing_wide_restores_everything() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = App::default();
+        app.v2_view = V2View::Space;
+        app.roosts.push(RoostView {
+            code: "S".into(),
+            name: "Starling".into(),
+            channels: vec![FlockView {
+                code: "S/general".into(),
+                name: "general".into(),
+                messages: vec![],
+                unread: 0,
+            }],
+            unread: 0,
+            icon_path: None,
+        });
+        app.select(Selection::Channel(0, 0));
+
+        // Shrink below the narrow breakpoint: channel list and members hide.
+        app.note_terminal_size(100);
+        app.note_terminal_size(40);
+        assert!(app.sidebar_hidden);
+        assert!(!app.show_members);
+
+        let backend = TestBackend::new(40, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!text.contains("MEMBERS"));
+        assert!(
+            !text.contains("CHANNELS"),
+            "channel list must hide on ultra-narrow terminals"
+        );
+        assert!(
+            text.contains("☰"),
+            "header menu button must appear when the sidebar is hidden"
+        );
+        assert!(text.contains("general"), "chat must stay visible");
+
+        // The header menu button brings the channel list back.
+        app.sidebar_hidden = false;
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("CHANNELS"));
+
+        // Growing back to a large width reverts everything.
+        app.note_terminal_size(120);
+        assert!(!app.sidebar_hidden);
+        assert!(
+            app.show_members,
+            "members must reopen when the screen grows"
+        );
     }
 
     #[test]

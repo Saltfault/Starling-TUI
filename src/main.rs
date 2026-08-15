@@ -675,7 +675,9 @@ async fn main() -> anyhow::Result<()> {
             let now = Instant::now();
             let dt = now.duration_since(last_frame).as_secs_f32().min(0.1);
             last_frame = now;
-            let (_, flock_h, _, roost_h, bird_h) = panel_geometry(crossterm::terminal::size()?.1);
+            let (term_w, term_h) = crossterm::terminal::size()?;
+            app.note_terminal_size(term_w);
+            let (_, flock_h, _, roost_h, bird_h) = panel_geometry(term_h);
             app.update_scroll_bounds(
                 flock_h.saturating_sub(2) as usize,
                 roost_h.saturating_sub(2) as usize,
@@ -2189,8 +2191,9 @@ fn handle_settings_mouse_click(app: &mut App, modal: Rect, col: u16, row: u16) -
     true
 }
 
-/// Header icon row on narrow terminals: members, bell, pin, call. Mirrors the
-/// desktop chat-header hit regions (right-aligned, no rail column).
+/// Header icon row on narrow terminals: channel/friends toggle (when the
+/// sidebar is hidden), members, bell, pin, call. Mirrors the desktop chat-header
+/// hit regions (right-aligned, no rail column).
 fn handle_mobile_header_click(app: &mut App, col: u16, row: u16, term_w: u16) -> bool {
     if row > 1 {
         return false;
@@ -2210,6 +2213,10 @@ fn handle_mobile_header_click(app: &mut App, col: u16, row: u16, term_w: u16) ->
         app.show_notifications = !app.show_notifications;
     } else if col >= right.saturating_sub(10) {
         app.show_members = !app.show_members;
+    } else if app.sidebar_hidden && col >= right.saturating_sub(13) {
+        // Very narrow screens: the channel/friends list is hidden; this button
+        // restores it (Space view) or the Friends list (Home view).
+        app.sidebar_hidden = false;
     }
     true
 }
