@@ -1672,14 +1672,15 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
         ),
         rows[0],
     );
-    let mut items = vec![ListItem::new(Line::from(vec![
-        Span::styled(
-            "DIRECT MESSAGES",
-            Style::new().fg(muted).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  +", Style::new().fg(muted)),
-    ]))];
+    let mut items = Vec::new();
     if matches!(app.v2_view, V2View::Home) {
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                "DIRECT MESSAGES",
+                Style::new().fg(muted).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  +", Style::new().fg(muted)),
+        ])));
         for (index, peer) in app.peers.iter().enumerate() {
             let name = app.peer_display_name(peer);
             let active = app.selected_dm == Some(*peer)

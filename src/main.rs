@@ -2146,9 +2146,6 @@ fn handle_reference_mouse_click(
             .is_some_and(|roost| !roost.channels.is_empty())
         {
             app.select(Selection::Channel(roost_index, 0));
-            // Clicking a roost opens its management menu.
-            app.build_context_menu(ContextMenuTarget::Roost(roost_index));
-            app.show_context_menu = !app.context_menu_items.is_empty();
         }
         return true;
     }
@@ -2169,9 +2166,6 @@ fn handle_reference_mouse_click(
                 let flock_index = list_index - peer_count - 1;
                 if flock_index < app.flocks.len() {
                     app.select_flock(flock_index);
-                    // Clicking a flock opens its management menu.
-                    app.build_context_menu(ContextMenuTarget::Flock(flock_index));
-                    app.show_context_menu = !app.context_menu_items.is_empty();
                     return true;
                 }
             }
@@ -2452,6 +2446,35 @@ fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {
     app.show_role_submenu = false;
 
     let (term_w, term_h) = crossterm::terminal::size()?;
+
+    // Current layout: rail is 9 wide (home pill rows 1-3, roosts from row 5);
+    // sidebar is 9..39 (DM header row 2, peers, then flocks).
+    if col < 9 && row >= 1 && row < term_h.saturating_sub(4) {
+        if row <= 3 {
+            return Ok(()); // home pill: no menu
+        }
+        let roost_index = (row.saturating_sub(5) / 4) as usize;
+        if app.roosts.get(roost_index).is_some() {
+            app.build_context_menu(ContextMenuTarget::Roost(roost_index));
+            app.show_context_menu = !app.context_menu_items.is_empty();
+            return Ok(());
+        }
+    }
+    if (9..39).contains(&col) && row >= 2 && row < term_h.saturating_sub(4) {
+        let list_index = (row - 2) as usize;
+        if matches!(app.v2_view, ui::V2View::Home) {
+            let peer_count = app.peers.len();
+            if list_index > peer_count + 1 {
+                let flock_index = list_index - peer_count - 2;
+                if flock_index < app.flocks.len() {
+                    app.build_context_menu(ContextMenuTarget::Flock(flock_index));
+                    app.show_context_menu = !app.context_menu_items.is_empty();
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     let (flocks_top, _flocks_h, roosts_top, roosts_h, birds_h) = panel_geometry(term_h);
 
     // Hit-test: right side = birds panel
