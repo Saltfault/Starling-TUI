@@ -779,7 +779,7 @@ fn flock_icon(name: &str) -> String {
 fn format_ts(ts: i64) -> String {
     use chrono::TimeZone;
     let secs = if ts > 10_000_000_000 { ts / 1000 } else { ts };
-    chrono::Utc
+    chrono::Local
         .timestamp_opt(secs, 0)
         .single()
         .map(|dt| dt.format("%H:%M").to_string())
