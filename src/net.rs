@@ -427,6 +427,11 @@ pub async fn run(
         let _ = evt_tx.send(AppEvent::Notice(format!("join failed: {e}")));
     }
 
+    // Remote roosts whose rejoin failed (host offline at startup). They are
+    // retried every 10s until the host comes back and the channels connect,
+    // so a roost never stays dead permanently.
+    let mut pending_remote_rejoins: HashSet<String> = HashSet::new();
+
     // Rejoin saved contexts that have persisted join codes.
     for (_space_id, code) in restore_codes {
         // If this roost is hosted locally, start its server first so other
@@ -462,7 +467,7 @@ pub async fn run(
         if let Err(error) = join_by_code(
             &gossip,
             &endpoint,
-            code,
+            code.clone(),
             since,
             &mut flocks,
             &mut spaces,
@@ -479,6 +484,8 @@ pub async fn run(
             let _ = evt_tx.send(AppEvent::Error(format!(
                 "failed to rejoin saved context: {error}"
             )));
+            // Host is offline; retry every 10s until it comes back.
+            pending_remote_rejoins.insert(code);
         }
     }
 
@@ -491,9 +498,58 @@ pub async fn run(
     #[cfg(feature = "video")]
     let mut _video_tx: Option<tokio::sync::broadcast::Sender<Vec<u8>>> = None;
 
+    // Remote roosts whose rejoin failed (host offline at startup). They are
+    // retried every 10s until the host comes back and the channels connect,
+    // so a roost never stays dead permanently.
     loop {
-        let Some(cmd) = cmd_rx.recv().await else {
-            break;
+        let cmd = tokio::select! {
+            cmd = cmd_rx.recv() => {
+                let Some(cmd) = cmd else { break };
+                cmd
+            }
+            () = tokio::time::sleep(Duration::from_secs(10)) => {
+                // Periodic auto-reconnect tick.
+                if pending_remote_rejoins.is_empty() {
+                    continue;
+                }
+                let pending: Vec<String> = pending_remote_rejoins
+                    .iter()
+                    .filter(|code| {
+                        !flocks
+                            .keys()
+                            .any(|key| key.starts_with(&format!("{code}/")))
+                    })
+                    .cloned()
+                    .collect();
+                if pending.is_empty() {
+                    pending_remote_rejoins.clear();
+                    continue;
+                }
+                for code in pending {
+                    if join_by_code(
+                        &gossip,
+                        &endpoint,
+                        code.clone(),
+                        0,
+                        &mut flocks,
+                        &mut spaces,
+                        evt_tx.clone(),
+                        my_node_id,
+                        name.clone(),
+                        secret.clone(),
+                        dm_secret_bytes,
+                        my_dm_public_bytes.clone(),
+                        pronouns.clone(),
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        pending_remote_rejoins.remove(&code);
+                        let _ = evt_tx.send(AppEvent::Notice("reconnected to roost".into()));
+                    }
+                }
+                continue;
+            }
         };
         match cmd {
             Command::SendContextText { space, body } => {
