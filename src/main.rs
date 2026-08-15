@@ -2189,6 +2189,62 @@ fn handle_settings_mouse_click(app: &mut App, modal: Rect, col: u16, row: u16) -
     true
 }
 
+/// Header icon row on narrow terminals: members, bell, pin, call. Mirrors the
+/// desktop chat-header hit regions (right-aligned, no rail column).
+fn handle_mobile_header_click(app: &mut App, col: u16, row: u16, term_w: u16) -> bool {
+    if row > 1 {
+        return false;
+    }
+    let members_open = app.show_members
+        && (matches!(app.v2_view, V2View::Space)
+            || (matches!(app.v2_view, ui::V2View::Home)
+                && matches!(app.selection, Selection::Flock(_))
+                && app.selected_dm.is_none()));
+    let right = term_w.saturating_sub(if members_open { 30 } else { 1 });
+    if col >= right.saturating_sub(1) {
+        app.in_call = true;
+        app.call_title = "Call".into();
+    } else if col >= right.saturating_sub(4) {
+        app.show_pinned = !app.show_pinned;
+    } else if col >= right.saturating_sub(7) {
+        app.show_notifications = !app.show_notifications;
+    } else if col >= right.saturating_sub(10) {
+        app.show_members = !app.show_members;
+    }
+    true
+}
+
+/// Bottom rail clicks on narrow terminals: home pill first, then one pill per
+/// roost, mirroring the desktop left rail geometry.
+fn handle_mobile_rail_click(app: &mut App, col: u16, row: u16, term_w: u16, term_h: u16) -> bool {
+    if term_w >= ui::MOBILE_BREAKPOINT {
+        return false;
+    }
+    let rail_h = 3u16;
+    if row < term_h.saturating_sub(rail_h) || row > term_h.saturating_sub(1) {
+        return false;
+    }
+    let pill_w = 6u16;
+    let gap = 1u16;
+    let mut x = 1u16;
+    if col >= x && col < x + pill_w {
+        app.open_home();
+        return true;
+    }
+    x += pill_w + gap;
+    for (index, _roost) in app.roosts.iter().enumerate() {
+        if x + pill_w > term_w {
+            break;
+        }
+        if col >= x && col < x + pill_w {
+            app.select(Selection::Channel(index, 0));
+            return true;
+        }
+        x += pill_w + gap;
+    }
+    false
+}
+
 fn handle_reference_mouse_click(
     app: &mut App,
     col: u16,
@@ -2196,6 +2252,9 @@ fn handle_reference_mouse_click(
     term_w: u16,
     term_h: u16,
 ) -> bool {
+    if term_w < ui::MOBILE_BREAKPOINT {
+        return false;
+    }
     let chat_left = 39u16;
     // Sidebar header row: open the menu.
     if row == 0 && (9..chat_left).contains(&col) {
@@ -2404,6 +2463,14 @@ fn handle_mouse_click(
         return Ok(());
     }
 
+    if handle_mobile_rail_click(app, col, row, term_w, term_h) {
+        return Ok(());
+    }
+
+    if term_w < ui::MOBILE_BREAKPOINT && handle_mobile_header_click(app, col, row, term_w) {
+        return Ok(());
+    }
+
     if handle_reference_mouse_click(app, col, row, term_w, term_h) {
         return Ok(());
     }
@@ -2494,6 +2561,9 @@ fn handle_mouse_click(
 }
 
 fn handle_v2_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, term_h: u16) -> bool {
+    if term_w < ui::MOBILE_BREAKPOINT {
+        return false;
+    }
     let body_top = 2;
     let body_bottom = term_h.saturating_sub(4);
     if row <= body_top || row >= body_bottom || col >= term_w.saturating_sub(27) {
@@ -2570,6 +2640,30 @@ fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {
     // Headless environments (CI, tests) have no TTY; fall back to a default
     // grid so right-click still works and tests don't panic on size().
     let (term_w, term_h) = crossterm::terminal::size().unwrap_or((120, 30));
+
+    // Narrow terminals: the rail sits at the bottom; right-click a pill to
+    // open that space's context menu.
+    if term_w < ui::MOBILE_BREAKPOINT {
+        let rail_h = 3u16;
+        if row >= term_h.saturating_sub(rail_h) && row <= term_h.saturating_sub(1) {
+            let pill_w = 6u16;
+            let gap = 1u16;
+            let mut x = 1u16;
+            x += pill_w + gap; // home pill: no menu
+            for (index, _roost) in app.roosts.iter().enumerate() {
+                if x + pill_w > term_w {
+                    break;
+                }
+                if col >= x && col < x + pill_w {
+                    app.build_context_menu(ContextMenuTarget::Roost(index));
+                    app.show_context_menu = !app.context_menu_items.is_empty();
+                    return Ok(());
+                }
+                x += pill_w + gap;
+            }
+        }
+        return Ok(());
+    }
 
     // Current layout: rail is 9 wide (home pill rows 1-3, roosts from row 5);
     // sidebar is 9..39 (DM header row 2, peers, then flocks).

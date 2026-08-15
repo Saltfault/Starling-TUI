@@ -471,7 +471,9 @@ impl Default for App {
             show_pinned: false,
             show_notifications: false,
             notifications: Vec::new(),
-            show_members: true,
+            // Members start hidden; the header button opens them on demand.
+            // On narrow (mobile) screens this keeps the chat full-width.
+            show_members: false,
             icon_style: IconStyle::from_env(),
         }
     }
@@ -1539,20 +1541,70 @@ pub fn apply_accent_color(app: &mut App, hex: &str) -> bool {
     true
 }
 
+/// Below this terminal width the UI switches to the mobile layout: the server
+/// rail moves to the bottom of the screen, members hide unless explicitly
+/// opened, and the chat takes the full width.
+pub const MOBILE_BREAKPOINT: u16 = 80;
+
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
+    let mobile = area.width < MOBILE_BREAKPOINT;
 
     // Paint the whole terminal with the chat background first so no light
     // terminal default leaks through margins or border cells.
     f.render_widget(Block::default().bg(Color::Rgb(49, 51, 56)), area);
 
-    // Reference proportions (CSS px -> terminal cols at ~8px/cell):
-    // rail 72px ~9, sidebar 240px ~30, members 240px ~30.
     let members_visible = app.show_members
         && (matches!(app.v2_view, V2View::Space)
             || (matches!(app.v2_view, V2View::Home)
                 && matches!(app.selection, Selection::Flock(_))
                 && app.selected_dm.is_none()));
+
+    if mobile {
+        // Narrow layout: no rail column, no persistent sidebar. The home and
+        // roost pills live in a 3-row rail under the composer; members slide
+        // in as a right-side panel only when explicitly opened; the Friends
+        // list takes the left when on the Home view.
+        let rail_h = 3u16;
+        let body = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height.saturating_sub(rail_h),
+        };
+        let (chat_area, side) = if members_visible {
+            let cols = Layout::horizontal([Constraint::Min(1), Constraint::Length(30)]).split(body);
+            (cols[0], Some((cols[1], false)))
+        } else if matches!(app.v2_view, V2View::Home) {
+            let cols = Layout::horizontal([Constraint::Length(30), Constraint::Min(1)]).split(body);
+            (cols[1], Some((cols[0], true)))
+        } else {
+            (body, None)
+        };
+        if let Some((rect, is_sidebar)) = side {
+            if is_sidebar {
+                draw_sidebar(f, app, rect);
+            } else {
+                draw_members(f, app, rect);
+            }
+        }
+        draw_chat(f, app, chat_area);
+        draw_mobile_rail(
+            f,
+            app,
+            Rect {
+                x: area.x,
+                y: body.bottom(),
+                width: area.width,
+                height: rail_h,
+            },
+        );
+        draw_popups(f, app);
+        return;
+    }
+
+    // Reference proportions (CSS px -> terminal cols at ~8px/cell):
+    // rail 72px ~9, sidebar 240px ~30, members 240px ~30.
     let columns = if members_visible {
         Layout::horizontal([
             Constraint::Length(9),
@@ -1576,6 +1628,10 @@ pub fn draw(f: &mut Frame, app: &App) {
     if members_visible {
         draw_members(f, app, columns[3]);
     }
+    draw_popups(f, app);
+}
+
+fn draw_popups(f: &mut Frame, app: &App) {
     if app.show_pinned {
         draw_empty_popup(f, "Pinned Messages", app.icon_style);
     }
@@ -1611,6 +1667,61 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_menu_popup(f, app);
     } else if app.show_bird_profile {
         draw_bird_profile_popup(f, app);
+    }
+}
+
+/// Bottom navigation rail for narrow terminals: home pill first, then one
+/// pill per roost, mirroring the desktop left rail. Clicking a pill selects
+/// the space (see `handle_mobile_rail_click`).
+fn draw_mobile_rail(f: &mut Frame, app: &App, area: Rect) {
+    let rail_bg = app.palette.surface_warm;
+    f.render_widget(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::new().fg(app.palette.border).bg(rail_bg))
+            .bg(rail_bg),
+        area,
+    );
+    let pill_w = 6u16;
+    let gap = 1u16;
+    let mut x = area.x + 1;
+    draw_server_pill(
+        f,
+        app,
+        TerminalIcon::Home.glyph(app.icon_style),
+        matches!(app.v2_view, V2View::Home),
+        false,
+        Rect {
+            x,
+            y: area.y,
+            width: pill_w,
+            height: area.height,
+        },
+    );
+    x += pill_w + gap;
+    for (index, roost) in app.roosts.iter().enumerate() {
+        if x + pill_w > area.right() {
+            break;
+        }
+        let label = if roost.icon_path.is_some() {
+            TerminalIcon::Video.glyph(app.icon_style).to_string()
+        } else {
+            flock_icon(&roost.name)
+        };
+        draw_server_pill(
+            f,
+            app,
+            &label,
+            matches!(app.selection, Selection::Channel(i, _) if i == index),
+            roost.unread > 0,
+            Rect {
+                x,
+                y: area.y,
+                width: pill_w,
+                height: area.height,
+            },
+        );
+        x += pill_w + gap;
     }
 }
 
@@ -3806,6 +3917,7 @@ mod tests {
         use ratatui::backend::TestBackend;
         let mut app = App::default();
         app.v2_view = V2View::Space;
+        app.show_members = true;
         app.roosts.push(RoostView {
             code: "S".into(),
             name: "Starling".into(),
@@ -3907,6 +4019,7 @@ mod tests {
         app.name = "Ramhaug".into();
         app.tag = "#7134".into();
         app.v2_view = V2View::Home;
+        app.show_members = true;
         app.flocks.push(FlockView {
             code: "99s".into(),
             name: "99s".into(),
@@ -3945,6 +4058,73 @@ mod tests {
             indicator_rows, 1,
             "active indicator must appear once, got {indicator_rows} rows"
         );
+    }
+
+    #[test]
+    fn narrow_terminal_uses_bottom_rail_and_auto_hides_members() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = App::default();
+        app.v2_view = V2View::Home;
+        app.roosts.push(RoostView {
+            code: "S".into(),
+            name: "Starling".into(),
+            channels: vec![FlockView {
+                code: "S/general".into(),
+                name: "general".into(),
+                messages: vec![],
+                unread: 0,
+            }],
+            unread: 0,
+            icon_path: None,
+        });
+        app.select(Selection::Channel(0, 0));
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        // Members hidden by default on narrow screens.
+        assert!(
+            !text.contains("MEMBERS"),
+            "members must auto-hide on narrow terminals"
+        );
+        // The rail moved to the bottom: the home glyph appears in the last rows.
+        assert!(
+            text.contains("S") && text.contains("general"),
+            "chat content missing on narrow layout"
+        );
+        let buf = terminal.backend().buffer();
+        let area = buf.area();
+        let cells = buf.content();
+        let full_width = area.width as usize;
+        let bottom: String = (0..full_width)
+            .map(|x| {
+                cells[(area.height as usize - 2) * full_width + x]
+                    .symbol()
+                    .to_string()
+            })
+            .collect();
+        assert!(
+            bottom.contains('S'),
+            "roost pill must render in the bottom rail: {bottom:?}"
+        );
+        // Explicitly opened members steal the right 30 columns, rail stays put.
+        app.show_members = true;
+        terminal.draw(|f| super::draw(f, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("MEMBERS"));
     }
 
     #[test]
