@@ -43,7 +43,7 @@ jobs:
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libclang-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libclang-dev libopus-dev pkg-config
       - name: Check formatting
         run: cargo fmt --check
       - name: Clippy
