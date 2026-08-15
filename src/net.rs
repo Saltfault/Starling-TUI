@@ -429,6 +429,33 @@ pub async fn run(
 
     // Rejoin saved contexts that have persisted join codes.
     for (_space_id, code) in restore_codes {
+        // If this roost is hosted locally, start its server first so other
+        // members can join, then emit JoinedRoost straight from the persisted
+        // state — no network handshake needed (relay discovery of a freshly
+        // bound server can time out).
+        if let Some(roost_name) = starling::roost::server::roost_name_by_code(&code) {
+            let server_name = roost_name.clone();
+            let (_console_tx, console_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(async move {
+                let _ = starling::roost::server::open(&server_name, true, console_rx).await;
+            });
+            match starling::roost::server::read_state(&roost_name) {
+                Ok((display_name, channels, perms)) => {
+                    let _ = evt_tx.send(AppEvent::JoinedRoost {
+                        code: code.clone(),
+                        name: display_name,
+                        channels,
+                        perms,
+                    });
+                }
+                Err(e) => {
+                    let _ = evt_tx.send(AppEvent::Error(format!(
+                        "failed to rejoin saved context: {e}"
+                    )));
+                }
+            }
+            continue;
+        }
         let since = 0; // Saved contexts start from scratch (history backfill handles old messages).
         if let Err(error) = join_by_code(
             &gossip,
