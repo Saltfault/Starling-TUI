@@ -1869,6 +1869,19 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         rows[0],
     );
     let mut message_lines: Vec<Line> = Vec::new();
+    // Surface errors and transient notices so failures are never silent.
+    if let Some(error) = app.error_message.as_deref() {
+        message_lines.push(Line::from(Span::styled(
+            format!("⚠ {error}"),
+            Style::new().fg(Color::Rgb(242, 63, 67)).bg(bg),
+        )));
+    }
+    if let Some(notice) = app.visible_status_notice(Instant::now()) {
+        message_lines.push(Line::from(Span::styled(
+            format!("ℹ {notice}"),
+            Style::new().fg(muted).bg(bg),
+        )));
+    }
     let messages = app.active_messages();
     if messages.is_empty() {
         let empty = if is_dm {

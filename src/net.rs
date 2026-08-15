@@ -902,42 +902,24 @@ pub async fn run(
                 tokio::spawn(async move {
                     let _ = starling::roost::server::open(&server_name, true, console_rx).await;
                 });
-                // Join it through the normal path so JoinedRoost fires and the
-                // rail gains the roost with its channels. The server endpoint
-                // binds asynchronously, so retry the handshake briefly.
-                let mut joined = false;
-                for attempt in 0..10 {
-                    if join_by_code(
-                        &gossip,
-                        &endpoint,
-                        code.clone(),
-                        0,
-                        &mut flocks,
-                        &mut spaces,
-                        evt_tx.clone(),
-                        my_node_id,
-                        name.clone(),
-                        secret.clone(),
-                        dm_secret_bytes,
-                        my_dm_public_bytes.clone(),
-                        pronouns.clone(),
-                    )
-                    .await
-                    .is_ok()
-                    {
-                        joined = true;
-                        break;
+                // Emit JoinedRoost straight from the persisted state so the
+                // rail gains the roost immediately, without waiting for a
+                // network join handshake (which needs relay discovery and can
+                // fail silently offline).
+                match starling::roost::server::read_state(&name) {
+                    Ok((display_name, channels, perms)) => {
+                        let _ = evt_tx.send(AppEvent::JoinedRoost {
+                            code,
+                            name: display_name,
+                            channels,
+                            perms,
+                        });
                     }
-                    if attempt == 0 {
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                    } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                    Err(e) => {
+                        let _ = evt_tx.send(AppEvent::Error(format!(
+                            "roost '{name}' created but state read failed: {e}"
+                        )));
                     }
-                }
-                if !joined {
-                    let _ = evt_tx.send(AppEvent::Error(format!(
-                        "roost '{name}' created but join failed after retries"
-                    )));
                 }
             }
             Command::Quit => break,
