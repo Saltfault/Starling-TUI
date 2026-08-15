@@ -1809,12 +1809,6 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let text = Color::Rgb(219, 222, 225);
     let fg_2 = Color::Rgb(242, 243, 245);
     let muted = Color::Rgb(148, 155, 164);
-    let rows = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(1),
-        Constraint::Length(3),
-    ])
-    .split(area);
     let is_dm = matches!(app.v2_view, V2View::Home) && app.selected_dm.is_some();
     let is_flock = matches!(app.selection, Selection::Flock(i) if i < app.flocks.len());
     let title = if is_flock {
@@ -1860,15 +1854,6 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(muted).bg(bg),
         ),
     ]);
-    f.render_widget(
-        Paragraph::new(header).block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::new().fg(border))
-                .bg(bg),
-        ),
-        rows[0],
-    );
     let mut message_lines: Vec<Line> = Vec::new();
     // Surface errors and transient notices so failures are never silent.
     if let Some(error) = app.error_message.as_deref() {
@@ -1936,22 +1921,45 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
             )));
         }
     }
-    // Center the message content vertically in the chat body.
+    // The message list fills the entire chat column; the header and composer
+    // are drawn on top of it afterwards.
     let content_h = message_lines.len() as u16;
-    let pad_top = (rows[1].height.saturating_sub(content_h)) / 2;
-    let mut lines = Vec::with_capacity(rows[1].height as usize);
+    let pad_top = (area.height.saturating_sub(content_h)) / 2;
+    let mut lines = Vec::with_capacity(area.height as usize);
     for _ in 0..pad_top {
         lines.push(Line::from(""));
     }
     lines.extend(message_lines);
-    while (lines.len() as u16) < rows[1].height {
+    while (lines.len() as u16) < area.height {
         lines.push(Line::from(""));
     }
     f.render_widget(
         Paragraph::new(Text::from(lines)).block(Block::default().bg(bg)),
-        rows[1],
+        area,
     );
-    draw_message_bar(f, app, rows[2]);
+    // Overlay the header (top 2 rows) and composer (bottom 3 rows).
+    let header_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 2,
+    };
+    f.render_widget(
+        Paragraph::new(header).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::new().fg(border))
+                .bg(bg),
+        ),
+        header_area,
+    );
+    let composer_area = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(3),
+        width: area.width,
+        height: 3,
+    };
+    draw_message_bar(f, app, composer_area);
 }
 
 fn draw_members(f: &mut Frame, app: &App, area: Rect) {
