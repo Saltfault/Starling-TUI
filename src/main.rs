@@ -41,7 +41,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use ui::{
     App, ContextMenuAction, ContextMenuTarget, FlockView, MENU_ITEMS, Popup, RoostView,
-    ScrollPanel, Selection, SettingsTab,
+    ScrollPanel, Selection, SettingsTab, V2View,
 };
 
 const MOUSE_TRACKING_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
@@ -2169,7 +2169,7 @@ fn handle_reference_mouse_click(
     // Chat header row: right-side icons (members, bell, pin, call).
     if row <= 1 && col >= chat_left {
         let members_open = app.show_members
-            && (matches!(app.v2_view, ui::V2View::Space)
+            && (matches!(app.v2_view, V2View::Space)
                 || (matches!(app.v2_view, ui::V2View::Home)
                     && matches!(app.selection, Selection::Flock(_))
                     && app.selected_dm.is_none()));
@@ -2193,11 +2193,7 @@ fn handle_reference_mouse_click(
             return true;
         }
         let roost_index = (row.saturating_sub(5) / 4) as usize;
-        if app
-            .roosts
-            .get(roost_index)
-            .is_some_and(|roost| !roost.channels.is_empty())
-        {
+        if app.roosts.get(roost_index).is_some() {
             app.select(Selection::Channel(roost_index, 0));
         }
         return true;
@@ -2457,11 +2453,7 @@ fn handle_v2_mouse_click(app: &mut App, col: u16, row: u16, term_w: u16, term_h:
             return true;
         }
         let roost_index = index - 1 - flock_count;
-        if app
-            .roosts
-            .get(roost_index)
-            .is_some_and(|roost| !roost.channels.is_empty())
-        {
+        if app.roosts.get(roost_index).is_some() {
             app.select(Selection::Channel(roost_index, 0));
             return true;
         }
@@ -2535,8 +2527,8 @@ fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {
         let list_index = (row - 2) as usize;
         if matches!(app.v2_view, ui::V2View::Home) {
             let peer_count = app.peers.len();
-            if list_index > peer_count + 1 {
-                let flock_index = list_index - peer_count - 2;
+            if list_index > peer_count {
+                let flock_index = list_index - peer_count - 1;
                 if flock_index < app.flocks.len() {
                     app.build_context_menu(ContextMenuTarget::Flock(flock_index));
                     app.show_context_menu = !app.context_menu_items.is_empty();
@@ -2674,10 +2666,11 @@ fn activate_menu_item(
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::{
-        App, MENU_ITEMS, SettingsTab, handle_settings_mouse_click, leave_context,
-        menu_item_at_size, normalize_leave_code, open_create_room, parse_join_arg,
-        refresh_create_flock_code, update_menu_hover,
+        App, MENU_ITEMS, SettingsTab, handle_reference_mouse_click, handle_right_click,
+        handle_settings_mouse_click, leave_context, menu_item_at_size, normalize_leave_code,
+        open_create_room, parse_join_arg, refresh_create_flock_code, update_menu_hover,
     };
+    use crate::ui::{FlockView, RoostView, Selection, V2View};
 
     #[test]
     fn every_rendered_menu_row_is_clickable() {
@@ -2935,5 +2928,63 @@ mod tests {
             modal.x + 40,
             modal.y + 10
         ));
+    }
+    #[test]
+    fn right_click_on_rail_roost_opens_menu() {
+        let mut app = App::default();
+        app.node_id = Some(iroh::SecretKey::generate().public());
+        app.roosts.push(RoostView {
+            code: "R1".into(),
+            name: "Hearthhome".into(),
+            channels: vec![FlockView {
+                code: "R1/general".into(),
+                name: "general".into(),
+                messages: vec![],
+                unread: 0,
+            }],
+            unread: 0,
+            icon_path: None,
+        });
+        app.roost_owners.insert("R1".into(), app.node_id.unwrap());
+        // Rail: home pill rows 1-3, roost 0 at rows 5-7.
+        handle_right_click(&mut app, 4, 6).unwrap();
+        assert!(app.show_context_menu, "right-click on roost must open menu");
+        let labels: Vec<&str> = app
+            .context_menu_items
+            .iter()
+            .map(|i| i.label.as_str())
+            .collect();
+        assert!(
+            labels.contains(&"Leave Roost"),
+            "menu missing Leave: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn left_click_on_rail_roost_selects_it() {
+        let mut app = App::default();
+        app.roosts.push(RoostView {
+            code: "R1".into(),
+            name: "Hearthhome".into(),
+            channels: vec![FlockView {
+                code: "R1/general".into(),
+                name: "general".into(),
+                messages: vec![],
+                unread: 0,
+            }],
+            unread: 0,
+            icon_path: None,
+        });
+        // Rail: roost 0 at rows 5-7, col 4.
+        let handled = handle_reference_mouse_click(&mut app, 4, 6, 120, 30);
+        assert!(handled, "rail click must be handled");
+        assert!(
+            matches!(app.selection, Selection::Channel(0, 0)),
+            "roost must be selected"
+        );
+        assert!(
+            matches!(app.v2_view, V2View::Space),
+            "view must switch to Space"
+        );
     }
 }
