@@ -32,7 +32,6 @@ use event::{AppEvent, Command};
 #[allow(unused_imports)]
 use iroh::EndpointId;
 use ratatui::layout::{Position, Rect};
-use std::collections::HashSet;
 #[allow(unused_imports)]
 use std::sync::Arc;
 #[allow(unused_imports)]
@@ -449,7 +448,13 @@ async fn main() -> anyhow::Result<()> {
                 // those with join secrets, so spaces stay visible even while
                 // everyone is offline. The auto-rejoin refreshes them when
                 // peers come back; it never removes them.
-                let mut seen_roosts: HashSet<String> = HashSet::new();
+                // Roost descriptors carry labels of the form "{code}/{channel}";
+                // group them per code so the roost gets a real name and its
+                // channels instead of a raw routing key.
+                let mut roost_channels: std::collections::HashMap<String, Vec<String>> =
+                    std::collections::HashMap::new();
+                let mut roost_names: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
                 for descriptor in &saved.contexts {
                     let Some(secret) = descriptor.secret.clone() else {
                         app.insert_context(ui::ContextView {
@@ -496,18 +501,40 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                         starling::protocol::SpaceId::RoostChannel { .. } => {
-                            if !seen_roosts.contains(&secret) {
-                                seen_roosts.insert(secret.clone());
-                                app.roosts.push(ui::RoostView {
-                                    code: secret.clone(),
-                                    name: descriptor.label.clone(),
-                                    channels: Vec::new(),
-                                    unread: 0,
-                                    icon_path: None,
-                                });
-                            }
+                            // "{code}/{channel}" -> roost name is the part
+                            // before the slash; the channel is the suffix.
+                            let (roost_name, channel) = match descriptor.label.split_once('/') {
+                                Some((rn, ch)) => (rn.to_string(), ch.to_string()),
+                                None => (descriptor.label.clone(), "general".to_string()),
+                            };
+                            roost_names.entry(secret.clone()).or_insert(roost_name);
+                            roost_channels
+                                .entry(secret.clone())
+                                .or_default()
+                                .push(channel);
                         }
                     }
+                }
+                for (code, channels) in roost_channels {
+                    if app.roosts.iter().any(|r| r.code == code) {
+                        continue;
+                    }
+                    let name = roost_names.remove(&code).unwrap_or_else(|| code.clone());
+                    app.roosts.push(ui::RoostView {
+                        code: code.clone(),
+                        name,
+                        channels: channels
+                            .into_iter()
+                            .map(|channel| ui::FlockView {
+                                code: format!("{code}/{channel}"),
+                                name: channel,
+                                messages: Vec::new(),
+                                unread: 0,
+                            })
+                            .collect(),
+                        unread: 0,
+                        icon_path: None,
+                    });
                 }
                 if let Some(active) = saved.active_space {
                     app.select_context(active);
