@@ -1352,27 +1352,7 @@ fn handle_context_menu_key(
                 .min(max);
         }
         KeyCode::Enter => {
-            let Some(item) = app.context_menu_items.get(app.context_menu_selection) else {
-                return Ok(());
-            };
-            if !item.enabled {
-                return Ok(());
-            }
-            match &item.action {
-                ContextMenuAction::SetRole => {
-                    if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
-                        app.role_submenu_target = Some(*endpoint);
-                        app.role_submenu_selection = 0;
-                        app.show_role_submenu = true;
-                        app.show_context_menu = false;
-                    }
-                }
-                _ => {
-                    let action = item.action.clone();
-                    execute_context_action(app, cmd_tx, &action)?;
-                    app.show_context_menu = false;
-                }
-            }
+            activate_context_menu_item(app, cmd_tx, app.context_menu_selection)?;
         }
         KeyCode::Esc | KeyCode::Char('q') => {
             app.show_context_menu = false;
@@ -1380,6 +1360,91 @@ fn handle_context_menu_key(
         _ => {}
     }
     Ok(())
+}
+
+/// Run the context menu action at `index` (mouse or keyboard).
+fn activate_context_menu_item(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+    index: usize,
+) -> anyhow::Result<()> {
+    let Some(item) = app.context_menu_items.get(index) else {
+        return Ok(());
+    };
+    if !item.enabled {
+        return Ok(());
+    }
+    match &item.action {
+        ContextMenuAction::SetRole => {
+            if let Some(ContextMenuTarget::Bird(endpoint)) = &app.context_menu_target {
+                app.role_submenu_target = Some(*endpoint);
+                app.role_submenu_selection = 0;
+                app.show_role_submenu = true;
+                app.show_context_menu = false;
+            }
+        }
+        _ => {
+            let action = item.action.clone();
+            execute_context_action(app, cmd_tx, &action)?;
+            app.show_context_menu = false;
+        }
+    }
+    Ok(())
+}
+
+/// Map a click to a role submenu item index, or `None` when outside.
+fn role_submenu_item_at(_app: &App, col: u16, row: u16, term_w: u16, term_h: u16) -> Option<usize> {
+    let width = 24u16.min(term_w);
+    let height = 4u16.min(term_h); // 2 roles + borders
+    let popup_x = (term_w.saturating_sub(width)) / 2;
+    let popup_y = (term_h.saturating_sub(height)) / 2;
+    if col < popup_x || col >= popup_x + width {
+        return None;
+    }
+    let inner_row = row.checked_sub(popup_y)?;
+    if inner_row == 0 || inner_row >= height.saturating_sub(1) {
+        return None;
+    }
+    let idx = (inner_row - 1) as usize;
+    (idx < 2).then_some(idx)
+}
+
+/// Run the role submenu action at `index` (mouse or keyboard).
+fn activate_role_submenu_item(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+    index: usize,
+) -> anyhow::Result<()> {
+    let target = app.role_submenu_target;
+    if let Some(endpoint) = target
+        && let Some(roost_ep) = app.context_menu_roost_endpoint()
+    {
+        let _ = cmd_tx.send(Command::SetRole {
+            roost: roost_ep,
+            target: endpoint,
+            role_index: Some(index),
+        });
+    }
+    app.show_role_submenu = false;
+    app.show_context_menu = false;
+    Ok(())
+}
+
+/// Map a click to a context menu item index, or `None` when outside the menu.
+fn context_menu_item_at(app: &App, col: u16, row: u16, term_w: u16, term_h: u16) -> Option<usize> {
+    let width = 28u16.min(term_w);
+    let height = (app.context_menu_items.len() as u16 + 2).min(term_h);
+    let popup_x = (term_w.saturating_sub(width)) / 2;
+    let popup_y = (term_h.saturating_sub(height)) / 2;
+    if col < popup_x || col >= popup_x + width {
+        return None;
+    }
+    let inner_row = row.checked_sub(popup_y)?;
+    if inner_row == 0 || inner_row >= height.saturating_sub(1) {
+        return None;
+    }
+    let idx = (inner_row - 1) as usize;
+    (idx < app.context_menu_items.len()).then_some(idx)
 }
 
 fn handle_role_submenu_key(
@@ -1395,19 +1460,7 @@ fn handle_role_submenu_key(
             app.role_submenu_selection = app.role_submenu_selection.saturating_add(1);
         }
         KeyCode::Enter => {
-            let target = app.role_submenu_target;
-            let role_idx = app.role_submenu_selection;
-            if let Some(endpoint) = target
-                && let Some(roost_ep) = app.context_menu_roost_endpoint()
-            {
-                let _ = cmd_tx.send(Command::SetRole {
-                    roost: roost_ep,
-                    target: endpoint,
-                    role_index: Some(role_idx),
-                });
-            }
-            app.show_role_submenu = false;
-            app.show_context_menu = false;
+            activate_role_submenu_item(app, cmd_tx, app.role_submenu_selection)?;
         }
         KeyCode::Esc | KeyCode::Char('q') => {
             app.show_role_submenu = false;
@@ -2263,7 +2316,25 @@ fn handle_mouse_click(
         return Ok(());
     }
 
-    if app.show_context_menu || app.show_role_submenu {
+    // Context menu / role submenu: mouse-first. Click an item to activate,
+    // click outside to dismiss (submenu returns to the parent menu).
+    if app.show_context_menu {
+        if let Some(idx) = context_menu_item_at(app, col, row, term_w, term_h) {
+            app.context_menu_selection = idx;
+            activate_context_menu_item(app, cmd_tx, idx)?;
+        } else {
+            app.show_context_menu = false;
+        }
+        return Ok(());
+    }
+    if app.show_role_submenu {
+        if let Some(idx) = role_submenu_item_at(app, col, row, term_w, term_h) {
+            app.role_submenu_selection = idx;
+            activate_role_submenu_item(app, cmd_tx, idx)?;
+        } else {
+            app.show_role_submenu = false;
+            app.show_context_menu = true;
+        }
         return Ok(());
     }
 
