@@ -432,7 +432,9 @@ pub async fn run(
         // If this roost is hosted locally, start its server first so other
         // members can join, then emit JoinedRoost straight from the persisted
         // state — no network handshake needed (relay discovery of a freshly
-        // bound server can time out).
+        // bound server can time out, and offline there is nothing to connect
+        // to). The in-place update in main.rs replaces the seeded placeholder
+        // name/channels with the real ones.
         if let Some(roost_name) = starling::roost::server::roost_name_by_code(&code) {
             let server_name = roost_name.clone();
             let (_console_tx, console_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -553,13 +555,13 @@ pub async fn run(
                 }
             }
             Command::SendText { flock, body } => {
+                let msg = ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    author: name.clone(),
+                    body,
+                    ts: chrono::Utc::now().timestamp_millis(),
+                };
                 if let Some(h) = flocks.get(&flock) {
-                    let msg = ChatMessage {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        author: name.clone(),
-                        body,
-                        ts: chrono::Utc::now().timestamp_millis(),
-                    };
                     starling::net::broadcast_payload(
                         &h.sender,
                         &h.crypto,
@@ -567,12 +569,15 @@ pub async fn run(
                         &GossipPayload::Chat(msg.clone()),
                     )
                     .await?;
-                    let _ = evt_tx.send(AppEvent::Message {
-                        flock: flock.clone(),
-                        msg,
-                        private: false,
-                    });
                 }
+                // Always echo locally so the sender sees their message, even
+                // when the flock/roost was restored from disk without a live
+                // gossip handle (e.g. a locally hosted roost rejoined offline).
+                let _ = evt_tx.send(AppEvent::Message {
+                    flock: flock.clone(),
+                    msg,
+                    private: false,
+                });
             }
 
             Command::SendChirp {

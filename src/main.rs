@@ -751,9 +751,6 @@ async fn main() -> anyhow::Result<()> {
                         perms,
                     } => {
                         app.joining = None;
-                        if app.roosts.iter().any(|roost| roost.code == code) {
-                            continue;
-                        }
                         app.apply_roost_perms(&code, &perms);
                         let roost_channels: Vec<(String, String)> = channels
                             .into_iter()
@@ -762,10 +759,11 @@ async fn main() -> anyhow::Result<()> {
                                 (channel, channel_code)
                             })
                             .collect();
-                        app.roosts.push(RoostView {
-                            code: code.clone(),
-                            name,
-                            channels: roost_channels
+                        // Update a seeded (offline) roost in place so its real
+                        // name and channels replace the placeholder.
+                        if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
+                            rv.name = name;
+                            rv.channels = roost_channels
                                 .iter()
                                 .map(|(name, code)| FlockView {
                                     code: code.clone(),
@@ -773,10 +771,25 @@ async fn main() -> anyhow::Result<()> {
                                     messages: vec![],
                                     unread: 0,
                                 })
-                                .collect(),
-                            unread: 0,
-                            icon_path: None,
-                        });
+                                .collect();
+                            rv.unread = 0;
+                        } else {
+                            app.roosts.push(RoostView {
+                                code: code.clone(),
+                                name,
+                                channels: roost_channels
+                                    .iter()
+                                    .map(|(name, code)| FlockView {
+                                        code: code.clone(),
+                                        name: name.clone(),
+                                        messages: vec![],
+                                        unread: 0,
+                                    })
+                                    .collect(),
+                                unread: 0,
+                                icon_path: None,
+                            });
+                        }
                         // Create ContextViews for each roost channel (V1 tracking).
                         if let Some(typed) = starling::net::decode_typed_code(&code)
                             && let Some(node_id) = starling::net::typed_code_node_id(&typed)
