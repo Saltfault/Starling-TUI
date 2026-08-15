@@ -887,12 +887,29 @@ pub async fn run(
 
             Command::CreateRoost { name } => {
                 // Create quietly so the roost server's output never corrupts
-                // the TUI screen; get the invite code back instead.
+                // the TUI screen; get the invite code back instead. If the
+                // roost already exists on disk, load it instead of failing.
                 let code = match starling::roost::server::create_quiet(&name) {
                     Ok(code) => code,
-                    Err(e) => {
-                        let _ = evt_tx.send(AppEvent::Error(format!("roost '{name}' failed: {e}")));
-                        continue;
+                    Err(create_err) => {
+                        // Already exists: load its invite code and continue.
+                        match starling::roost::server::read_state(&name) {
+                            Ok(_) => match starling::roost::server::invite_code(&name) {
+                                Ok(code) => code,
+                                Err(_) => {
+                                    let _ = evt_tx.send(AppEvent::Error(format!(
+                                        "roost '{name}' failed: {create_err}"
+                                    )));
+                                    continue;
+                                }
+                            },
+                            Err(_) => {
+                                let _ = evt_tx.send(AppEvent::Error(format!(
+                                    "roost '{name}' failed: {create_err}"
+                                )));
+                                continue;
+                            }
+                        }
                     }
                 };
                 // Host the roost server in-process, silently, so members can
