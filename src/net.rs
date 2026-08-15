@@ -886,22 +886,59 @@ pub async fn run(
             }
 
             Command::CreateRoost { name } => {
-                let tx = evt_tx.clone();
+                // Create quietly so the roost server's output never corrupts
+                // the TUI screen; get the invite code back instead.
+                let code = match starling::roost::server::create_quiet(&name) {
+                    Ok(code) => code,
+                    Err(e) => {
+                        let _ = evt_tx.send(AppEvent::Error(format!("roost '{name}' failed: {e}")));
+                        continue;
+                    }
+                };
+                // Host the roost server in-process, silently, so members can
+                // join it later. It keeps running until the TUI exits.
+                let server_name = name.clone();
+                let (_console_tx, console_rx) = tokio::sync::mpsc::unbounded_channel();
                 tokio::spawn(async move {
-                    if let Err(e) = starling::roost::server::create(&name) {
-                        let _ = tx.send(AppEvent::Error(format!("roost '{name}' failed: {e}")));
-                        return;
-                    }
-                    let (_console_tx, console_rx) = tokio::sync::mpsc::unbounded_channel();
-                    match starling::roost::server::open(&name, true, console_rx).await {
-                        Ok(()) => {
-                            let _ = tx.send(AppEvent::Notice(format!("roost '{name}' started")));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(AppEvent::Error(format!("roost '{name}' failed: {e}")));
-                        }
-                    }
+                    let _ = starling::roost::server::open(&server_name, true, console_rx).await;
                 });
+                // Join it through the normal path so JoinedRoost fires and the
+                // rail gains the roost with its channels. The server endpoint
+                // binds asynchronously, so retry the handshake briefly.
+                let mut joined = false;
+                for attempt in 0..10 {
+                    if join_by_code(
+                        &gossip,
+                        &endpoint,
+                        code.clone(),
+                        0,
+                        &mut flocks,
+                        &mut spaces,
+                        evt_tx.clone(),
+                        my_node_id,
+                        name.clone(),
+                        secret.clone(),
+                        dm_secret_bytes,
+                        my_dm_public_bytes.clone(),
+                        pronouns.clone(),
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        joined = true;
+                        break;
+                    }
+                    if attempt == 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                    }
+                }
+                if !joined {
+                    let _ = evt_tx.send(AppEvent::Error(format!(
+                        "roost '{name}' created but join failed after retries"
+                    )));
+                }
             }
             Command::Quit => break,
             Command::Leave { code } => {
