@@ -1834,7 +1834,11 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let icons = format!(
         "{}  {}  {}  {}",
         TerminalIcon::Members.glyph(app.icon_style),
-        TerminalIcon::Bell.glyph(app.icon_style),
+        if app.notifications_muted {
+            TerminalIcon::BellSlash.glyph(app.icon_style)
+        } else {
+            TerminalIcon::Bell.glyph(app.icon_style)
+        },
         TerminalIcon::Pin.glyph(app.icon_style),
         TerminalIcon::Call.glyph(app.icon_style)
     );
@@ -1921,14 +1925,12 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
             )));
         }
     }
-    // The message list fills the entire chat column; the header and composer
-    // are drawn on top of it afterwards.
-    let content_h = message_lines.len() as u16;
-    let pad_top = (area.height.saturating_sub(content_h)) / 2;
+    // The message list fills the entire chat column; the header (2 rows) and
+    // composer (3 rows) are drawn on top of it afterwards. Content starts
+    // below the header so it is never hidden by the overlay.
     let mut lines = Vec::with_capacity(area.height as usize);
-    for _ in 0..pad_top {
-        lines.push(Line::from(""));
-    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
     lines.extend(message_lines);
     while (lines.len() as u16) < area.height {
         lines.push(Line::from(""));
@@ -2157,7 +2159,7 @@ fn draw_call_overlay(f: &mut Frame, app: &App) {
         rows[1],
     );
     f.render_widget(
-        Paragraph::new("[M] mute   [V] video   [C] disconnect")
+        Paragraph::new("[ mute ]   [ video ]   [ disconnect ]")
             .style(Style::new().fg(Color::Rgb(219, 222, 225))),
         rows[2],
     );

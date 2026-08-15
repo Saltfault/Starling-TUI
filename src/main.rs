@@ -176,9 +176,6 @@ fn handle_profile_key(
     key: &KeyEvent,
 ) -> anyhow::Result<KeyOutcome> {
     match key.code {
-        KeyCode::Char('e' | 'E') if !app.profile_panel.editing => {
-            app.profile_panel.editing = true;
-        }
         KeyCode::Tab if app.profile_panel.editing => {
             app.profile_panel.field = match app.profile_panel.field {
                 ui::ProfileField::Name => ui::ProfileField::Avatar,
@@ -1315,7 +1312,7 @@ fn handle_bird_profile_key(
     cmd_tx: &mpsc::UnboundedSender<Command>,
 ) -> KeyOutcome {
     match k.code {
-        KeyCode::Enter | KeyCode::Char('c' | 'C') => {
+        KeyCode::Enter => {
             #[cfg(feature = "audio")]
             if let Some(peer) = app.bird_profile_peer
                 && cmd_tx.send(Command::StartCall(vec![peer])).is_ok()
@@ -1340,10 +1337,10 @@ fn handle_context_menu_key(
     cmd_tx: &mpsc::UnboundedSender<Command>,
 ) -> anyhow::Result<()> {
     match k.code {
-        KeyCode::Up | KeyCode::Char('k') => {
+        KeyCode::Up => {
             app.context_menu_selection = app.context_menu_selection.saturating_sub(1);
         }
-        KeyCode::Down | KeyCode::Char('j') => {
+        KeyCode::Down => {
             let max = app.context_menu_items.len().saturating_sub(1);
             app.context_menu_selection = app
                 .context_menu_selection
@@ -1354,7 +1351,7 @@ fn handle_context_menu_key(
         KeyCode::Enter => {
             activate_context_menu_item(app, cmd_tx, app.context_menu_selection)?;
         }
-        KeyCode::Esc | KeyCode::Char('q') => {
+        KeyCode::Esc => {
             app.show_context_menu = false;
         }
         _ => {}
@@ -1453,16 +1450,16 @@ fn handle_role_submenu_key(
     cmd_tx: &mpsc::UnboundedSender<Command>,
 ) -> anyhow::Result<()> {
     match k.code {
-        KeyCode::Up | KeyCode::Char('k') => {
+        KeyCode::Up => {
             app.role_submenu_selection = app.role_submenu_selection.saturating_sub(1);
         }
-        KeyCode::Down | KeyCode::Char('j') => {
+        KeyCode::Down => {
             app.role_submenu_selection = app.role_submenu_selection.saturating_add(1);
         }
         KeyCode::Enter => {
             activate_role_submenu_item(app, cmd_tx, app.role_submenu_selection)?;
         }
-        KeyCode::Esc | KeyCode::Char('q') => {
+        KeyCode::Esc => {
             app.show_role_submenu = false;
             app.show_context_menu = true;
         }
@@ -1866,25 +1863,6 @@ fn handle_normal_key(
             }
         }
 
-        KeyCode::Char('m' | 'M') if app.in_call && !app.input_focus => {
-            app.muted = !app.muted;
-        }
-        KeyCode::Char('c' | 'C') if app.in_call && !app.input_focus => {
-            app.in_call = false;
-            app.show_video = false;
-        }
-        KeyCode::Char('v' | 'V') if app.in_call && !app.input_focus => {
-            toggle_call_video(app, cmd_tx);
-        }
-
-        KeyCode::Char('p' | 'P') if !app.input_focus => {
-            open_profile(app);
-        }
-
-        KeyCode::Char('n' | 'N') if !app.input_focus => {
-            app.notifications_muted = !app.notifications_muted;
-        }
-
         KeyCode::Char('c' | 'C')
             if !app.input_focus
                 && k.modifiers.contains(KeyModifiers::CONTROL)
@@ -1901,9 +1879,6 @@ fn handle_normal_key(
             }
         }
 
-        KeyCode::Char('h' | 'H') if !app.input_focus => {
-            app.open_home();
-        }
         KeyCode::Char(',') if !app.input_focus => {
             app.accent_input = match app.palette.accent {
                 ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
@@ -2307,6 +2282,28 @@ fn handle_mouse_click(
                 || row >= popup_y + popup_h
             {
                 app.show_menu = false;
+            }
+        }
+        return Ok(());
+    }
+
+    // Call overlay: click the control row (mute / video / disconnect).
+    if app.in_call
+        && let Some(overlay) = ui::active_popup_rect(app, term_w, term_h)
+        && overlay.contains(Position::new(col, row))
+    {
+        let control_row = overlay.y + overlay.height.saturating_sub(2);
+        if row == control_row {
+            let rel = col.saturating_sub(overlay.x + 2);
+            if rel < 18 {
+                app.muted = !app.muted;
+            } else if rel < 36 {
+                toggle_call_video(app, cmd_tx);
+            } else {
+                #[cfg(feature = "audio")]
+                let _ = cmd_tx.send(Command::HangUp);
+                app.in_call = false;
+                app.show_video = false;
             }
         }
         return Ok(());
