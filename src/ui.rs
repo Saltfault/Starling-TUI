@@ -372,8 +372,22 @@ pub struct App {
     pub roost_owners: HashMap<String, EndpointId>,
     pub show_pinned: bool,
     pub show_notifications: bool,
+    /// In-app notification log (flocks and roost channels, excludes own
+    /// messages). Rendered in the Notifications popup; also drives the
+    /// unread badge on the header bell and the rail/sidebar indicators.
+    pub notifications: Vec<NotificationItem>,
     pub show_members: bool,
     pub icon_style: IconStyle,
+}
+
+/// One in-app notification: a recent message in a space that wasn't the
+/// active one at delivery time. Own messages never generate these.
+#[derive(Clone, Debug)]
+pub struct NotificationItem {
+    pub space_name: String,
+    pub author: String,
+    pub body: String,
+    pub ts: i64,
 }
 
 impl Default for App {
@@ -456,6 +470,7 @@ impl Default for App {
             roost_owners: HashMap::new(),
             show_pinned: false,
             show_notifications: false,
+            notifications: Vec::new(),
             show_members: true,
             icon_style: IconStyle::from_env(),
         }
@@ -1137,12 +1152,16 @@ impl App {
             Selection::Flock(i) => {
                 if let Some(flock) = self.flocks.get_mut(i) {
                     flock.unread = 0;
+                    let name = flock.name.clone();
+                    self.notifications.retain(|n| n.space_name != name);
                 }
             }
             Selection::Channel(ri, ci) => {
                 if let Some(roost) = self.roosts.get_mut(ri) {
                     if let Some(channel) = roost.channels.get_mut(ci) {
                         channel.unread = 0;
+                        let name = channel.name.clone();
+                        self.notifications.retain(|n| n.space_name != name);
                     }
                     roost.unread = roost.channels.iter().map(|channel| channel.unread).sum();
                 }
@@ -1158,12 +1177,60 @@ impl App {
         self.v2_view = V2View::Home;
         if let Some(flock) = self.flocks.get_mut(index) {
             flock.unread = 0;
+            let name = flock.name.clone();
+            self.notifications.retain(|n| n.space_name != name);
         }
     }
 
     pub fn open_home(&mut self) {
         self.v2_view = V2View::Home;
         self.active = None;
+    }
+
+    /// Deliver an incoming message to a flock or roost channel, mirroring the
+    /// `AppEvent::Message` handling in main(): append to the message list,
+    /// mark unread when the space is not on screen, and record a notification
+    /// (never for the user's own messages). `private` marks sealed 1:1 chirps.
+    pub fn receive_message(&mut self, flock: &str, msg: ChatMessage, private: bool) {
+        let is_current = self.active_send_code().is_some_and(|code| code == flock);
+        let is_own = msg.author == self.name;
+        let mut space_name = None;
+        if let Some(fv) = self
+            .flocks
+            .iter_mut()
+            .find(|fv| fv.code == flock)
+            .or_else(|| {
+                self.roosts
+                    .iter_mut()
+                    .flat_map(|roost| roost.channels.iter_mut())
+                    .find(|channel| channel.code == flock)
+            })
+        {
+            fv.messages.push(MessageView {
+                msg: msg.clone(),
+                private,
+            });
+            if !is_current && !is_own {
+                fv.unread += 1;
+            }
+            if !fv.name.is_empty() {
+                space_name = Some(fv.name.clone());
+            }
+        }
+        for roost in &mut self.roosts {
+            roost.unread = roost.channels.iter().map(|channel| channel.unread).sum();
+        }
+        if !is_own
+            && !is_current
+            && let Some(space_name) = space_name
+        {
+            self.notifications.push(NotificationItem {
+                space_name,
+                author: msg.author.clone(),
+                body: msg.body.clone(),
+                ts: msg.ts,
+            });
+        }
     }
 
     pub fn toggle_expand(&mut self, ri: usize) {
@@ -1513,7 +1580,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_empty_popup(f, "Pinned Messages", app.icon_style);
     }
     if app.show_notifications {
-        draw_empty_popup(f, "Notifications", app.icon_style);
+        draw_notifications_popup(f, app);
     }
     if app.in_call {
         draw_call_overlay(f, app);
@@ -1748,13 +1815,17 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
         for (index, channel) in roost.channels.iter().enumerate() {
             let active = index == ci;
             let row_bg = if active { selected_bg } else { bg };
-            items.push(
-                ListItem::new(Line::from(Span::styled(
-                    format!("# {}", channel.name),
-                    Style::new().fg(if active { fg_2 } else { text }).bg(row_bg),
-                )))
-                .bg(row_bg),
-            );
+            let mut spans = vec![Span::styled(
+                format!("# {}", channel.name),
+                Style::new().fg(if active { fg_2 } else { text }).bg(row_bg),
+            )];
+            if channel.unread > 0 {
+                spans.push(Span::styled(
+                    format!(" {}", channel.unread),
+                    Style::new().fg(Color::White).bg(Color::Rgb(242, 63, 67)),
+                ));
+            }
+            items.push(ListItem::new(Line::from(spans)).bg(row_bg));
         }
     }
     f.render_widget(List::new(items).block(Block::default().bg(bg)), rows[1]);
@@ -1831,14 +1902,20 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     } else {
         String::new()
     };
+    let bell_glyph = if app.notifications_muted {
+        TerminalIcon::BellSlash.glyph(app.icon_style)
+    } else {
+        TerminalIcon::Bell.glyph(app.icon_style)
+    };
+    let bell = if !app.notifications.is_empty() {
+        format!("{} {}", bell_glyph, app.notifications.len())
+    } else {
+        bell_glyph.to_string()
+    };
     let icons = format!(
         "{}  {}  {}  {}",
         TerminalIcon::Members.glyph(app.icon_style),
-        if app.notifications_muted {
-            TerminalIcon::BellSlash.glyph(app.icon_style)
-        } else {
-            TerminalIcon::Bell.glyph(app.icon_style)
-        },
+        bell,
         TerminalIcon::Pin.glyph(app.icon_style),
         TerminalIcon::Call.glyph(app.icon_style)
     );
@@ -2316,6 +2393,66 @@ fn draw_empty_popup(f: &mut Frame, title: &str, icon_style: IconStyle) {
         Paragraph::new("Nothing here yet.").style(Style::new().fg(Color::Rgb(148, 155, 164))),
         inner,
     );
+}
+
+fn draw_notifications_popup(f: &mut Frame, app: &App) {
+    let bg = Color::Rgb(43, 45, 49);
+    let muted = Color::Rgb(148, 155, 164);
+    let height = 10u16.max((app.notifications.len() as u16 + 3).min(20));
+    let popup = centered(f.area(), 52, height);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(Span::styled(
+                " Notifications ",
+                Style::new().fg(Color::Rgb(88, 101, 242)),
+            ))
+            .border_style(Style::new().fg(Color::Rgb(63, 65, 71)))
+            .bg(bg),
+        popup,
+    );
+    draw_popup_close(f, popup, app.icon_style);
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let mut lines: Vec<Line> = Vec::new();
+    if app.notifications.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Nothing here yet.",
+            Style::new().fg(muted),
+        )));
+    } else {
+        use chrono::TimeZone;
+        for item in app.notifications.iter().rev().take(12) {
+            let ts = if item.ts > 10_000_000_000 {
+                item.ts / 1000
+            } else {
+                item.ts
+            };
+            let stamp = chrono::Local
+                .timestamp_opt(ts, 0)
+                .single()
+                .map(|dt| dt.format("%H:%M").to_string())
+                .unwrap_or_default();
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{} ", item.space_name),
+                    Style::new()
+                        .fg(Color::Rgb(88, 101, 242))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{} ", item.author),
+                    Style::new().fg(Color::Rgb(220, 221, 222)),
+                ),
+                Span::styled(item.body.clone(), Style::new().fg(muted)),
+                Span::styled(format!(" {stamp}"), Style::new().fg(muted)),
+            ]));
+        }
+    }
+    f.render_widget(Paragraph::new(lines).style(Style::new().fg(muted)), inner);
 }
 
 fn draw_menu_popup(f: &mut Frame, app: &App) {
@@ -3611,6 +3748,56 @@ mod tests {
         assert!(text.contains("Ramhaug"));
         assert!(text.contains("#7134"));
         assert!(text.contains("Welcome to 99s"));
+    }
+
+    #[test]
+    fn own_messages_never_notify_and_roost_channels_do() {
+        // A message from the local user in an inactive channel bumps nothing.
+        let mut app = App::default();
+        app.name = "me".into();
+        app.flocks.push(FlockView {
+            code: "FLOCK-A".into(),
+            name: "crew".into(),
+            ..Default::default()
+        });
+        app.roosts.push(RoostView {
+            code: "ROOST-X".into(),
+            name: "server".into(),
+            channels: vec![FlockView {
+                code: "ROOST-X/general".into(),
+                name: "general".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let own = ChatMessage {
+            id: "own".into(),
+            author: "me".into(),
+            body: "hello".into(),
+            ts: 1,
+        };
+        app.receive_message("FLOCK-A", own, false);
+        assert!(app.notifications.is_empty());
+        assert_eq!(app.flocks[0].unread, 0);
+
+        // A peer message in an inactive roost channel notifies and marks unread.
+        let peer = ChatMessage {
+            id: "peer".into(),
+            author: "Wren".into(),
+            body: "hi".into(),
+            ts: 2,
+        };
+        app.receive_message("ROOST-X/general", peer, false);
+        assert_eq!(app.notifications.len(), 1);
+        assert_eq!(app.notifications[0].space_name, "general");
+        assert_eq!(app.notifications[0].author, "Wren");
+        assert_eq!(app.roosts[0].channels[0].unread, 1);
+        assert_eq!(app.roosts[0].unread, 1);
+
+        // Selecting the channel clears both the unread badge and its notices.
+        app.select(Selection::Channel(0, 0));
+        assert_eq!(app.roosts[0].channels[0].unread, 0);
+        assert!(app.notifications.is_empty());
     }
 
     #[test]

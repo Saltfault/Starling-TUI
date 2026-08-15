@@ -673,26 +673,7 @@ async fn main() -> anyhow::Result<()> {
                         msg,
                         private,
                     } => {
-                        let is_current = app.active_send_code().is_some_and(|code| code == flock);
-                        if let Some(fv) =
-                            app.flocks
-                                .iter_mut()
-                                .find(|fv| fv.code == flock)
-                                .or_else(|| {
-                                    app.roosts
-                                        .iter_mut()
-                                        .flat_map(|roost| roost.channels.iter_mut())
-                                        .find(|channel| channel.code == flock)
-                                })
-                        {
-                            fv.messages.push(ui::MessageView { msg, private });
-                            if !is_current {
-                                fv.unread += 1;
-                            }
-                        }
-                        for roost in &mut app.roosts {
-                            roost.unread = roost.channels.iter().map(|channel| channel.unread).sum();
-                        }
+                        app.receive_message(&flock, msg, private);
                     }
                     AppEvent::DmKey { endpoint, dm_pk } => {
                         // Only Phase 9 profile announcements ever produce this
