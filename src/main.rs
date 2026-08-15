@@ -1,3 +1,4 @@
+mod at_rest;
 mod call;
 mod clipboard;
 mod event;
@@ -433,12 +434,13 @@ async fn main() -> anyhow::Result<()> {
     let _cleanup = TerminalCleanup { mouse: true };
     let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
     let mut app = App::default();
-    let state_path = starling::config::Profile::config_dir()
-        .join("public")
-        .join("contexts.bin");
-    let protected_path = starling::config::Profile::config_dir()
-        .join("protected")
-        .join("credentials.bin");
+    let secret = starling::config::Profile::load_or_create_secret();
+    let my_node_id: iroh::EndpointId = secret.public();
+    let config_dir = starling::config::Profile::config_dir();
+    let history_path = at_rest::history_dir(&config_dir);
+    let identity_secret = secret.to_bytes();
+    let state_path = config_dir.join("public").join("contexts.bin");
+    let protected_path = config_dir.join("protected").join("credentials.bin");
     if let Err(error) = persistence::recover(&state_path) {
         app.error_message = Some(format!("Could not recover saved contexts: {error}"));
     } else if state_path.exists() {
@@ -492,12 +494,24 @@ async fn main() -> anyhow::Result<()> {
                     match descriptor.space {
                         starling::protocol::SpaceId::Flock(_) => {
                             if !app.flocks.iter().any(|f| f.code == secret) {
-                                app.flocks.push(ui::FlockView {
+                                let mut fv = ui::FlockView {
                                     code: secret.clone(),
                                     name: descriptor.label.clone(),
                                     messages: Vec::new(),
                                     unread: 0,
-                                });
+                                };
+                                if let Err(e) = at_rest::load_into_view(
+                                    &history_path,
+                                    &identity_secret,
+                                    &secret,
+                                    &mut fv,
+                                ) {
+                                    starling::logger::warn(&format!(
+                                        "could not load saved history for {}: {e}",
+                                        descriptor.label
+                                    ));
+                                }
+                                app.flocks.push(fv);
                             }
                         }
                         starling::protocol::SpaceId::RoostChannel { .. } => {
@@ -520,18 +534,34 @@ async fn main() -> anyhow::Result<()> {
                         continue;
                     }
                     let name = roost_names.remove(&code).unwrap_or_else(|| code.clone());
-                    app.roosts.push(ui::RoostView {
-                        code: code.clone(),
-                        name,
-                        channels: channels
-                            .into_iter()
-                            .map(|channel| ui::FlockView {
+                    let channels = channels
+                        .into_iter()
+                        .map(|channel| {
+                            let mut fv = ui::FlockView {
                                 code: format!("{code}/{channel}"),
                                 name: channel,
                                 messages: Vec::new(),
                                 unread: 0,
-                            })
-                            .collect(),
+                            };
+                            let channel_code = fv.code.clone();
+                            if let Err(e) = at_rest::load_into_view(
+                                &history_path,
+                                &identity_secret,
+                                &channel_code,
+                                &mut fv,
+                            ) {
+                                starling::logger::warn(&format!(
+                                    "could not load saved history for {}/{}: {e}",
+                                    code, fv.name
+                                ));
+                            }
+                            fv
+                        })
+                        .collect();
+                    app.roosts.push(ui::RoostView {
+                        code: code.clone(),
+                        name,
+                        channels,
                         unread: 0,
                         icon_path: None,
                     });
@@ -555,9 +585,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     let mut clipboard = clipboard::SystemClipboard::new().ok();
-
-    let secret = starling::config::Profile::load_or_create_secret();
-    let my_node_id: iroh::EndpointId = secret.public();
 
     let profile = match profile {
         Some(profile) => profile,
@@ -741,32 +768,33 @@ async fn main() -> anyhow::Result<()> {
                             })
                             .collect();
                         // Update a seeded (offline) roost in place so its real
-                        // name and channels replace the placeholder.
-                        if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
-                            rv.name = name;
-                            rv.channels = roost_channels
+                        // name and channels replace the placeholder, keeping any
+                        // messages restored from the encrypted at-rest history.
+                        let build_channels = |existing: &[FlockView]| {
+                            roost_channels
                                 .iter()
                                 .map(|(name, code)| FlockView {
                                     code: code.clone(),
                                     name: name.clone(),
-                                    messages: vec![],
+                                    messages: existing
+                                        .iter()
+                                        .find(|c| c.code == *code)
+                                        .map(|c| c.messages.clone())
+                                        .unwrap_or_default(),
                                     unread: 0,
                                 })
-                                .collect();
+                                .collect()
+                        };
+                        if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
+                            let existing = std::mem::take(&mut rv.channels);
+                            rv.name = name;
+                            rv.channels = build_channels(&existing);
                             rv.unread = 0;
                         } else {
                             app.roosts.push(RoostView {
                                 code: code.clone(),
                                 name,
-                                channels: roost_channels
-                                    .iter()
-                                    .map(|(name, code)| FlockView {
-                                        code: code.clone(),
-                                        name: name.clone(),
-                                        messages: vec![],
-                                        unread: 0,
-                                    })
-                                    .collect(),
+                                channels: build_channels(&[]),
                                 unread: 0,
                                 icon_path: None,
                             });
@@ -1073,6 +1101,11 @@ async fn main() -> anyhow::Result<()> {
     if !app.skip_save_on_exit {
         if let Err(error) = save_context_state(&state_path, &app) {
             starling::logger::warn(&format!("could not save contexts: {error}"));
+        }
+        if let Err(error) =
+            at_rest::save_all(&history_path, &identity_secret, &app.flocks, &app.roosts)
+        {
+            starling::logger::warn(&format!("could not save message history: {error}"));
         }
         if let Err(error) = persistence::save_protected(&protected_path, &protected_state) {
             starling::logger::warn(&format!("could not save credentials: {error}"));
@@ -1515,7 +1548,11 @@ fn execute_context_action(
                 .contexts
                 .retain(|id, _| app.contexts.contains_key(id));
             app.active = app.context_order.first().copied();
-            let _ = cmd_tx.send(Command::Leave { code });
+            let _ = cmd_tx.send(Command::Leave { code: code.clone() });
+            let _ = at_rest::remove(
+                &at_rest::history_dir(&starling::config::Profile::config_dir()),
+                &code,
+            );
             return Ok(());
         }
         ContextMenuAction::DeleteSpace => {
@@ -1537,7 +1574,11 @@ fn execute_context_action(
                 .contexts
                 .retain(|id, _| app.contexts.contains_key(id));
             app.active = app.context_order.first().copied();
-            let _ = cmd_tx.send(Command::Leave { code });
+            let _ = cmd_tx.send(Command::Leave { code: code.clone() });
+            let _ = at_rest::remove(
+                &at_rest::history_dir(&starling::config::Profile::config_dir()),
+                &code,
+            );
             return Ok(());
         }
         ContextMenuAction::EditSpace => {
