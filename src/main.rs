@@ -2508,7 +2508,9 @@ fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {
     app.show_context_menu = false;
     app.show_role_submenu = false;
 
-    let (term_w, term_h) = crossterm::terminal::size()?;
+    // Headless environments (CI, tests) have no TTY; fall back to a default
+    // grid so right-click still works and tests don't panic on size().
+    let (term_w, term_h) = crossterm::terminal::size().unwrap_or((120, 30));
 
     // Current layout: rail is 9 wide (home pill rows 1-3, roosts from row 5);
     // sidebar is 9..39 (DM header row 2, peers, then flocks).
