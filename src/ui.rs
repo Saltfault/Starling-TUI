@@ -2080,11 +2080,9 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(format!("  {subtitle}"), Style::new().fg(muted).bg(bg)),
         Span::styled(
-            format!(
-                "{}{icons}",
-                " ".repeat((area.width as usize).saturating_sub(
-                    title.chars().count() + subtitle.chars().count() + icons.chars().count() + 4
-                ))
+            " ".repeat(
+                (area.width as usize)
+                    .saturating_sub(title.chars().count() + subtitle.chars().count() + 4),
             ),
             Style::new().fg(muted).bg(bg),
         ),
@@ -2186,6 +2184,14 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         ),
         header_area,
     );
+    // Right-aligned icon row, drawn as an overlay so the call button is never
+    // clipped by a long title. The click regions mirror this layout.
+    f.render_widget(
+        Paragraph::new(icons)
+            .style(Style::new().fg(muted).bg(bg))
+            .alignment(Alignment::Right),
+        header_area,
+    );
     let composer_area = Rect {
         x: area.x,
         y: area.y + area.height.saturating_sub(3),
@@ -2193,6 +2199,88 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         height: 3,
     };
     draw_message_bar(f, app, composer_area);
+}
+
+/// Which header icon a click at `col` (row 0/1 of the chat header) hits,
+/// mirroring the right-aligned icon overlay drawn in `draw_chat`. The regions
+/// are computed from real glyph widths (emoji are 2 cells), so clicks land on
+/// the icon the user sees. Returns `None` when the click is left of the icons.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HeaderIcon {
+    Menu,
+    Members,
+    Bell,
+    Pin,
+    Call,
+}
+
+fn push_header_icon(
+    icons: &mut Vec<(HeaderIcon, u16)>,
+    x: &mut u16,
+    icon: HeaderIcon,
+    glyph: &str,
+) {
+    // Display width, not char count: emoji glyphs are 2 cells wide.
+    let w = ratatui::text::Line::from(glyph).width() as u16;
+    *x = x.saturating_sub(w);
+    icons.push((icon, *x));
+}
+
+pub fn header_icon_at(app: &App, col: u16, term_w: u16) -> Option<HeaderIcon> {
+    let members_open = app.show_members
+        && (matches!(app.v2_view, V2View::Space)
+            || (matches!(app.v2_view, V2View::Home)
+                && matches!(app.selection, Selection::Flock(_))
+                && app.selected_dm.is_none()));
+    let right = term_w.saturating_sub(if members_open { 30 } else { 1 });
+    let mut x = right;
+    let mut icons: Vec<(HeaderIcon, u16)> = Vec::new();
+    push_header_icon(
+        &mut icons,
+        &mut x,
+        HeaderIcon::Call,
+        TerminalIcon::Call.glyph(app.icon_style),
+    );
+    x = x.saturating_sub(2); // gap
+    push_header_icon(
+        &mut icons,
+        &mut x,
+        HeaderIcon::Pin,
+        TerminalIcon::Pin.glyph(app.icon_style),
+    );
+    x = x.saturating_sub(2);
+    let bell = if app.notifications_muted {
+        TerminalIcon::BellSlash.glyph(app.icon_style)
+    } else {
+        TerminalIcon::Bell.glyph(app.icon_style)
+    };
+    let bell_w = if app.notifications.is_empty() {
+        ratatui::text::Line::from(bell).width() as u16
+    } else {
+        (ratatui::text::Line::from(bell).width() + 2) as u16 // "glyph N"
+    };
+    x = x.saturating_sub(bell_w);
+    icons.push((HeaderIcon::Bell, x));
+    x = x.saturating_sub(2);
+    push_header_icon(
+        &mut icons,
+        &mut x,
+        HeaderIcon::Members,
+        TerminalIcon::Members.glyph(app.icon_style),
+    );
+    if app.sidebar_hidden {
+        x = x.saturating_sub(2);
+        push_header_icon(
+            &mut icons,
+            &mut x,
+            HeaderIcon::Menu,
+            TerminalIcon::Menu.glyph(app.icon_style),
+        );
+    }
+    icons
+        .into_iter()
+        .find(|(_, start)| col >= *start)
+        .map(|(icon, _)| icon)
 }
 
 fn draw_members(f: &mut Frame, app: &App, area: Rect) {
@@ -3952,6 +4040,28 @@ mod tests {
         app.select(Selection::Channel(0, 0));
         assert_eq!(app.roosts[0].channels[0].unread, 0);
         assert!(app.notifications.is_empty());
+    }
+
+    #[test]
+    fn header_icon_hit_regions_cover_all_four_buttons() {
+        let mut app = App::default();
+        app.v2_view = V2View::Space;
+        app.show_members = true;
+        // Rightmost icon is the call button; each icon must be reachable.
+        // With members open the icon row is right-aligned to col 90.
+        let call = header_icon_at(&app, 88, 120);
+        assert_eq!(call, Some(HeaderIcon::Call));
+        let pin = header_icon_at(&app, 84, 120);
+        assert_eq!(pin, Some(HeaderIcon::Pin));
+        let bell = header_icon_at(&app, 80, 120);
+        assert_eq!(bell, Some(HeaderIcon::Bell));
+        let members = header_icon_at(&app, 76, 120);
+        assert_eq!(members, Some(HeaderIcon::Members));
+        // Left of the icons is not a button.
+        assert_eq!(header_icon_at(&app, 40, 120), None);
+        // With the sidebar hidden the menu button is the leftmost icon.
+        app.sidebar_hidden = true;
+        assert_eq!(header_icon_at(&app, 72, 120), Some(HeaderIcon::Menu));
     }
 
     #[test]

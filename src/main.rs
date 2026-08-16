@@ -41,7 +41,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use ui::{
     App, ContextMenuAction, ContextMenuTarget, FlockView, MENU_ITEMS, Popup, RoostView,
-    ScrollPanel, Selection, SettingsTab, V2View,
+    ScrollPanel, Selection, SettingsTab,
 };
 
 const MOUSE_TRACKING_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
@@ -2198,25 +2198,26 @@ fn handle_mobile_header_click(app: &mut App, col: u16, row: u16, term_w: u16) ->
     if row > 1 {
         return false;
     }
-    let members_open = app.show_members
-        && (matches!(app.v2_view, V2View::Space)
-            || (matches!(app.v2_view, ui::V2View::Home)
-                && matches!(app.selection, Selection::Flock(_))
-                && app.selected_dm.is_none()));
-    let right = term_w.saturating_sub(if members_open { 30 } else { 1 });
-    if col >= right.saturating_sub(1) {
-        app.in_call = true;
-        app.call_title = "Call".into();
-    } else if col >= right.saturating_sub(4) {
-        app.show_pinned = !app.show_pinned;
-    } else if col >= right.saturating_sub(7) {
-        app.show_notifications = !app.show_notifications;
-    } else if col >= right.saturating_sub(10) {
-        app.show_members = !app.show_members;
-    } else if app.sidebar_hidden && col >= right.saturating_sub(13) {
-        // Very narrow screens: the channel/friends list is hidden; this button
-        // restores it (Space view) or the Friends list (Home view).
-        app.sidebar_hidden = false;
+    match ui::header_icon_at(app, col, term_w) {
+        Some(ui::HeaderIcon::Call) => {
+            app.in_call = true;
+            app.call_title = "Call".into();
+        }
+        Some(ui::HeaderIcon::Pin) => {
+            app.show_pinned = !app.show_pinned;
+        }
+        Some(ui::HeaderIcon::Bell) => {
+            app.show_notifications = !app.show_notifications;
+        }
+        Some(ui::HeaderIcon::Members) => {
+            app.show_members = !app.show_members;
+        }
+        Some(ui::HeaderIcon::Menu) => {
+            // Very narrow screens: the channel/friends list is hidden; this
+            // button restores it (Space view) or the Friends list (Home view).
+            app.sidebar_hidden = false;
+        }
+        None => {}
     }
     true
 }
@@ -2271,21 +2272,21 @@ fn handle_reference_mouse_click(
     }
     // Chat header row: right-side icons (members, bell, pin, call).
     if row <= 1 && col >= chat_left {
-        let members_open = app.show_members
-            && (matches!(app.v2_view, V2View::Space)
-                || (matches!(app.v2_view, ui::V2View::Home)
-                    && matches!(app.selection, Selection::Flock(_))
-                    && app.selected_dm.is_none()));
-        let right = term_w.saturating_sub(if members_open { 30 } else { 1 });
-        if col >= right.saturating_sub(1) {
-            app.in_call = true;
-            app.call_title = "Call".into();
-        } else if col >= right.saturating_sub(4) {
-            app.show_pinned = !app.show_pinned;
-        } else if col >= right.saturating_sub(7) {
-            app.show_notifications = !app.show_notifications;
-        } else if col >= right.saturating_sub(10) {
-            app.show_members = !app.show_members;
+        match ui::header_icon_at(app, col, term_w) {
+            Some(ui::HeaderIcon::Call) => {
+                app.in_call = true;
+                app.call_title = "Call".into();
+            }
+            Some(ui::HeaderIcon::Pin) => {
+                app.show_pinned = !app.show_pinned;
+            }
+            Some(ui::HeaderIcon::Bell) => {
+                app.show_notifications = !app.show_notifications;
+            }
+            Some(ui::HeaderIcon::Members) => {
+                app.show_members = !app.show_members;
+            }
+            _ => {}
         }
         return true;
     }
