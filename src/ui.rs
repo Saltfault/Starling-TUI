@@ -2332,14 +2332,15 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(muted).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            format!(" {}  {}", initials(&app.name), app.name),
-            Style::new().fg(text),
-        )),
-        Line::from(Span::styled(
             format!("Online — {}", app.active_peers().len() + 1),
             Style::new().fg(muted).add_modifier(Modifier::BOLD),
         )),
     ];
+    // The local user first, then every online peer, below the Online line.
+    lines.push(Line::from(Span::styled(
+        format!(" {}  {}", initials(&app.name), app.name),
+        Style::new().fg(text),
+    )));
     for peer in app.active_peers() {
         let name = app.peer_display_name(&peer);
         lines.push(Line::from(Span::styled(
