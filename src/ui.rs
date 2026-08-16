@@ -1214,11 +1214,14 @@ impl App {
     pub fn popup_rect(&self, term_w: u16, term_h: u16, width: u16, height: u16) -> Rect {
         let w = width.min(term_w);
         let h = height.min(term_h);
-        let mut x = (term_w.saturating_sub(w)) / 2 + self.popup_offset.0 as u16;
-        let mut y = (term_h.saturating_sub(h)) / 2 + self.popup_offset.1 as u16;
-        // Keep the title row (the drag handle) reachable.
-        x = x.clamp(0, term_w.saturating_sub(w));
-        y = y.clamp(0, term_h.saturating_sub(h));
+        // i32 math: the drag offset is signed, and a negative offset (dragging
+        // left/up) must not wrap when cast back to u16.
+        let max_x = term_w.saturating_sub(w) as i32;
+        let max_y = term_h.saturating_sub(h) as i32;
+        let x = (((term_w.saturating_sub(w)) / 2) as i32 + self.popup_offset.0 as i32)
+            .clamp(0, max_x) as u16;
+        let y = (((term_h.saturating_sub(h)) / 2) as i32 + self.popup_offset.1 as i32)
+            .clamp(0, max_y) as u16;
         Rect::new(x, y, w, h)
     }
 

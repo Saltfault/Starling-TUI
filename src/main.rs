@@ -3485,6 +3485,11 @@ mod tests {
         let clamped = app.popup_rect(100, 40, 28, MENU_ITEMS.len() as u16 + 2);
         assert_eq!(clamped.x, 100 - 28);
         assert_eq!(clamped.y, 40 - (MENU_ITEMS.len() as u16 + 2));
+        // Negative offsets (dragging left/up) must not overflow u16.
+        app.popup_offset = (-1000, -1000);
+        let clamped = app.popup_rect(100, 40, 28, MENU_ITEMS.len() as u16 + 2);
+        assert_eq!(clamped.x, 0);
+        assert_eq!(clamped.y, 0);
     }
 
     #[test]
