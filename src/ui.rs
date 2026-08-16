@@ -2737,8 +2737,12 @@ pub fn popup_button_at(popup: Rect, col: u16, row: u16, buttons: &[&str]) -> Opt
 /// precedence. Returns `None` when no popup is open. Every popup is centered
 /// then shifted by the user's drag offset (see [`App::popup_rect`]).
 pub fn active_popup_rect(app: &App, term_w: u16, term_h: u16) -> Option<Rect> {
-    if app.show_pinned || app.show_notifications {
+    if app.show_pinned {
         return Some(app.popup_rect(term_w, term_h, 40, 6));
+    }
+    if app.show_notifications {
+        let height = 10u16.max((app.notifications.len() as u16 + 3).min(20));
+        return Some(app.popup_rect(term_w, term_h, 52, height));
     }
     if app.in_call {
         let (w, h) = if app.show_video { (90, 26) } else { (62, 14) };
@@ -2859,8 +2863,9 @@ fn draw_empty_popup(f: &mut Frame, title: &str, app: &App) {
 fn draw_notifications_popup(f: &mut Frame, app: &App) {
     let bg = Color::Rgb(43, 45, 49);
     let muted = Color::Rgb(148, 155, 164);
-    let height = 10u16.max((app.notifications.len() as u16 + 3).min(20));
-    let popup = app.popup_rect(f.area().width, f.area().height, 52, height);
+    let Some(popup) = active_popup_rect(app, f.area().width, f.area().height) else {
+        return;
+    };
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -3334,13 +3339,8 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
 
 fn draw_profile_modal(f: &mut Frame, app: &App) {
     let term = f.area();
-    let width = 50u16.min(term.width.saturating_sub(4)).max(30);
-    let height = 18u16.min(term.height.saturating_sub(4)).max(10);
-    let area = Rect {
-        x: 2,
-        y: term.height.saturating_sub(height + 2),
-        width,
-        height,
+    let Some(area) = active_popup_rect(app, term.width, term.height) else {
+        return;
     };
     f.render_widget(Clear, area);
     let modal_bg = Color::Rgb(43, 45, 49);

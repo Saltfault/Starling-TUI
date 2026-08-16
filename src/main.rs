@@ -3493,6 +3493,31 @@ mod tests {
     }
 
     #[test]
+    fn notifications_and_profile_windows_are_draggable() {
+        let mut app = App::default();
+        // Notifications: title row is a drag handle at the reported rect.
+        app.show_notifications = true;
+        app.notifications.push(crate::ui::NotificationItem {
+            space_name: "general".into(),
+            author: "Wren".into(),
+            body: "hi".into(),
+            ts: 1,
+        });
+        let rect = crate::ui::active_popup_rect(&app, 100, 40).unwrap();
+        assert!(app.popup_title_row(100, 40, rect.x + 2, rect.y));
+        assert!(!app.popup_title_row(100, 40, rect.x + 2, rect.y + 1));
+        // Profile modal: same, and the drag offset moves it.
+        app.show_notifications = false;
+        app.profile_panel.open = true;
+        let rect = crate::ui::active_popup_rect(&app, 100, 40).unwrap();
+        assert!(app.popup_title_row(100, 40, rect.x + 2, rect.y));
+        app.popup_offset = (7, 3);
+        let moved = crate::ui::active_popup_rect(&app, 100, 40).unwrap();
+        assert_eq!(moved.x, rect.x + 7);
+        assert_eq!(moved.y, rect.y + 3);
+    }
+
+    #[test]
     fn popup_action_buttons_are_clickable() {
         let mut app = App::default();
         app.show_create_room = true;
