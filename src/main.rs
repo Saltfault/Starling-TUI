@@ -2617,7 +2617,7 @@ fn activate_popup_action(
 fn handle_mouse_click(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
-    _muted_flag: &Arc<AtomicBool>,
+    muted_flag: &Arc<AtomicBool>,
     _clipboard: Option<&mut clipboard::SystemClipboard>,
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     col: u16,
@@ -2683,19 +2683,21 @@ fn handle_mouse_click(
         && let Some(overlay) = ui::active_popup_rect(app, term_w, term_h)
         && overlay.contains(Position::new(col, row))
     {
-        let control_row = overlay.y + overlay.height.saturating_sub(2);
-        if row == control_row {
-            let rel = col.saturating_sub(overlay.x + 2);
-            if rel < 18 {
+        match ui::call_control_at(overlay, col, row) {
+            Some(ui::CallControl::Mute) => {
                 app.muted = !app.muted;
-            } else if rel < 36 {
+                muted_flag.store(app.muted, Ordering::Relaxed);
+            }
+            Some(ui::CallControl::Video) => {
                 toggle_call_video(app, cmd_tx);
-            } else {
+            }
+            Some(ui::CallControl::Disconnect) => {
                 #[cfg(feature = "audio")]
                 let _ = cmd_tx.send(Command::HangUp);
                 app.in_call = false;
                 app.show_video = false;
             }
+            None => {}
         }
         return Ok(());
     }

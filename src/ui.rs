@@ -2553,6 +2553,45 @@ fn draw_call_overlay(f: &mut Frame, app: &App) {
     );
 }
 
+/// Which call-overlay control a click hits, mirroring the control row drawn
+/// in `draw_call_overlay` ("[ mute ]   [ video ]   [ disconnect ]").
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CallControl {
+    Mute,
+    Video,
+    Disconnect,
+}
+
+pub fn call_control_at(overlay: Rect, col: u16, row: u16) -> Option<CallControl> {
+    let inner = overlay.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .split(inner);
+    let band = rows[2];
+    if row != band.y {
+        return None;
+    }
+    let rel = col.saturating_sub(band.x);
+    // "[ mute ]" = 8, gap 3, "[ video ]" = 9, gap 3, "[ disconnect ]" = 14.
+    if rel < 8 {
+        Some(CallControl::Mute)
+    } else if rel < 11 {
+        None // gap
+    } else if rel < 20 {
+        Some(CallControl::Video)
+    } else if rel < 23 {
+        None // gap
+    } else {
+        Some(CallControl::Disconnect)
+    }
+}
+
 pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let w = width.min(area.width);
     let h = height.min(area.height);
@@ -4332,6 +4371,37 @@ mod tests {
             indicator_rows, 1,
             "active indicator must appear once, got {indicator_rows} rows"
         );
+    }
+
+    #[test]
+    fn call_overlay_controls_hit_their_regions() {
+        let overlay = centered(Rect::new(0, 0, 120, 30), 62, 14);
+        let inner = overlay.inner(Margin {
+            vertical: 1,
+            horizontal: 2,
+        });
+        let rows = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+        let band = rows[2];
+        // "[ mute ]" starts at band.x; "[ video ]" at +11; "[ disconnect ]" at +23.
+        assert_eq!(
+            call_control_at(overlay, band.x + 1, band.y),
+            Some(CallControl::Mute)
+        );
+        assert_eq!(
+            call_control_at(overlay, band.x + 12, band.y),
+            Some(CallControl::Video)
+        );
+        assert_eq!(
+            call_control_at(overlay, band.x + 24, band.y),
+            Some(CallControl::Disconnect)
+        );
+        // The row below the controls is not a control.
+        assert_eq!(call_control_at(overlay, band.x + 1, band.y + 1), None);
     }
 
     #[test]
