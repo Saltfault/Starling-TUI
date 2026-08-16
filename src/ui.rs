@@ -2474,7 +2474,9 @@ pub fn composer_hit_at(
 }
 
 fn draw_call_overlay(f: &mut Frame, app: &App) {
-    let area = centered(f.area(), 62, 14);
+    let video = app.show_video;
+    let (w, h) = if video { (90u16, 26u16) } else { (62, 14) };
+    let area = centered(f.area(), w, h);
     f.render_widget(Clear, area);
     f.render_widget(
         Block::default()
@@ -2515,37 +2517,67 @@ fn draw_call_overlay(f: &mut Frame, app: &App) {
         ])),
         rows[0],
     );
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            format!(" {} ", initials(&app.name)),
-            Style::new().fg(Color::White).bg(app.palette.accent),
-        ),
-        Span::styled(
-            format!("  {}", app.name),
-            Style::new().fg(Color::Rgb(219, 222, 225)),
-        ),
-    ])];
-    for peer in &app.peers {
-        let name = app.peer_display_name(peer);
-        lines.push(Line::from(vec![
+    if app.show_video {
+        // Video mode: the middle band shows the local camera feed (or a
+        // placeholder while the camera warms up) and any remote feeds.
+        let mut lines: Vec<Line> = Vec::new();
+        if let Some(frame) = &app.local_video_frame {
+            let cols = rows[1].width.saturating_sub(2);
+            let rows_avail = rows[1].height.saturating_sub(2);
+            lines.extend(crate::video::frame_to_lines(frame, cols, rows_avail));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "Starting camera…",
+                Style::new().fg(Color::Rgb(148, 155, 164)),
+            )));
+        }
+        for (peer, frame) in &app.remote_video_frames {
+            lines.push(Line::from(Span::styled(
+                format!("  {}:", app.peer_display_name(peer)),
+                Style::new().fg(Color::Rgb(148, 155, 164)),
+            )));
+            let cols = rows[1].width.saturating_sub(2);
+            let rows_avail = rows[1].height.saturating_sub(2);
+            lines.extend(crate::video::frame_to_lines(frame, cols, rows_avail));
+        }
+        f.render_widget(
+            Paragraph::new(Text::from(lines))
+                .block(Block::default().borders(Borders::ALL).title(" video ")),
+            rows[1],
+        );
+    } else {
+        let mut lines = vec![Line::from(vec![
             Span::styled(
-                format!(" {} ", initials(&name)),
+                format!(" {} ", initials(&app.name)),
                 Style::new().fg(Color::White).bg(app.palette.accent),
             ),
             Span::styled(
-                format!("  {name}"),
+                format!("  {}", app.name),
                 Style::new().fg(Color::Rgb(219, 222, 225)),
             ),
-        ]));
+        ])];
+        for peer in &app.peers {
+            let name = app.peer_display_name(peer);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" {} ", initials(&name)),
+                    Style::new().fg(Color::White).bg(app.palette.accent),
+                ),
+                Span::styled(
+                    format!("  {name}"),
+                    Style::new().fg(Color::Rgb(219, 222, 225)),
+                ),
+            ]));
+        }
+        f.render_widget(
+            Paragraph::new(Text::from(lines)).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" participants "),
+            ),
+            rows[1],
+        );
     }
-    f.render_widget(
-        Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" participants "),
-        ),
-        rows[1],
-    );
     f.render_widget(
         Paragraph::new("[ mute ]   [ video ]   [ disconnect ]")
             .style(Style::new().fg(Color::Rgb(219, 222, 225))),
@@ -2681,7 +2713,8 @@ pub fn active_popup_rect(app: &App, term_w: u16, term_h: u16) -> Option<Rect> {
         return Some(centered(area, 40, 6));
     }
     if app.in_call {
-        return Some(centered(area, 62, 14));
+        let (w, h) = if app.show_video { (90, 26) } else { (62, 14) };
+        return Some(centered(area, w, h));
     }
     if app.profile_panel.open {
         let width = 50u16.min(term_w.saturating_sub(4)).max(30);

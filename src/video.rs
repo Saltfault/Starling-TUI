@@ -20,7 +20,6 @@ use tokio::sync::{broadcast, mpsc};
 
 /// Convert an RGB image to terminal lines using half-block characters:
 /// each cell represents two vertical pixels (top = fg, bottom = bg).
-#[allow(dead_code)]
 pub fn frame_to_lines(img: &RgbImage, cols: u16, rows: u16) -> Vec<Line<'static>> {
     let small = image::imageops::resize(img, cols as u32, (rows * 2) as u32, FilterType::Triangle);
     (0..rows)
