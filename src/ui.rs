@@ -382,6 +382,12 @@ pub struct App {
     pub sidebar_hidden: bool,
     /// Terminal width (cols) from the last frame; resizing is detected here.
     pub terminal_width: u16,
+    /// User drag offset applied to every popup, relative to its centered
+    /// position. Popups are draggable by their title row.
+    pub popup_offset: (i16, i16),
+    /// While dragging a popup: (cursor col - popup.x, cursor row - popup.y)
+    /// captured at press, so the popup follows the cursor.
+    pub drag_grab: Option<(i16, i16)>,
     pub icon_style: IconStyle,
 }
 
@@ -481,6 +487,8 @@ impl Default for App {
             show_members: false,
             sidebar_hidden: false,
             terminal_width: 0,
+            popup_offset: (0, 0),
+            drag_grab: None,
             icon_style: IconStyle::from_env(),
         }
     }
@@ -1201,6 +1209,34 @@ impl App {
         self.active = None;
     }
 
+    /// The rect for a popup of `width`x`height`: centered, then shifted by the
+    /// user's drag offset and clamped so the title row stays on screen.
+    pub fn popup_rect(&self, term_w: u16, term_h: u16, width: u16, height: u16) -> Rect {
+        let w = width.min(term_w);
+        let h = height.min(term_h);
+        let mut x = (term_w.saturating_sub(w)) / 2 + self.popup_offset.0 as u16;
+        let mut y = (term_h.saturating_sub(h)) / 2 + self.popup_offset.1 as u16;
+        // Keep the title row (the drag handle) reachable.
+        x = x.clamp(0, term_w.saturating_sub(w));
+        y = y.clamp(0, term_h.saturating_sub(h));
+        Rect::new(x, y, w, h)
+    }
+
+    /// Whether a click at `(col, row)` lands on the title row of the active
+    /// popup — the drag handle. The X close button is excluded so closing
+    /// never starts a drag.
+    pub fn popup_title_row(&self, term_w: u16, term_h: u16, col: u16, row: u16) -> bool {
+        let Some(popup) = active_popup_rect(self, term_w, term_h) else {
+            return false;
+        };
+        if row != popup.y {
+            return false;
+        }
+        let x_glyph = TerminalIcon::Close.glyph(self.icon_style);
+        let x_w = x_glyph.chars().count() as u16;
+        col >= popup.x && col < popup.right().saturating_sub(x_w)
+    }
+
     /// Track the terminal width across frames and apply the responsive rules:
     /// narrow screens auto-hide the channel/friends sidebar and members panel;
     /// when the screen grows back to a large size both lists come back
@@ -1671,7 +1707,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 fn draw_popups(f: &mut Frame, app: &App) {
     if app.show_pinned {
-        draw_empty_popup(f, "Pinned Messages", app.icon_style);
+        draw_empty_popup(f, "Pinned Messages", app);
     }
     if app.show_notifications {
         draw_notifications_popup(f, app);
@@ -2476,7 +2512,7 @@ pub fn composer_hit_at(
 fn draw_call_overlay(f: &mut Frame, app: &App) {
     let video = app.show_video;
     let (w, h) = if video { (90u16, 26u16) } else { (62, 14) };
-    let area = centered(f.area(), w, h);
+    let area = app.popup_rect(f.area().width, f.area().height, w, h);
     f.render_widget(Clear, area);
     f.render_widget(
         Block::default()
@@ -2624,17 +2660,6 @@ pub fn call_control_at(overlay: Rect, col: u16, row: u16) -> Option<CallControl>
     }
 }
 
-pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let w = width.min(area.width);
-    let h = height.min(area.height);
-    Rect::new(
-        area.x + (area.width.saturating_sub(w)) / 2,
-        area.y + (area.height.saturating_sub(h)) / 2,
-        w,
-        h,
-    )
-}
-
 /// Draw an X close button in the top-right corner of a popup.
 fn draw_popup_close(f: &mut Frame, area: Rect, icon_style: IconStyle) {
     let glyph = TerminalIcon::Close.glyph(icon_style);
@@ -2706,34 +2731,29 @@ pub fn popup_button_at(popup: Rect, col: u16, row: u16, buttons: &[&str]) -> Opt
 }
 
 /// The screen rect of the currently active popup, mirroring the draw()
-/// precedence. Returns `None` when no popup is open.
+/// precedence. Returns `None` when no popup is open. Every popup is centered
+/// then shifted by the user's drag offset (see [`App::popup_rect`]).
 pub fn active_popup_rect(app: &App, term_w: u16, term_h: u16) -> Option<Rect> {
-    let area = Rect::new(0, 0, term_w, term_h);
     if app.show_pinned || app.show_notifications {
-        return Some(centered(area, 40, 6));
+        return Some(app.popup_rect(term_w, term_h, 40, 6));
     }
     if app.in_call {
         let (w, h) = if app.show_video { (90, 26) } else { (62, 14) };
-        return Some(centered(area, w, h));
+        return Some(app.popup_rect(term_w, term_h, w, h));
     }
     if app.profile_panel.open {
         let width = 50u16.min(term_w.saturating_sub(4)).max(30);
         let height = 18u16.min(term_h.saturating_sub(4)).max(10);
-        return Some(Rect {
-            x: 2,
-            y: term_h.saturating_sub(height + 2),
-            width,
-            height,
-        });
+        return Some(app.popup_rect(term_w, term_h, width, height));
     }
     if app.settings_open {
-        return Some(centered(area, 80, 20));
+        return Some(app.popup_rect(term_w, term_h, 80, 20));
     }
     if app.show_role_submenu {
-        return Some(centered(area, 24, 4));
+        return Some(app.popup_rect(term_w, term_h, 24, 4));
     }
     if app.show_context_menu {
-        return Some(centered(area, 28, app.context_menu_items.len() as u16 + 2));
+        return Some(app.popup_rect(term_w, term_h, 28, app.context_menu_items.len() as u16 + 2));
     }
     if app.show_add_channel
         || app.show_create_roost
@@ -2741,16 +2761,16 @@ pub fn active_popup_rect(app: &App, term_w: u16, term_h: u16) -> Option<Rect> {
         || app.show_join_room
         || app.show_delete_confirm
     {
-        return Some(centered(area, 60, 8));
+        return Some(app.popup_rect(term_w, term_h, 60, 8));
     }
     if app.show_edit_flock {
-        return Some(centered(area, 60, 10));
+        return Some(app.popup_rect(term_w, term_h, 60, 10));
     }
     if app.show_menu {
-        return Some(centered(area, 28, MENU_ITEMS.len() as u16 + 2));
+        return Some(app.popup_rect(term_w, term_h, 28, MENU_ITEMS.len() as u16 + 2));
     }
     if app.show_bird_profile {
-        return Some(centered(area, 40, 7));
+        return Some(app.popup_rect(term_w, term_h, 40, 7));
     }
     None
 }
@@ -2808,8 +2828,8 @@ pub fn dismiss_active_popup_one_level(app: &mut App) {
     }
 }
 
-fn draw_empty_popup(f: &mut Frame, title: &str, icon_style: IconStyle) {
-    let popup = centered(f.area(), 40, 6);
+fn draw_empty_popup(f: &mut Frame, title: &str, app: &App) {
+    let popup = app.popup_rect(f.area().width, f.area().height, 40, 6);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -2822,7 +2842,7 @@ fn draw_empty_popup(f: &mut Frame, title: &str, icon_style: IconStyle) {
             .bg(Color::Rgb(43, 45, 49)),
         popup,
     );
-    draw_popup_close(f, popup, icon_style);
+    draw_popup_close(f, popup, app.icon_style);
     let inner = popup.inner(Margin {
         vertical: 1,
         horizontal: 2,
@@ -2837,7 +2857,7 @@ fn draw_notifications_popup(f: &mut Frame, app: &App) {
     let bg = Color::Rgb(43, 45, 49);
     let muted = Color::Rgb(148, 155, 164);
     let height = 10u16.max((app.notifications.len() as u16 + 3).min(20));
-    let popup = centered(f.area(), 52, height);
+    let popup = app.popup_rect(f.area().width, f.area().height, 52, height);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -2894,7 +2914,12 @@ fn draw_notifications_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_menu_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 28, MENU_ITEMS.len() as u16 + 2);
+    let popup = app.popup_rect(
+        f.area().width,
+        f.area().height,
+        28,
+        MENU_ITEMS.len() as u16 + 2,
+    );
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -2928,7 +2953,7 @@ fn draw_menu_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_settings_modal(f: &mut Frame, app: &App) {
-    let area = centered(f.area(), 80, 20);
+    let area = app.popup_rect(f.area().width, f.area().height, 80, 20);
     f.render_widget(Clear, area);
     let modal_bg = Color::Rgb(43, 45, 49);
     let nav_bg = Color::Rgb(37, 39, 42);
@@ -3015,7 +3040,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App) {
 }
 
 fn draw_create_room_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 60, 8);
+    let popup = app.popup_rect(f.area().width, f.area().height, 60, 8);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -3052,7 +3077,7 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_create_roost_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 60, 8);
+    let popup = app.popup_rect(f.area().width, f.area().height, 60, 8);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -3089,7 +3114,7 @@ fn draw_create_roost_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_add_channel_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 60, 8);
+    let popup = app.popup_rect(f.area().width, f.area().height, 60, 8);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -3126,7 +3151,7 @@ fn draw_add_channel_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_edit_flock_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 60, 10);
+    let popup = app.popup_rect(f.area().width, f.area().height, 60, 10);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -3164,7 +3189,7 @@ fn draw_edit_flock_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_join_room_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 60, 8);
+    let popup = app.popup_rect(f.area().width, f.area().height, 60, 8);
     draw_input_popup(
         f,
         " Join ",
@@ -3177,7 +3202,7 @@ fn draw_join_room_popup(f: &mut Frame, app: &App) {
 }
 
 fn draw_delete_confirm_popup(f: &mut Frame, app: &App) {
-    let popup = centered(f.area(), 60, 8);
+    let popup = app.popup_rect(f.area().width, f.area().height, 60, 8);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -3237,7 +3262,7 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
         }
     });
 
-    let popup = centered(f.area(), 40, 7);
+    let popup = app.popup_rect(f.area().width, f.area().height, 40, 7);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -3525,7 +3550,7 @@ fn draw_context_menu(f: &mut Frame, app: &App) {
 
     let width = 28u16;
     let height = items.len() as u16 + 2;
-    let popup = centered(f.area(), width, height);
+    let popup = app.popup_rect(f.area().width, f.area().height, width, height);
     f.render_widget(Clear, popup);
     f.render_widget(
         List::new(items).block(
@@ -3568,7 +3593,7 @@ fn draw_role_submenu(f: &mut Frame, app: &App) {
 
     let width = 24u16;
     let height = items.len() as u16 + 2;
-    let popup = centered(f.area(), width, height);
+    let popup = app.popup_rect(f.area().width, f.area().height, width, height);
     f.render_widget(Clear, popup);
     f.render_widget(
         List::new(items).block(
@@ -3586,7 +3611,7 @@ fn draw_role_submenu(f: &mut Frame, app: &App) {
 }
 
 fn draw_input_popup(f: &mut Frame, title: &str, prompt: &str, value: &str, hint: &str, app: &App) {
-    let popup = centered(f.area(), 60, 8);
+    let popup = app.popup_rect(f.area().width, f.area().height, 60, 8);
     f.render_widget(Clear, popup);
     f.render_widget(
         Block::default()
@@ -4408,7 +4433,7 @@ mod tests {
 
     #[test]
     fn call_overlay_controls_hit_their_regions() {
-        let overlay = centered(Rect::new(0, 0, 120, 30), 62, 14);
+        let overlay = Rect::new((120 - 62) / 2, (30 - 14) / 2, 62, 14);
         let inner = overlay.inner(Margin {
             vertical: 1,
             horizontal: 2,

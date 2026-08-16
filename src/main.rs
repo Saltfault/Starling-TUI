@@ -1065,15 +1065,43 @@ async fn main() -> anyhow::Result<()> {
                     }
                     match m.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
-                            handle_mouse_click(
-                                &mut app,
-                                &cmd_tx,
-                                &muted_flag,
-                                clipboard.as_mut(),
-                                &mut term,
-                                m.column,
-                                m.row,
-                            )?;
+                            // Dragging a popup by its title row moves it;
+                            // everything else falls through to the click handler.
+                            let (term_w, term_h) = crossterm::terminal::size()?;
+                            if app.popup_title_row(term_w, term_h, m.column, m.row) {
+                                if let Some(popup) = ui::active_popup_rect(&app, term_w, term_h) {
+                                    app.drag_grab = Some((
+                                        m.column as i16 - popup.x as i16,
+                                        m.row as i16 - popup.y as i16,
+                                    ));
+                                }
+                            } else {
+                                handle_mouse_click(
+                                    &mut app,
+                                    &cmd_tx,
+                                    &muted_flag,
+                                    clipboard.as_mut(),
+                                    &mut term,
+                                    m.column,
+                                    m.row,
+                                )?;
+                            }
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) => {
+                            if let Some((grab_x, grab_y)) = app.drag_grab {
+                                let (term_w, term_h) = crossterm::terminal::size()?;
+                                if let Some(popup) = ui::active_popup_rect(&app, term_w, term_h) {
+                                    let centered_x = (term_w.saturating_sub(popup.width)) / 2;
+                                    let centered_y = (term_h.saturating_sub(popup.height)) / 2;
+                                    app.popup_offset = (
+                                        m.column as i16 - grab_x - centered_x as i16,
+                                        m.row as i16 - grab_y - centered_y as i16,
+                                    );
+                                }
+                            }
+                        }
+                        MouseEventKind::Up(MouseButton::Left) => {
+                            app.drag_grab = None;
                         }
                         MouseEventKind::Moved => {}
                         MouseEventKind::ScrollUp if !app.show_menu => {
@@ -1480,11 +1508,12 @@ fn activate_context_menu_item(
 }
 
 /// Map a click to a role submenu item index, or `None` when outside.
-fn role_submenu_item_at(_app: &App, col: u16, row: u16, term_w: u16, term_h: u16) -> Option<usize> {
-    let width = 24u16.min(term_w);
-    let height = 4u16.min(term_h); // 2 roles + borders
-    let popup_x = (term_w.saturating_sub(width)) / 2;
-    let popup_y = (term_h.saturating_sub(height)) / 2;
+fn role_submenu_item_at(app: &App, col: u16, row: u16, term_w: u16, term_h: u16) -> Option<usize> {
+    let popup = ui::active_popup_rect(app, term_w, term_h)?;
+    let width = popup.width;
+    let height = popup.height;
+    let popup_x = popup.x;
+    let popup_y = popup.y;
     if col < popup_x || col >= popup_x + width {
         return None;
     }
@@ -1519,10 +1548,11 @@ fn activate_role_submenu_item(
 
 /// Map a click to a context menu item index, or `None` when outside the menu.
 fn context_menu_item_at(app: &App, col: u16, row: u16, term_w: u16, term_h: u16) -> Option<usize> {
-    let width = 28u16.min(term_w);
-    let height = (app.context_menu_items.len() as u16 + 2).min(term_h);
-    let popup_x = (term_w.saturating_sub(width)) / 2;
-    let popup_y = (term_h.saturating_sub(height)) / 2;
+    let popup = ui::active_popup_rect(app, term_w, term_h)?;
+    let width = popup.width;
+    let height = popup.height;
+    let popup_x = popup.x;
+    let popup_y = popup.y;
     if col < popup_x || col >= popup_x + width {
         return None;
     }
@@ -2658,20 +2688,11 @@ fn handle_mouse_click(
     }
 
     if app.show_menu {
-        if let Some(idx) = menu_item_at_size(term_w, term_h, col, row) {
-            app.menu_selection = idx;
-            activate_menu_item(app, cmd_tx, term)?;
-        } else {
-            let popup_w = 28u16.min(term_w);
-            let popup_h = (MENU_ITEMS.len() as u16 + 2).min(term_h);
-            let popup_x = (term_w.saturating_sub(popup_w)) / 2;
-            let popup_y = (term_h.saturating_sub(popup_h)) / 2;
-
-            if col < popup_x
-                || col >= popup_x + popup_w
-                || row < popup_y
-                || row >= popup_y + popup_h
-            {
+        if let Some(popup) = ui::active_popup_rect(app, term_w, term_h) {
+            if let Some(idx) = menu_item_at_size(popup, col, row) {
+                app.menu_selection = idx;
+                activate_menu_item(app, cmd_tx, term)?;
+            } else if !popup.contains(Position::new(col, row)) {
                 app.show_menu = false;
             }
         }
@@ -3040,17 +3061,18 @@ fn handle_right_click(app: &mut App, col: u16, row: u16) -> anyhow::Result<()> {
 }
 
 fn update_menu_hover(app: &mut App, term_w: u16, term_h: u16, col: u16, row: u16) {
-    if let Some(index) = menu_item_at_size(term_w, term_h, col, row) {
+    if let Some(popup) = ui::active_popup_rect(app, term_w, term_h)
+        && let Some(index) = menu_item_at_size(popup, col, row)
+    {
         app.menu_selection = index;
     }
 }
 
-fn menu_item_at_size(term_w: u16, term_h: u16, col: u16, row: u16) -> Option<usize> {
-    let popup_w = 28u16.min(term_w);
-    let popup_h = (MENU_ITEMS.len() as u16 + 2).min(term_h);
-    let popup_x = (term_w.saturating_sub(popup_w)) / 2;
-    let popup_y = (term_h.saturating_sub(popup_h)) / 2;
-
+fn menu_item_at_size(popup: Rect, col: u16, row: u16) -> Option<usize> {
+    let popup_x = popup.x;
+    let popup_y = popup.y;
+    let popup_w = popup.width;
+    let popup_h = popup.height;
     if col < popup_x || col >= popup_x + popup_w {
         return None;
     }
@@ -3130,14 +3152,15 @@ mod tests {
         let (width, height) = (100, 40);
         let popup_y = (height - (MENU_ITEMS.len() as u16 + 2)) / 2;
         let popup_x = (width - 28) / 2;
+        let popup = Rect::new(popup_x, popup_y, 28, MENU_ITEMS.len() as u16 + 2);
 
         for index in 0..MENU_ITEMS.len() {
             assert_eq!(
-                menu_item_at_size(width, height, popup_x + 2, popup_y + 1 + index as u16),
+                menu_item_at_size(popup, popup_x + 2, popup_y + 1 + index as u16),
                 Some(index)
             );
         }
-        assert_eq!(menu_item_at_size(width, height, popup_x + 2, popup_y), None);
+        assert_eq!(menu_item_at_size(popup, popup_x + 2, popup_y), None);
     }
 
     #[test]
@@ -3146,6 +3169,7 @@ mod tests {
         let popup_y = (height - (MENU_ITEMS.len() as u16 + 2)) / 2;
         let popup_x = (width - 28) / 2;
         let mut app = App::default();
+        app.show_menu = true;
 
         update_menu_hover(&mut app, width, height, popup_x + 3, popup_y + 3);
 
@@ -3442,11 +3466,33 @@ mod tests {
     }
 
     #[test]
+    fn popups_are_draggable_by_their_title_row() {
+        let mut app = App::default();
+        app.show_menu = true;
+        // Centered menu on 100x40, then dragged +10/+5.
+        let centered = app.popup_rect(100, 40, 28, MENU_ITEMS.len() as u16 + 2);
+        app.popup_offset = (10, 5);
+        let moved = app.popup_rect(100, 40, 28, MENU_ITEMS.len() as u16 + 2);
+        assert_eq!(moved.x, centered.x + 10);
+        assert_eq!(moved.y, centered.y + 5);
+        // The title row (excluding the X button) is the drag handle.
+        assert!(app.popup_title_row(100, 40, moved.x + 2, moved.y));
+        assert!(!app.popup_title_row(100, 40, moved.x + 2, moved.y + 1));
+        // The X button region is not a drag handle.
+        assert!(!app.popup_title_row(100, 40, moved.right() - 1, moved.y));
+        // Offsets clamp so the title row stays on screen.
+        app.popup_offset = (1000, 1000);
+        let clamped = app.popup_rect(100, 40, 28, MENU_ITEMS.len() as u16 + 2);
+        assert_eq!(clamped.x, 100 - 28);
+        assert_eq!(clamped.y, 40 - (MENU_ITEMS.len() as u16 + 2));
+    }
+
+    #[test]
     fn popup_action_buttons_are_clickable() {
         let mut app = App::default();
         app.show_create_room = true;
         app.create_flock_name = "crew".into();
-        let popup = crate::ui::centered(Rect::new(0, 0, 100, 40), 60, 8);
+        let popup = Rect::new((100 - 60) / 2, (40 - 8) / 2, 60, 8);
         // The primary (Create) button is the rightmost button on the bottom row.
         let inner = popup.inner(Margin {
             vertical: 1,
