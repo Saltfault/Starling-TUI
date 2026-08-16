@@ -2378,7 +2378,8 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     };
     let left = format!("{} {}", plus_icon, value);
     let right = format!("{} {}", emoji_icon, send_icon);
-    let right_width = right.chars().count() as u16;
+    // Display width, not char count: emoji glyphs are 2 cells wide.
+    let right_width = ratatui::text::Line::from(right.as_str()).width() as u16;
     let left_area = Rect {
         x: content.x,
         y: content.y,
@@ -2402,6 +2403,74 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
             height: content.height,
         },
     );
+}
+
+/// The x offset of the chat column, mirroring the layout in `draw`: desktop
+/// chat starts after the rail (9) and sidebar (30); mobile chat starts at 0,
+/// or after the sidebar/members panel when one is open.
+pub fn chat_column_x(app: &App, term_w: u16) -> u16 {
+    if term_w < MOBILE_BREAKPOINT {
+        let members_open = app.show_members
+            && (matches!(app.v2_view, V2View::Space)
+                || (matches!(app.v2_view, V2View::Home)
+                    && matches!(app.selection, Selection::Flock(_))
+                    && app.selected_dm.is_none()));
+        let sidebar_visible = !app.sidebar_hidden
+            && (matches!(app.v2_view, V2View::Space) || matches!(app.v2_view, V2View::Home));
+        if members_open || (sidebar_visible && matches!(app.v2_view, V2View::Home)) {
+            return 30;
+        }
+        return 0;
+    }
+    39
+}
+
+/// Which composer control a click hits: the send button, the emoji button, or
+/// the input area itself. Mirrors the layout in `draw_message_bar`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComposerHit {
+    Send,
+    Emoji,
+    Input,
+}
+
+pub fn composer_hit_at(
+    app: &App,
+    col: u16,
+    row: u16,
+    term_w: u16,
+    term_h: u16,
+) -> Option<ComposerHit> {
+    if row < term_h.saturating_sub(3) {
+        return None;
+    }
+    let chat_x = chat_column_x(app, term_w);
+    let outer = Rect {
+        x: chat_x + 1,
+        y: term_h.saturating_sub(3),
+        width: term_w.saturating_sub(chat_x + 2),
+        height: 3,
+    };
+    let content = outer.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
+    let send_icon = TerminalIcon::Send.glyph(app.icon_style);
+    let right = format!("{} {}", emoji_icon, send_icon);
+    let right_width = ratatui::text::Line::from(right.as_str()).width() as u16;
+    let right_x = content.x + content.width.saturating_sub(right_width);
+    let emoji_w = ratatui::text::Line::from(emoji_icon).width() as u16;
+    if col >= right_x && col < right_x + emoji_w {
+        return Some(ComposerHit::Emoji);
+    }
+    if col > right_x + emoji_w {
+        return Some(ComposerHit::Send);
+    }
+    if col >= content.x && col < right_x {
+        return Some(ComposerHit::Input);
+    }
+    None
 }
 
 fn draw_call_overlay(f: &mut Frame, app: &App) {
@@ -2508,6 +2577,61 @@ fn draw_popup_close(f: &mut Frame, area: Rect, icon_style: IconStyle) {
             height: 1,
         },
     );
+}
+
+/// Draw a right-aligned row of action buttons on the bottom row of a popup.
+/// The rightmost button is the primary (accent) action. Hit regions mirror
+/// this layout via [`popup_button_at`].
+fn draw_popup_buttons(f: &mut Frame, popup: Rect, app: &App, buttons: &[&str]) {
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let y = inner.bottom().saturating_sub(1);
+    let mut x = inner.right();
+    for (i, label) in buttons.iter().enumerate() {
+        let text = format!(" {label} ");
+        let w = text.chars().count() as u16;
+        x = x.saturating_sub(w);
+        let style = if i == buttons.len() - 1 {
+            Style::new().fg(Color::White).bg(app.palette.accent)
+        } else {
+            Style::new().fg(app.palette.text).bg(app.palette.surface)
+        };
+        f.render_widget(
+            Paragraph::new(text).style(style),
+            Rect {
+                x,
+                y,
+                width: w,
+                height: 1,
+            },
+        );
+        x = x.saturating_sub(1); // gap between buttons
+    }
+}
+
+/// Hit-test a popup's action-button row. Returns the index of the clicked
+/// button, mirroring [`draw_popup_buttons`] (rightmost button is the primary).
+pub fn popup_button_at(popup: Rect, col: u16, row: u16, buttons: &[&str]) -> Option<usize> {
+    let inner = popup.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let y = inner.bottom().saturating_sub(1);
+    if row != y {
+        return None;
+    }
+    let mut x = inner.right();
+    for i in (0..buttons.len()).rev() {
+        let w = (buttons[i].chars().count() + 2) as u16;
+        x = x.saturating_sub(w);
+        if col >= x && col < x + w {
+            return Some(i);
+        }
+        x = x.saturating_sub(1);
+    }
+    None
 }
 
 /// The screen rect of the currently active popup, mirroring the draw()
@@ -2790,7 +2914,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App) {
 
     let content = Paragraph::new(match app.settings_tab {
         SettingsTab::Account => format!(
-            "Display name\n  {}\n\nEmail\n  you@starling.local\n\nAvatar label\n  {}\n\n[ESC] close",
+            "Display name\n  {}\n\nEmail\n  you@starling.local\n\nAvatar label\n  {}",
             app.name,
             app.profile_panel.avatar_label
         ),
@@ -2798,7 +2922,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App) {
             "Input device\n  Default\n\nOutput device\n  Default\n\nPush to Talk\n  Off\n\nNoise suppression\n  On".to_string()
         }
         SettingsTab::Appearance => format!(
-            "Theme\n  Dark\n\nAccent color\n  {}\n\nIcon style\n  {}\n\nCompact mode\n  Off\n\nShow avatars\n  On\n\n[ENTER] apply accent  [TAB] cycle icons  [ESC] close",
+            "Theme\n  Dark\n\nAccent color\n  {}\n\nIcon style\n  {}\n\nCompact mode\n  Off\n\nShow avatars\n  On",
             app.accent_input, app.icon_style.label()
         ),
         SettingsTab::Notifications => {
@@ -2811,6 +2935,11 @@ fn draw_settings_modal(f: &mut Frame, app: &App) {
     .style(Style::new().fg(text).bg(modal_bg))
     .wrap(Wrap { trim: true });
     f.render_widget(content, columns[1]);
+    // Action buttons for the Appearance tab: apply the accent color and
+    // cycle the icon style. Hit regions mirror draw_popup_buttons.
+    if app.settings_tab == SettingsTab::Appearance {
+        draw_popup_buttons(f, area, app, &["Cycle icons", "Apply accent"]);
+    }
 }
 
 fn draw_create_room_popup(f: &mut Frame, app: &App) {
@@ -2847,11 +2976,7 @@ fn draw_create_room_popup(f: &mut Frame, app: &App) {
             .style(Style::new().fg(app.palette.selection)),
         rows[1],
     );
-    f.render_widget(
-        Paragraph::new("Press Enter to create, Esc to cancel.")
-            .style(Style::new().fg(app.palette.dim)),
-        rows[2],
-    );
+    draw_popup_buttons(f, popup, app, &["Cancel", "Create"]);
 }
 
 fn draw_create_roost_popup(f: &mut Frame, app: &App) {
@@ -2888,11 +3013,7 @@ fn draw_create_roost_popup(f: &mut Frame, app: &App) {
             .style(Style::new().fg(app.palette.selection)),
         rows[1],
     );
-    f.render_widget(
-        Paragraph::new("Press Enter to create, Esc to cancel.")
-            .style(Style::new().fg(app.palette.dim)),
-        rows[2],
-    );
+    draw_popup_buttons(f, popup, app, &["Cancel", "Create"]);
 }
 
 fn draw_add_channel_popup(f: &mut Frame, app: &App) {
@@ -2929,11 +3050,7 @@ fn draw_add_channel_popup(f: &mut Frame, app: &App) {
             .style(Style::new().fg(app.palette.selection)),
         rows[1],
     );
-    f.render_widget(
-        Paragraph::new("Press Enter to create, Esc to cancel.")
-            .style(Style::new().fg(app.palette.dim)),
-        rows[2],
-    );
+    draw_popup_buttons(f, popup, app, &["Cancel", "Create"]);
 }
 
 fn draw_edit_flock_popup(f: &mut Frame, app: &App) {
@@ -2971,22 +3088,20 @@ fn draw_edit_flock_popup(f: &mut Frame, app: &App) {
             .style(Style::new().fg(app.palette.selection)),
         rows[1],
     );
-    f.render_widget(
-        Paragraph::new("Enter = save . Delete = delete flock . Esc = cancel")
-            .style(Style::new().fg(app.palette.dim)),
-        rows[3],
-    );
+    draw_popup_buttons(f, popup, app, &["Cancel", "Save"]);
 }
 
 fn draw_join_room_popup(f: &mut Frame, app: &App) {
+    let popup = centered(f.area(), 60, 8);
     draw_input_popup(
         f,
         " Join ",
         "Enter a flock or roost code:",
         &app.join_input,
-        " Enter = join . Esc = cancel",
+        "",
         app,
     );
+    draw_popup_buttons(f, popup, app, &["Cancel", "Join"]);
 }
 
 fn draw_delete_confirm_popup(f: &mut Frame, app: &App) {
@@ -3029,10 +3144,7 @@ fn draw_delete_confirm_popup(f: &mut Frame, app: &App) {
             .style(Style::new().fg(app.palette.selection)),
         rows[2],
     );
-    f.render_widget(
-        Paragraph::new(" Enter = confirm . Esc = cancel").style(Style::new().fg(app.palette.dim)),
-        rows[3],
-    );
+    draw_popup_buttons(f, popup, app, &["Cancel", "Delete"]);
 }
 
 fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
@@ -3114,7 +3226,8 @@ fn draw_bird_profile_popup(f: &mut Frame, app: &App) {
     }
 
     f.render_widget(
-        Paragraph::new(" Enter/C = call . Esc = close").style(Style::new().fg(app.palette.dim)),
+        Paragraph::new(" Click Call to start a call . Esc = close")
+            .style(Style::new().fg(app.palette.dim)),
         rows[3],
     );
 }
@@ -3304,6 +3417,14 @@ fn draw_profile_modal(f: &mut Frame, app: &App) {
     )]));
 
     f.render_widget(Paragraph::new(Text::from(lines)), inner);
+    // Action buttons on the bottom row: Edit (view mode) or Cancel/Save
+    // (editing mode). Hit regions mirror draw_popup_buttons.
+    let buttons: &[&str] = if p.editing {
+        &["Cancel", "Save"]
+    } else {
+        &["Edit"]
+    };
+    draw_popup_buttons(f, area, app, buttons);
 }
 
 fn draw_context_menu(f: &mut Frame, app: &App) {

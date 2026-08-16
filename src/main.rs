@@ -32,7 +32,7 @@ use crossterm::{
 use event::{AppEvent, Command};
 #[allow(unused_imports)]
 use iroh::EndpointId;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 #[allow(unused_imports)]
 use std::sync::Arc;
 #[allow(unused_imports)]
@@ -1138,25 +1138,7 @@ enum KeyOutcome {
 
 fn handle_delete_confirm_key(app: &mut App, k: &KeyEvent) -> KeyOutcome {
     match k.code {
-        KeyCode::Enter => {
-            if app.delete_confirm_input.trim() == "DELETE" {
-                app.show_delete_confirm = false;
-                let dir = starling::config::Profile::config_dir();
-                if dir.exists() {
-                    if let Err(error) = std::fs::remove_dir_all(&dir) {
-                        app.error_message = Some(format!("Failed to delete data: {error}"));
-                    } else {
-                        app.skip_save_on_exit = true;
-                        app.quit_requested = true;
-                    }
-                } else {
-                    app.skip_save_on_exit = true;
-                    app.quit_requested = true;
-                }
-            } else {
-                app.error_message = Some("Type DELETE to confirm".into());
-            }
-        }
+        KeyCode::Enter => confirm_delete(app),
         KeyCode::Char(c) => {
             app.delete_confirm_input.push(c);
         }
@@ -1172,6 +1154,28 @@ fn handle_delete_confirm_key(app: &mut App, k: &KeyEvent) -> KeyOutcome {
     KeyOutcome::Handled
 }
 
+/// Confirm the "Delete all data" popup: erase the config directory and quit.
+/// Shared by the Enter key and the Delete button.
+fn confirm_delete(app: &mut App) {
+    if app.delete_confirm_input.trim() == "DELETE" {
+        app.show_delete_confirm = false;
+        let dir = starling::config::Profile::config_dir();
+        if dir.exists() {
+            if let Err(error) = std::fs::remove_dir_all(&dir) {
+                app.error_message = Some(format!("Failed to delete data: {error}"));
+            } else {
+                app.skip_save_on_exit = true;
+                app.quit_requested = true;
+            }
+        } else {
+            app.skip_save_on_exit = true;
+            app.quit_requested = true;
+        }
+    } else {
+        app.error_message = Some("Type DELETE to confirm".into());
+    }
+}
+
 fn handle_create_room_key(
     app: &mut App,
     k: &KeyEvent,
@@ -1179,15 +1183,7 @@ fn handle_create_room_key(
 ) -> KeyOutcome {
     match k.code {
         KeyCode::Enter if app.create_flock_code.is_some() => {
-            if let Some(code) = app.create_flock_code.take() {
-                // The local user created this flock, so the management menu
-                // shows edit/delete for it even before anyone else joins.
-                app.flock_owners.insert(code.clone(), true);
-                let since = app.newest_ts(&code).unwrap_or(0);
-                let _ = cmd_tx.send(Command::Join { code, since });
-            }
-            app.create_flock_secret = None;
-            app.show_create_room = false;
+            confirm_create_flock(app, cmd_tx);
         }
         KeyCode::Char(c) => {
             app.create_flock_name =
@@ -1216,9 +1212,7 @@ fn handle_create_roost_key(
 ) -> KeyOutcome {
     match k.code {
         KeyCode::Enter if !app.create_roost_input.is_empty() => {
-            let name = std::mem::take(&mut app.create_roost_input);
-            let _ = cmd_tx.send(Command::CreateRoost { name });
-            app.show_create_roost = false;
+            confirm_create_roost(app, cmd_tx);
         }
         KeyCode::Char(c) if !c.is_control() => {
             app.create_roost_input.push(c);
@@ -1241,14 +1235,7 @@ fn handle_add_channel_key(
 ) -> KeyOutcome {
     match k.code {
         KeyCode::Enter if !app.add_channel_input.is_empty() => {
-            let channel = std::mem::take(&mut app.add_channel_input);
-            if let Some(roost_ep) = app.context_menu_roost_endpoint() {
-                let _ = cmd_tx.send(Command::AddChannel {
-                    roost: roost_ep,
-                    channel,
-                });
-            }
-            app.show_add_channel = false;
+            confirm_add_channel(app, cmd_tx);
         }
         KeyCode::Char(c) if !c.is_control() => {
             app.add_channel_input.push(c);
@@ -1271,37 +1258,7 @@ fn handle_edit_flock_key(
 ) -> KeyOutcome {
     match k.code {
         KeyCode::Enter => {
-            let code = std::mem::take(&mut app.edit_flock_code);
-            let name = std::mem::take(&mut app.edit_flock_name);
-            app.show_edit_flock = false;
-            if !name.is_empty() {
-                // Update the legacy FlockView name
-                if let Some(fv) = app.flocks.iter_mut().find(|f| f.code == code) {
-                    fv.name = name.clone();
-                }
-                // Update the typed ContextView title
-                if let Some(ctx) = app
-                    .contexts
-                    .values_mut()
-                    .find(|c| c.secret.as_deref() == Some(&code))
-                {
-                    ctx.title = name.clone();
-                }
-                // Update roost name if this code belongs to a roost
-                if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
-                    rv.name = name.clone();
-                    // Persist the rename on the roost server so it survives
-                    // restarts and propagates to other members.
-                    if let Some(roost_ep) = starling::net::decode_typed_code(&rv.code)
-                        .and_then(|t| starling::net::typed_code_node_id(&t))
-                    {
-                        let _ = cmd_tx.send(Command::RenameRoost {
-                            roost: roost_ep,
-                            name,
-                        });
-                    }
-                }
-            }
+            confirm_edit_flock(app, cmd_tx);
         }
         KeyCode::Backspace => {
             app.edit_flock_name.pop();
@@ -1331,15 +1288,7 @@ fn handle_join_room_key(
     match k.code {
         KeyCode::Enter => match sanitize::invite(app.join_input.trim()) {
             Ok(code) => {
-                let since = app.newest_ts(&code).unwrap_or(0);
-                let _ = cmd_tx.send(Command::Join {
-                    code: code.clone(),
-                    since,
-                });
-                app.joining = Some(code);
-                app.join_input.clear();
-                app.show_join_room = false;
-                app.error_message = None;
+                confirm_join(app, cmd_tx, code);
             }
             Err(error) => {
                 app.error_message = Some(error.to_string());
@@ -1369,14 +1318,7 @@ fn handle_bird_profile_key(
 ) -> KeyOutcome {
     match k.code {
         KeyCode::Enter => {
-            #[cfg(feature = "audio")]
-            if let Some(peer) = app.bird_profile_peer
-                && cmd_tx.send(Command::StartCall(vec![peer])).is_ok()
-            {
-                app.error_message = Some("Connecting call...".into());
-            }
-            app.show_bird_profile = false;
-            app.bird_profile_peer = None;
+            confirm_bird_call(app, cmd_tx);
         }
         KeyCode::Esc => {
             app.show_bird_profile = false;
@@ -1385,6 +1327,98 @@ fn handle_bird_profile_key(
         _ => {}
     }
     KeyOutcome::Handled
+}
+
+/// Confirm the "Create a Flock" popup. Shared by Enter and the Create button.
+fn confirm_create_flock(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
+    if let Some(code) = app.create_flock_code.take() {
+        // The local user created this flock, so the management menu
+        // shows edit/delete for it even before anyone else joins.
+        app.flock_owners.insert(code.clone(), true);
+        let since = app.newest_ts(&code).unwrap_or(0);
+        let _ = cmd_tx.send(Command::Join { code, since });
+    }
+    app.create_flock_secret = None;
+    app.show_create_room = false;
+}
+
+/// Confirm the "Create a Roost" popup. Shared by Enter and the Create button.
+fn confirm_create_roost(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
+    let name = std::mem::take(&mut app.create_roost_input);
+    let _ = cmd_tx.send(Command::CreateRoost { name });
+    app.show_create_roost = false;
+}
+
+/// Confirm the "Add Channel" popup. Shared by Enter and the Create button.
+fn confirm_add_channel(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
+    let channel = std::mem::take(&mut app.add_channel_input);
+    if let Some(roost_ep) = app.context_menu_roost_endpoint() {
+        let _ = cmd_tx.send(Command::AddChannel {
+            roost: roost_ep,
+            channel,
+        });
+    }
+    app.show_add_channel = false;
+}
+
+/// Confirm the "Edit Flock" popup. Shared by Enter and the Save button.
+fn confirm_edit_flock(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
+    let code = std::mem::take(&mut app.edit_flock_code);
+    let name = std::mem::take(&mut app.edit_flock_name);
+    app.show_edit_flock = false;
+    if !name.is_empty() {
+        // Update the legacy FlockView name
+        if let Some(fv) = app.flocks.iter_mut().find(|f| f.code == code) {
+            fv.name = name.clone();
+        }
+        // Update the typed ContextView title
+        if let Some(ctx) = app
+            .contexts
+            .values_mut()
+            .find(|c| c.secret.as_deref() == Some(&code))
+        {
+            ctx.title = name.clone();
+        }
+        // Update roost name if this code belongs to a roost
+        if let Some(rv) = app.roosts.iter_mut().find(|r| r.code == code) {
+            rv.name = name.clone();
+            // Persist the rename on the roost server so it survives
+            // restarts and propagates to other members.
+            if let Some(roost_ep) = starling::net::decode_typed_code(&rv.code)
+                .and_then(|t| starling::net::typed_code_node_id(&t))
+            {
+                let _ = cmd_tx.send(Command::RenameRoost {
+                    roost: roost_ep,
+                    name,
+                });
+            }
+        }
+    }
+}
+
+/// Confirm the "Join" popup. Shared by Enter and the Join button.
+fn confirm_join(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>, code: String) {
+    let since = app.newest_ts(&code).unwrap_or(0);
+    let _ = cmd_tx.send(Command::Join {
+        code: code.clone(),
+        since,
+    });
+    app.joining = Some(code);
+    app.join_input.clear();
+    app.show_join_room = false;
+    app.error_message = None;
+}
+
+/// Confirm the bird-profile call. Shared by Enter and the Call button.
+fn confirm_bird_call(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
+    #[cfg(feature = "audio")]
+    if let Some(peer) = app.bird_profile_peer
+        && cmd_tx.send(Command::StartCall(vec![peer])).is_ok()
+    {
+        app.error_message = Some("Connecting call...".into());
+    }
+    app.show_bird_profile = false;
+    app.bird_profile_peer = None;
 }
 
 fn handle_context_menu_key(
@@ -1712,6 +1746,81 @@ fn handle_menu_key(
     }
     Ok(KeyOutcome::Handled)
 }
+/// Send the composer contents: slash commands (/join, /chirp) or a plain
+/// message to the active space. Shared by the Enter key and the composer's
+/// send button.
+fn send_input(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
+    let text = std::mem::take(&mut app.input);
+    app.input_focus = false;
+    if let Some(code) = text
+        .strip_prefix("/join ")
+        .or_else(|| text.strip_prefix("/join-roost "))
+    {
+        let code = code.trim();
+        match sanitize::invite(code) {
+            Ok(normalized) => {
+                let since = app.newest_ts(&normalized).unwrap_or(0);
+                let _ = cmd_tx.send(Command::Join {
+                    code: normalized,
+                    since,
+                });
+            }
+            Err(error) => {
+                app.error_message = Some(format!("Invalid join code: {error}"));
+            }
+        }
+    } else if let Some(rest) = text.strip_prefix("/chirp ") {
+        let rest = rest.trim();
+        let (name, body) = match rest.split_once(' ') {
+            Some((name, body)) if !name.is_empty() => (name.trim(), body),
+            _ => {
+                app.error_message = Some("Usage: /chirp <name> <message>".into());
+                return;
+            }
+        };
+        // Match the destination by display name (set by an authenticated
+        // profile announcement) and resolve it to a verified endpoint.
+        let to = app
+            .peer_names
+            .iter()
+            .find(|(_, peer_name)| peer_name.trim() == name)
+            .and_then(|(id, _)| app.peer_dm_keys.get(id).map(|_| *id));
+        let to = match to {
+            Some(to) => to,
+            None => {
+                app.error_message = Some(format!("{name:?} hasn't published a DM key yet"));
+                return;
+            }
+        };
+        let Some(code) = app.active_send_code() else {
+            app.error_message = Some("Select a flock first".into());
+            return;
+        };
+        let their_pk = match app.peer_dm_keys.get(&to).cloned() {
+            Some(pk) => pk,
+            None => return,
+        };
+        let _ = cmd_tx.send(Command::SendChirp {
+            flock: code,
+            to,
+            their_pk,
+            body: body.to_string(),
+        });
+    } else if let Some(_space) = app.active {
+        if let Some(code) = app.active_send_code() {
+            let _ = cmd_tx.send(Command::SendText {
+                flock: code.to_string(),
+                body: text,
+            });
+        }
+    } else if let Some(code) = app.active_code() {
+        let _ = cmd_tx.send(Command::SendText {
+            flock: code.to_string(),
+            body: text,
+        });
+    }
+}
+
 fn handle_normal_key(
     app: &mut App,
     k: &KeyEvent,
@@ -1738,79 +1847,7 @@ fn handle_normal_key(
         }
 
         KeyCode::Enter if app.input_focus && !app.input.is_empty() => {
-            let text = std::mem::take(&mut app.input);
-            app.input_focus = false;
-            if let Some(code) = text
-                .strip_prefix("/join ")
-                .or_else(|| text.strip_prefix("/join-roost "))
-            {
-                let code = code.trim();
-                match sanitize::invite(code) {
-                    Ok(normalized) => {
-                        let since = app.newest_ts(&normalized).unwrap_or(0);
-                        let _ = cmd_tx.send(Command::Join {
-                            code: normalized,
-                            since,
-                        });
-                    }
-                    Err(error) => {
-                        app.error_message = Some(format!("Invalid join code: {error}"));
-                    }
-                }
-            } else if let Some(rest) = text.strip_prefix("/chirp ") {
-                let rest = rest.trim();
-                let (name, body) = match rest.split_once(' ') {
-                    Some((name, body)) if !name.is_empty() => (name.trim(), body),
-                    _ => {
-                        app.error_message = Some("Usage: /chirp <name> <message>".into());
-                        return Ok(KeyOutcome::Handled);
-                    }
-                };
-                // Match the destination by display name (set by an
-                // authenticated profile announcement) and resolve it
-                // to a verified endpoint. Without the endpoint's
-                // published DM public key, we can't seal a chirp —
-                // the recipient hasn't yet published a Phase 9
-                // Profile with `dm_pk`.
-                let to = app
-                    .peer_names
-                    .iter()
-                    .find(|(_, peer_name)| peer_name.trim() == name)
-                    .and_then(|(id, _)| app.peer_dm_keys.get(id).map(|_| *id));
-                let to = match to {
-                    Some(to) => to,
-                    None => {
-                        app.error_message = Some(format!("{name:?} hasn't published a DM key yet"));
-                        return Ok(KeyOutcome::Handled);
-                    }
-                };
-                let Some(code) = app.active_send_code() else {
-                    app.error_message = Some("Select a flock first".into());
-                    return Ok(KeyOutcome::Handled);
-                };
-                let their_pk = match app.peer_dm_keys.get(&to).cloned() {
-                    Some(pk) => pk,
-                    None => return Ok(KeyOutcome::Handled),
-                };
-                let _ = cmd_tx.send(Command::SendChirp {
-                    flock: code,
-                    to,
-                    their_pk,
-                    body: body.to_string(),
-                });
-            } else if let Some(_space) = app.active {
-                if let Some(code) = app.active_send_code() {
-                    let _ = cmd_tx.send(Command::SendText {
-                        flock: code.to_string(),
-                        body: text,
-                    });
-                }
-            } else if let Some(code) = app.active_code() {
-                let _ = cmd_tx.send(Command::SendText {
-                    flock: code.to_string(),
-                    body: text,
-                });
-            }
+            send_input(app, cmd_tx);
         }
 
         KeyCode::Up if matches!(app.v2_view, ui::V2View::Home) && !app.input_focus => {
@@ -2253,6 +2290,60 @@ fn handle_mobile_rail_click(app: &mut App, col: u16, row: u16, term_w: u16, term
     false
 }
 
+/// Sidebar clicks on narrow terminals: the Friends list (Home) or the channel
+/// list (Space) occupies the left 30 columns when visible. Mirrors the desktop
+/// sidebar hit-testing.
+fn handle_mobile_sidebar_click(
+    app: &mut App,
+    col: u16,
+    row: u16,
+    term_w: u16,
+    term_h: u16,
+) -> bool {
+    if term_w >= ui::MOBILE_BREAKPOINT || col >= 30 || row < 2 || row >= term_h.saturating_sub(3) {
+        return false;
+    }
+    let members_open = app.show_members
+        && (matches!(app.v2_view, ui::V2View::Space)
+            || (matches!(app.v2_view, ui::V2View::Home)
+                && matches!(app.selection, Selection::Flock(_))
+                && app.selected_dm.is_none()));
+    if members_open {
+        return false; // members panel occupies the right side, not the left
+    }
+    if matches!(app.v2_view, ui::V2View::Home) {
+        let list_index = (row - 2) as usize;
+        if list_index == 0 {
+            return true; // DIRECT MESSAGES header
+        }
+        let peer_count = app.peers.len();
+        if list_index <= peer_count {
+            if let Some(peer) = app.peers.get(list_index - 1).copied() {
+                app.selected_dm = Some(peer);
+                return true;
+            }
+        } else {
+            let flock_index = list_index - peer_count - 1;
+            if flock_index < app.flocks.len() {
+                app.select_flock(flock_index);
+                return true;
+            }
+        }
+    } else if let Selection::Channel(ri, _) = app.selection {
+        let channel_index = (row - 2).saturating_sub(1) as usize;
+        if app
+            .roosts
+            .get(ri)
+            .and_then(|roost| roost.channels.get(channel_index))
+            .is_some()
+        {
+            app.select(Selection::Channel(ri, channel_index));
+            return true;
+        }
+    }
+    false
+}
+
 fn handle_reference_mouse_click(
     app: &mut App,
     col: u16,
@@ -2364,6 +2455,165 @@ fn handle_reference_mouse_click(
     false
 }
 
+/// Which action button (if any) a click inside a popup hits, mirroring the
+/// button rows drawn by `draw_popup_buttons`.
+fn popup_action_button(app: &App, popup: Rect, col: u16, row: u16) -> Option<usize> {
+    if app.show_create_room {
+        return ui::popup_button_at(popup, col, row, &["Cancel", "Create"]);
+    }
+    if app.show_create_roost {
+        return ui::popup_button_at(popup, col, row, &["Cancel", "Create"]);
+    }
+    if app.show_add_channel {
+        return ui::popup_button_at(popup, col, row, &["Cancel", "Create"]);
+    }
+    if app.show_edit_flock {
+        return ui::popup_button_at(popup, col, row, &["Cancel", "Save"]);
+    }
+    if app.show_join_room {
+        return ui::popup_button_at(popup, col, row, &["Cancel", "Join"]);
+    }
+    if app.show_delete_confirm {
+        return ui::popup_button_at(popup, col, row, &["Cancel", "Delete"]);
+    }
+    if app.show_bird_profile {
+        // The Call row is the third content row of the 40x7 popup.
+        #[cfg(feature = "audio")]
+        {
+            let inner = popup.inner(Margin {
+                vertical: 1,
+                horizontal: 2,
+            });
+            let rows = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ])
+            .split(inner);
+            if row == rows[2].y && col >= rows[2].x && col < rows[2].right() {
+                return Some(0);
+            }
+        }
+        return None;
+    }
+    if app.profile_panel.open {
+        let buttons: &[&str] = if app.profile_panel.editing {
+            &["Cancel", "Save"]
+        } else {
+            &["Edit"]
+        };
+        return ui::popup_button_at(popup, col, row, buttons);
+    }
+    if app.settings_open && app.settings_tab == ui::SettingsTab::Appearance {
+        return ui::popup_button_at(popup, col, row, &["Cycle icons", "Apply accent"]);
+    }
+    None
+}
+
+/// Run the action behind a popup button click. Index 0 is always the
+/// cancel/close action; index 1 (when present) is the primary action.
+fn activate_popup_action(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+    idx: usize,
+) -> anyhow::Result<()> {
+    if app.show_create_room {
+        if idx == 0 {
+            app.create_flock_code = None;
+            app.create_flock_secret = None;
+            app.create_flock_name.clear();
+            app.show_create_room = false;
+        } else {
+            confirm_create_flock(app, cmd_tx);
+        }
+        return Ok(());
+    }
+    if app.show_create_roost {
+        if idx == 0 {
+            app.show_create_roost = false;
+        } else {
+            confirm_create_roost(app, cmd_tx);
+        }
+        return Ok(());
+    }
+    if app.show_add_channel {
+        if idx == 0 {
+            app.show_add_channel = false;
+        } else {
+            confirm_add_channel(app, cmd_tx);
+        }
+        return Ok(());
+    }
+    if app.show_edit_flock {
+        if idx == 0 {
+            app.show_edit_flock = false;
+        } else {
+            confirm_edit_flock(app, cmd_tx);
+        }
+        return Ok(());
+    }
+    if app.show_join_room {
+        if idx == 0 {
+            app.show_join_room = false;
+        } else {
+            match sanitize::invite(app.join_input.trim()) {
+                Ok(code) => confirm_join(app, cmd_tx, code),
+                Err(error) => {
+                    app.error_message = Some(error.to_string());
+                }
+            }
+        }
+        return Ok(());
+    }
+    if app.show_delete_confirm {
+        if idx == 0 {
+            app.show_delete_confirm = false;
+            app.delete_confirm_input.clear();
+        } else {
+            confirm_delete(app);
+        }
+        return Ok(());
+    }
+    if app.show_bird_profile {
+        confirm_bird_call(app, cmd_tx);
+        return Ok(());
+    }
+    if app.profile_panel.open {
+        if app.profile_panel.editing {
+            if idx == 0 {
+                app.profile_panel.editing = false;
+            } else {
+                save_profile(
+                    app,
+                    &mut starling::config::Profile::load().unwrap_or_default(),
+                )?;
+            }
+        } else {
+            open_profile(app);
+            app.profile_panel.editing = true;
+        }
+        return Ok(());
+    }
+    if app.settings_open && app.settings_tab == ui::SettingsTab::Appearance {
+        if idx == 0 {
+            app.icon_style = app.icon_style.next();
+        } else {
+            let value = app.accent_input.clone();
+            if ui::apply_accent_color(app, &value) {
+                if let Some(mut profile) = starling::config::Profile::load() {
+                    profile.accent_color = value;
+                    let _ = profile.save();
+                }
+            } else {
+                app.error_message = Some("Use #RRGGBB".into());
+            }
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
 fn handle_mouse_click(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
@@ -2391,6 +2641,18 @@ fn handle_mouse_click(
         }
         if !popup.contains(Position::new(col, row)) {
             ui::dismiss_active_popup(app);
+            return Ok(());
+        }
+        // Action buttons on the popup's bottom row (Cancel / Create / Save /
+        // Join / Delete / Edit / Call / Apply accent / Cycle icons).
+        if let Some(idx) = popup_action_button(app, popup, col, row) {
+            activate_popup_action(app, cmd_tx, idx)?;
+            return Ok(());
+        }
+        // Clicks inside a modal that are not on a button are consumed so they
+        // never leak to the UI underneath. The settings modal still routes
+        // nav-tab clicks through handle_settings_mouse_click below.
+        if app.profile_panel.open {
             return Ok(());
         }
     }
@@ -2476,6 +2738,30 @@ fn handle_mouse_click(
     }
 
     if term_w < ui::MOBILE_BREAKPOINT && handle_mobile_header_click(app, col, row, term_w) {
+        return Ok(());
+    }
+
+    if term_w < ui::MOBILE_BREAKPOINT && handle_mobile_sidebar_click(app, col, row, term_w, term_h)
+    {
+        return Ok(());
+    }
+
+    // Composer: click the input to focus, the send button to send, or the
+    // emoji button (placeholder for now).
+    if let Some(hit) = ui::composer_hit_at(app, col, row, term_w, term_h) {
+        match hit {
+            ui::ComposerHit::Send => {
+                if !app.input.is_empty() {
+                    send_input(app, cmd_tx);
+                }
+            }
+            ui::ComposerHit::Emoji => {
+                app.error_message = Some("Emoji picker coming soon".into());
+            }
+            ui::ComposerHit::Input => {
+                app.input_focus = true;
+            }
+        }
         return Ok(());
     }
 
@@ -2831,9 +3117,11 @@ mod tests {
     use super::{
         App, MENU_ITEMS, SettingsTab, handle_reference_mouse_click, handle_right_click,
         handle_settings_mouse_click, leave_context, menu_item_at_size, normalize_leave_code,
-        open_create_room, parse_join_arg, refresh_create_flock_code, update_menu_hover,
+        open_create_room, parse_join_arg, popup_action_button, refresh_create_flock_code,
+        update_menu_hover,
     };
     use crate::ui::{FlockView, RoostView, Selection, V2View};
+    use ratatui::layout::{Margin, Rect};
 
     #[test]
     fn every_rendered_menu_row_is_clickable() {
@@ -3149,5 +3437,52 @@ mod tests {
             matches!(app.v2_view, V2View::Space),
             "view must switch to Space"
         );
+    }
+
+    #[test]
+    fn popup_action_buttons_are_clickable() {
+        let mut app = App::default();
+        app.show_create_room = true;
+        app.create_flock_name = "crew".into();
+        let popup = crate::ui::centered(Rect::new(0, 0, 100, 40), 60, 8);
+        // The primary (Create) button is the rightmost button on the bottom row.
+        let inner = popup.inner(Margin {
+            vertical: 1,
+            horizontal: 2,
+        });
+        let y = inner.bottom().saturating_sub(1);
+        let create_x = inner.right().saturating_sub(8); // " Create "
+        assert_eq!(
+            popup_action_button(&app, popup, create_x, y),
+            Some(1),
+            "Create button must be clickable"
+        );
+        // Cancel sits left of Create with a 1-cell gap.
+        let cancel_x = create_x.saturating_sub(9);
+        assert_eq!(
+            popup_action_button(&app, popup, cancel_x, y),
+            Some(0),
+            "Cancel button must be clickable"
+        );
+        assert_eq!(
+            popup_action_button(&app, popup, inner.x + 1, y - 1),
+            None,
+            "clicks above the button row are not buttons"
+        );
+    }
+
+    #[test]
+    fn composer_send_button_is_clickable() {
+        let mut app = App::default();
+        app.v2_view = V2View::Space;
+        app.input = "hello".into();
+        // Send is the rightmost control: right-aligned at the composer's
+        // right edge (col 117 for a 120-wide terminal).
+        let hit = crate::ui::composer_hit_at(&app, 117, 28, 120, 30);
+        assert_eq!(hit, Some(crate::ui::ComposerHit::Send));
+        let input = crate::ui::composer_hit_at(&app, 50, 28, 120, 30);
+        assert_eq!(input, Some(crate::ui::ComposerHit::Input));
+        // Above the composer: not a composer hit.
+        assert_eq!(crate::ui::composer_hit_at(&app, 50, 20, 120, 30), None);
     }
 }
