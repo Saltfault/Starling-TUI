@@ -2581,10 +2581,20 @@ pub fn composer_hit_at(
         return None;
     }
     let chat_x = chat_column_x(app, term_w);
+    // The chat column shrinks when the members panel is open (30 cols), so
+    // the composer box's right edge moves left with it.
+    let members_open = app.show_members
+        && (matches!(app.v2_view, V2View::Space)
+            || (matches!(app.v2_view, V2View::Home)
+                && matches!(app.selection, Selection::Flock(_))
+                && app.selected_dm.is_none()));
+    let chat_w = term_w
+        .saturating_sub(chat_x)
+        .saturating_sub(if members_open { 30 } else { 0 });
     let outer = Rect {
         x: chat_x + 1,
         y: composer_top,
-        width: term_w.saturating_sub(chat_x + 2),
+        width: chat_w.saturating_sub(2),
         height: composer_h,
     };
     let content = outer.inner(Margin {

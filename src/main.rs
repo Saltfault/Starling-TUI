@@ -3670,6 +3670,24 @@ mod tests {
     }
 
     #[test]
+    fn composer_buttons_work_with_members_panel_open() {
+        // The members panel (30 cols) shrinks the chat column; the composer
+        // box's right edge moves left with it, so the send button sits at a
+        // different column than without members.
+        let mut app = App::default();
+        app.v2_view = V2View::Space;
+        app.show_members = true;
+        app.input = "hello".into();
+        // Chat spans 39..90 with members open; send is right-aligned there.
+        let hit = crate::ui::composer_hit_at(&app, 87, 27, 120, 30);
+        assert_eq!(hit, Some(crate::ui::ComposerHit::Send));
+        let emoji = crate::ui::composer_hit_at(&app, 85, 27, 120, 30);
+        assert_eq!(emoji, Some(crate::ui::ComposerHit::Emoji));
+        let input = crate::ui::composer_hit_at(&app, 50, 28, 120, 30);
+        assert_eq!(input, Some(crate::ui::ComposerHit::Input));
+    }
+
+    #[test]
     fn composer_buttons_work_on_narrow_terminals() {
         // On mobile the composer sits above the bottom rail; the hit-test
         // must account for that offset or every button click misses.
