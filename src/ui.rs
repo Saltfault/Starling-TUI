@@ -1314,6 +1314,22 @@ impl App {
         self.active_context()
             .and_then(|ctx| self.presence.contexts.get(&ctx.id))
             .map(|presence| presence.ordered_ids.clone())
+            .or_else(|| {
+                // Flocks are selected without an active context (the Friends
+                // sidebar stays visible), so resolve the space id from the
+                // selection to find their presence roster.
+                let space = match self.selection {
+                    Selection::Flock(i) => self.flocks.get(i).and_then(|fv| {
+                        starling::net::decode_typed_code(&fv.code)
+                            .and_then(|t| starling::net::decode_flock_code(&t))
+                            .map(|fc| SpaceId::Flock(starling::protocol::FlockId(fc.secret)))
+                    }),
+                    _ => None,
+                };
+                space
+                    .and_then(|id| self.presence.contexts.get(&id))
+                    .map(|presence| presence.ordered_ids.clone())
+            })
             .unwrap_or_default()
     }
 
@@ -4408,6 +4424,31 @@ mod tests {
         // Full dismiss from the parent menu.
         dismiss_active_popup(&mut app);
         assert!(!app.show_context_menu);
+    }
+
+    #[test]
+    fn flock_selection_resolves_presence_peers_for_calls() {
+        // A flock selected from the Friends list has no active context, but
+        // its presence roster must still resolve so calls can target peers.
+        let mut app = App::default();
+        let secret = [7u8; 32];
+        let peer = iroh::SecretKey::generate().public();
+        let code = starling::net::encode_typed_code(
+            starling::net::CodeType::Flock,
+            &[&secret[..], &peer.as_bytes()[..], b"crew"].concat(),
+        );
+        app.flocks.push(FlockView {
+            code: code.clone(),
+            name: "crew".into(),
+            messages: vec![],
+            unread: 0,
+        });
+        app.select_flock(0);
+        let space = SpaceId::Flock(starling::protocol::FlockId(secret));
+        let other = iroh::SecretKey::generate().public();
+        app.presence.context_mut(space).ordered_ids.push(other);
+        let peers = app.active_peers();
+        assert_eq!(peers, vec![other]);
     }
 
     #[test]
