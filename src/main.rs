@@ -1437,13 +1437,46 @@ fn confirm_join(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>, code: St
     app.error_message = None;
 }
 
+/// Start a real call to the given peers and post a chat message announcing it.
+fn start_call_with_message(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+    targets: Vec<EndpointId>,
+) {
+    if targets.is_empty() {
+        app.error_message = Some("No one is online in this context".into());
+        return;
+    }
+    #[cfg(feature = "audio")]
+    {
+        let _ = cmd_tx.send(Command::StartCall(targets));
+        app.error_message = Some("Connecting call...".into());
+        // Announce the call in the active space, like a chat message.
+        let flock = app
+            .active_send_code()
+            .or_else(|| app.active_code().map(str::to_owned));
+        if let Some(flock) = flock {
+            let msg = starling::event::ChatMessage {
+                id: uuid::Uuid::new_v4().to_string(),
+                author: app.name.clone(),
+                body: "started a call.".into(),
+                ts: chrono::Utc::now().timestamp_millis(),
+            };
+            app.receive_message(&flock, msg, false);
+        }
+    }
+    #[cfg(not(feature = "audio"))]
+    {
+        let _ = app;
+        let _ = cmd_tx;
+        app.error_message = Some("Audio support not compiled in".into());
+    }
+}
+
 /// Confirm the bird-profile call. Shared by Enter and the Call button.
 fn confirm_bird_call(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>) {
-    #[cfg(feature = "audio")]
-    if let Some(peer) = app.bird_profile_peer
-        && cmd_tx.send(Command::StartCall(vec![peer])).is_ok()
-    {
-        app.error_message = Some("Connecting call...".into());
+    if let Some(peer) = app.bird_profile_peer {
+        start_call_with_message(app, cmd_tx, vec![peer]);
     }
     app.show_bird_profile = false;
     app.bird_profile_peer = None;
@@ -1864,15 +1897,12 @@ fn handle_normal_key(
                 app.in_call = false;
                 app.show_video = false;
             } else {
-                let targets: Vec<EndpointId> = app
-                    .selected_peer_id()
-                    .map_or_else(|| app.active_peers(), |peer| vec![peer]);
-                if !targets.is_empty() {
-                    let _ = cmd_tx.send(Command::StartCall(targets));
-                    app.error_message = Some("Connecting call...".into());
-                } else {
-                    app.error_message = Some("No one is online in this context".into());
-                }
+                start_call_with_message(
+                    app,
+                    cmd_tx,
+                    app.selected_peer_id()
+                        .map_or_else(|| app.active_peers(), |peer| vec![peer]),
+                );
             }
         }
 
@@ -1999,15 +2029,12 @@ fn handle_normal_key(
                 && k.modifiers.contains(KeyModifiers::CONTROL)
                 && k.modifiers.contains(KeyModifiers::SHIFT) =>
         {
-            let targets = app
-                .selected_peer_id()
-                .map_or_else(|| app.active_peers(), |peer| vec![peer]);
-            if !targets.is_empty() {
-                let _ = cmd_tx.send(Command::StartCall(targets));
-                app.error_message = Some("Connecting call...".into());
-            } else {
-                app.error_message = Some("No one is online in this context".into());
-            }
+            start_call_with_message(
+                app,
+                cmd_tx,
+                app.selected_peer_id()
+                    .map_or_else(|| app.active_peers(), |peer| vec![peer]),
+            );
         }
 
         KeyCode::Char(',') if !app.input_focus => {
@@ -2261,14 +2288,24 @@ fn handle_settings_mouse_click(app: &mut App, modal: Rect, col: u16, row: u16) -
 /// Header icon row on narrow terminals: channel/friends toggle (when the
 /// sidebar is hidden), members, bell, pin, call. Mirrors the desktop chat-header
 /// hit regions (right-aligned, no rail column).
-fn handle_mobile_header_click(app: &mut App, col: u16, row: u16, term_w: u16) -> bool {
+fn handle_mobile_header_click(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
+    col: u16,
+    row: u16,
+    term_w: u16,
+) -> bool {
     if row > 1 {
         return false;
     }
     match ui::header_icon_at(app, col, term_w) {
         Some(ui::HeaderIcon::Call) => {
-            app.in_call = true;
-            app.call_title = "Call".into();
+            start_call_with_message(
+                app,
+                cmd_tx,
+                app.selected_peer_id()
+                    .map_or_else(|| app.active_peers(), |peer| vec![peer]),
+            );
         }
         Some(ui::HeaderIcon::Pin) => {
             app.show_pinned = !app.show_pinned;
@@ -2376,6 +2413,7 @@ fn handle_mobile_sidebar_click(
 
 fn handle_reference_mouse_click(
     app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<Command>,
     col: u16,
     row: u16,
     term_w: u16,
@@ -2395,8 +2433,12 @@ fn handle_reference_mouse_click(
     if row <= 1 && col >= chat_left {
         match ui::header_icon_at(app, col, term_w) {
             Some(ui::HeaderIcon::Call) => {
-                app.in_call = true;
-                app.call_title = "Call".into();
+                start_call_with_message(
+                    app,
+                    cmd_tx,
+                    app.selected_peer_id()
+                        .map_or_else(|| app.active_peers(), |peer| vec![peer]),
+                );
             }
             Some(ui::HeaderIcon::Pin) => {
                 app.show_pinned = !app.show_pinned;
@@ -2760,7 +2802,7 @@ fn handle_mouse_click(
         return Ok(());
     }
 
-    if term_w < ui::MOBILE_BREAKPOINT && handle_mobile_header_click(app, col, row, term_w) {
+    if term_w < ui::MOBILE_BREAKPOINT && handle_mobile_header_click(app, cmd_tx, col, row, term_w) {
         return Ok(());
     }
 
@@ -2788,7 +2830,7 @@ fn handle_mouse_click(
         return Ok(());
     }
 
-    if handle_reference_mouse_click(app, col, row, term_w, term_h) {
+    if handle_reference_mouse_click(app, cmd_tx, col, row, term_w, term_h) {
         return Ok(());
     }
     if handle_v2_mouse_click(app, col, row, term_w, term_h) {
@@ -3453,7 +3495,8 @@ mod tests {
             icon_path: None,
         });
         // Rail: roost 0 at rows 5-7, col 4.
-        let handled = handle_reference_mouse_click(&mut app, 4, 6, 120, 30);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let handled = handle_reference_mouse_click(&mut app, &tx, 4, 6, 120, 30);
         assert!(handled, "rail click must be handled");
         assert!(
             matches!(app.selection, Selection::Channel(0, 0)),
