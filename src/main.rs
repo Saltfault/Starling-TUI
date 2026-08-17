@@ -610,6 +610,8 @@ async fn main() -> anyhow::Result<()> {
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel::<AppEvent>();
     #[allow(unused)]
     let muted_flag = Arc::new(AtomicBool::new(false));
+    #[allow(unused)]
+    let deafened_flag = Arc::new(AtomicBool::new(false));
 
     let restored_contexts = app.context_order.clone();
     let mut restore_codes: std::collections::HashMap<starling::protocol::SpaceId, String> =
@@ -913,7 +915,11 @@ async fn main() -> anyhow::Result<()> {
                     }
                     #[cfg(feature = "audio")]
                     AppEvent::VoiceFrame(bytes) => {
-                        if let Some(p) = &mut playback {
+                        // Deafened: drop incoming audio before it reaches the
+                        // output device.
+                        if !deafened_flag.load(Ordering::Relaxed)
+                            && let Some(p) = &mut playback
+                        {
                             p.push_opus(&bytes);
                         }
                     }
@@ -1015,6 +1021,7 @@ async fn main() -> anyhow::Result<()> {
                         app.deafened = !app.deafened;
                         app.muted = app.deafened;
                         muted_flag.store(app.muted, Ordering::Relaxed);
+                        deafened_flag.store(app.deafened, Ordering::Relaxed);
                         continue;
                     }
 
@@ -1080,6 +1087,7 @@ async fn main() -> anyhow::Result<()> {
                                     &mut app,
                                     &cmd_tx,
                                     &muted_flag,
+                                    &deafened_flag,
                                     clipboard.as_mut(),
                                     &mut term,
                                     m.column,
@@ -2415,9 +2423,12 @@ fn handle_mobile_sidebar_click(
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_reference_mouse_click(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
+    muted_flag: &Arc<AtomicBool>,
+    deafened_flag: &Arc<AtomicBool>,
     col: u16,
     row: u16,
     term_w: u16,
@@ -2513,9 +2524,12 @@ fn handle_reference_mouse_click(
             let rel = col.saturating_sub(9);
             if rel < 3 {
                 app.muted = !app.muted;
+                muted_flag.store(app.muted, Ordering::Relaxed);
             } else if rel < 6 {
                 app.deafened = !app.deafened;
                 app.muted = app.deafened;
+                muted_flag.store(app.muted, Ordering::Relaxed);
+                deafened_flag.store(app.deafened, Ordering::Relaxed);
             } else {
                 app.settings_open = true;
             }
@@ -2690,10 +2704,12 @@ fn activate_popup_action(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_mouse_click(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
     muted_flag: &Arc<AtomicBool>,
+    deafened_flag: &Arc<AtomicBool>,
     _clipboard: Option<&mut clipboard::SystemClipboard>,
     term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     col: u16,
@@ -2834,7 +2850,16 @@ fn handle_mouse_click(
         return Ok(());
     }
 
-    if handle_reference_mouse_click(app, cmd_tx, col, row, term_w, term_h) {
+    if handle_reference_mouse_click(
+        app,
+        cmd_tx,
+        muted_flag,
+        deafened_flag,
+        col,
+        row,
+        term_w,
+        term_h,
+    ) {
         return Ok(());
     }
     if handle_v2_mouse_click(app, col, row, term_w, term_h) {
@@ -3500,7 +3525,9 @@ mod tests {
         });
         // Rail: roost 0 at rows 5-7, col 4.
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let handled = handle_reference_mouse_click(&mut app, &tx, 4, 6, 120, 30);
+        let muted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let deafened = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let handled = handle_reference_mouse_click(&mut app, &tx, &muted, &deafened, 4, 6, 120, 30);
         assert!(handled, "rail click must be handled");
         assert!(
             matches!(app.selection, Selection::Channel(0, 0)),
