@@ -697,6 +697,10 @@ pub async fn run(
 
             #[cfg(feature = "audio")]
             Command::StartCall(peers) => {
+                // A solo call (no peers yet) keeps no capture running: the
+                // voice protocol handler starts per-connection capture when a
+                // peer joins by connecting to our voice ALPN, so a call can
+                // be started alone and others can join it.
                 if peers.is_empty() {
                     continue;
                 }
@@ -704,6 +708,10 @@ pub async fn run(
                 match crate::voice::start_capture(mic_tx, muted.clone(), input_device.as_deref()) {
                     Ok(stream) => {
                         _mic_stream = Some(stream);
+                        if peers.is_empty() {
+                            // Solo: keep the mic live; nothing to connect to yet.
+                            continue;
+                        }
                         let ep = endpoint.clone();
                         let tx = evt_tx.clone();
                         // Fan out mic frames to every peer in the call.

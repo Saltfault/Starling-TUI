@@ -1437,20 +1437,23 @@ fn confirm_join(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Command>, code: St
     app.error_message = None;
 }
 
-/// Start a real call to the given peers and post a chat message announcing it.
+/// Start a call to the given peers and post a chat message announcing it.
+/// With no peers this starts a solo call: the overlay shows and anyone in the
+/// space can join by connecting to the voice protocol.
 fn start_call_with_message(
     app: &mut App,
     cmd_tx: &mpsc::UnboundedSender<Command>,
     targets: Vec<EndpointId>,
 ) {
-    if targets.is_empty() {
-        app.error_message = Some("No one is online in this context".into());
-        return;
-    }
     #[cfg(feature = "audio")]
     {
         let _ = cmd_tx.send(Command::StartCall(targets));
-        app.error_message = Some("Connecting call...".into());
+        app.in_call = true;
+        app.error_message = if app.active_peers().is_empty() {
+            Some("Waiting for others to join…".into())
+        } else {
+            Some("Connecting call...".into())
+        };
         // Announce the call in the active space, like a chat message.
         let flock = app
             .active_send_code()
@@ -1469,6 +1472,7 @@ fn start_call_with_message(
     {
         let _ = app;
         let _ = cmd_tx;
+        let _ = targets;
         app.error_message = Some("Audio support not compiled in".into());
     }
 }
