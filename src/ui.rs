@@ -2464,7 +2464,7 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     );
     let content = outer.inner(Margin {
         horizontal: 1,
-        vertical: 0,
+        vertical: 1,
     });
     let value = if app.input.is_empty() {
         placeholder
@@ -2553,7 +2553,7 @@ pub fn composer_hit_at(
     };
     let content = outer.inner(Margin {
         horizontal: 1,
-        vertical: 0,
+        vertical: 1,
     });
     let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
     let send_icon = TerminalIcon::Send.glyph(app.icon_style);
