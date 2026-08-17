@@ -678,7 +678,7 @@ async fn main() -> anyhow::Result<()> {
             let dt = now.duration_since(last_frame).as_secs_f32().min(0.1);
             last_frame = now;
             let (term_w, term_h) = crossterm::terminal::size()?;
-            app.note_terminal_size(term_w);
+            app.note_terminal_size(term_w, term_h);
             let (_, flock_h, _, roost_h, bird_h) = panel_geometry(term_h);
             app.update_scroll_bounds(
                 flock_h.saturating_sub(2) as usize,
@@ -1924,6 +1924,11 @@ fn handle_normal_key(
             send_input(app, cmd_tx);
         }
 
+        // Shift+Enter inserts a newline; plain Enter sends.
+        KeyCode::Enter if app.input_focus && k.modifiers.contains(KeyModifiers::SHIFT) => {
+            app.input.push('\n');
+        }
+
         KeyCode::Up if matches!(app.v2_view, ui::V2View::Home) && !app.input_focus => {
             app.reference_dm_selected = app.reference_dm_selected.saturating_sub(1);
         }
@@ -2836,7 +2841,7 @@ fn handle_mouse_click(
     }
 
     // Composer: click the input to focus, the send button to send, or the
-    // emoji button (placeholder for now).
+    // emoji/attachment buttons (placeholders for now).
     if let Some(hit) = ui::composer_hit_at(app, col, row, term_w, term_h) {
         match hit {
             ui::ComposerHit::Send => {
@@ -2846,6 +2851,9 @@ fn handle_mouse_click(
             }
             ui::ComposerHit::Emoji => {
                 app.error_message = Some("Emoji picker coming soon".into());
+            }
+            ui::ComposerHit::Attach => {
+                app.error_message = Some("Attachments coming soon".into());
             }
             ui::ComposerHit::Input => {
                 app.input_focus = true;
@@ -3632,13 +3640,29 @@ mod tests {
         let mut app = App::default();
         app.v2_view = V2View::Space;
         app.input = "hello".into();
-        // Send is the rightmost control: right-aligned at the composer's
-        // right edge (col 117 for a 120-wide terminal).
-        let hit = crate::ui::composer_hit_at(&app, 117, 28, 120, 30);
+        // Icons sit on the top content row: plus far left, emoji + send far
+        // right; the text input renders below them.
+        let hit = crate::ui::composer_hit_at(&app, 117, 27, 120, 30);
         assert_eq!(hit, Some(crate::ui::ComposerHit::Send));
         let input = crate::ui::composer_hit_at(&app, 50, 28, 120, 30);
         assert_eq!(input, Some(crate::ui::ComposerHit::Input));
         // Above the composer: not a composer hit.
         assert_eq!(crate::ui::composer_hit_at(&app, 50, 20, 120, 30), None);
+        // The attachment button sits far left on the icon row.
+        let attach = crate::ui::composer_hit_at(&app, 41, 27, 120, 30);
+        assert_eq!(attach, Some(crate::ui::ComposerHit::Attach));
+    }
+
+    #[test]
+    fn composer_grows_with_multiline_input() {
+        let mut app = App::default();
+        app.terminal_width = 120;
+        app.terminal_height = 30;
+        assert_eq!(crate::ui::composer_height(&app), 4);
+        app.input = "line one\nline two\nline three".into();
+        assert_eq!(crate::ui::composer_height(&app), 7);
+        // The composer hit region moves up as it grows.
+        let hit = crate::ui::composer_hit_at(&app, 50, 26, 120, 30);
+        assert_eq!(hit, Some(crate::ui::ComposerHit::Input));
     }
 }

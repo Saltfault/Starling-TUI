@@ -382,6 +382,8 @@ pub struct App {
     pub sidebar_hidden: bool,
     /// Terminal width (cols) from the last frame; resizing is detected here.
     pub terminal_width: u16,
+    /// Terminal height (rows) from the last frame; caps the composer growth.
+    pub terminal_height: u16,
     /// User drag offset applied to every popup, relative to its centered
     /// position. Popups are draggable by their title row.
     pub popup_offset: (i16, i16),
@@ -487,6 +489,7 @@ impl Default for App {
             show_members: false,
             sidebar_hidden: false,
             terminal_width: 0,
+            terminal_height: 0,
             popup_offset: (0, 0),
             drag_grab: None,
             icon_style: IconStyle::from_env(),
@@ -1244,9 +1247,10 @@ impl App {
     /// narrow screens auto-hide the channel/friends sidebar and members panel;
     /// when the screen grows back to a large size both lists come back
     /// automatically.
-    pub fn note_terminal_size(&mut self, width: u16) {
+    pub fn note_terminal_size(&mut self, width: u16, height: u16) {
         let grew_wide = self.terminal_width < MOBILE_BREAKPOINT && width >= MOBILE_BREAKPOINT;
         self.terminal_width = width;
+        self.terminal_height = height;
         if width < NARROW_BREAKPOINT {
             self.sidebar_hidden = true;
             self.show_members = false;
@@ -2234,13 +2238,15 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
         }
     }
     // The message list fills the entire chat column; the header (2 rows) and
-    // composer (3 rows) are drawn on top of it afterwards. Content starts
-    // below the header so it is never hidden by the overlay.
+    // composer (which grows with the input) are drawn on top of it afterwards.
+    // Content starts below the header and ends above the composer so it is
+    // never hidden by either overlay.
+    let composer_h = composer_height(app);
     let mut lines = Vec::with_capacity(area.height as usize);
     lines.push(Line::from(""));
     lines.push(Line::from(""));
     lines.extend(message_lines);
-    while (lines.len() as u16) < area.height {
+    while (lines.len() as u16) < area.height.saturating_sub(composer_h) {
         lines.push(Line::from(""));
     }
     f.render_widget(
@@ -2273,9 +2279,9 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     );
     let composer_area = Rect {
         x: area.x,
-        y: area.y + area.height.saturating_sub(3),
+        y: area.y + area.height.saturating_sub(composer_h),
         width: area.width,
-        height: 3,
+        height: composer_h,
     };
     draw_message_bar(f, app, composer_area);
 }
@@ -2420,6 +2426,22 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// The composer's height: 4 rows minimum (icon row + text row + borders),
+/// growing one row per line of input (wrapping at the box width) up to a
+/// third of the terminal height.
+pub fn composer_height(app: &App) -> u16 {
+    let base = 4u16;
+    let max = (app.terminal_height / 3).max(base);
+    if app.input.is_empty() {
+        return base;
+    }
+    let width = app.terminal_width.saturating_sub(50).max(20) as usize;
+    let lines = app.input.lines().fold(0usize, |acc, line| {
+        acc + 1 + line.chars().count().saturating_sub(width) / width
+    });
+    (base + lines as u16).clamp(base, max)
+}
+
 fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     let input_bg = Color::Rgb(56, 58, 64);
     let border_color = if app.input_focus {
@@ -2449,9 +2471,6 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         format!("Message #{}", app.active_title())
     };
-    let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
-    let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
-    let send_icon = TerminalIcon::Send.glyph(app.icon_style);
 
     // Draw the border first. The content is rendered afterward so the
     // border widget cannot paint over the controls and placeholder.
@@ -2466,43 +2485,60 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
         horizontal: 1,
         vertical: 1,
     });
+    // Icon row on top: plus (attachment) far left, emoji + send far right.
+    // The text input renders below the icon row.
+    let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
+    let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
+    let send_icon = TerminalIcon::Send.glyph(app.icon_style);
+    let plus_w = ratatui::text::Line::from(plus_icon).width() as u16;
+    let right = format!("{} {}", emoji_icon, send_icon);
+    let right_width = ratatui::text::Line::from(right.as_str()).width() as u16;
+    let right_x = content.x + content.width.saturating_sub(right_width);
+    f.render_widget(
+        Paragraph::new(plus_icon).style(Style::new().fg(input_color(app)).bg(input_bg)),
+        Rect {
+            x: content.x,
+            y: content.y,
+            width: plus_w,
+            height: 1,
+        },
+    );
+    f.render_widget(
+        Paragraph::new(right)
+            .style(Style::new().fg(input_color(app)).bg(input_bg))
+            .alignment(Alignment::Right),
+        Rect {
+            x: right_x,
+            y: content.y,
+            width: right_width,
+            height: 1,
+        },
+    );
+    let text_area = Rect {
+        x: content.x,
+        y: content.y + 1,
+        width: content.width,
+        height: content.height.saturating_sub(1),
+    };
     let value = if app.input.is_empty() {
         placeholder
     } else {
         app.input.clone()
     };
-    let input_color = if app.input.is_empty() {
+    f.render_widget(
+        Paragraph::new(value)
+            .style(Style::new().fg(input_color(app)).bg(input_bg))
+            .alignment(Alignment::Left),
+        text_area,
+    );
+}
+
+fn input_color(app: &App) -> Color {
+    if app.input.is_empty() {
         Color::Rgb(148, 155, 164)
     } else {
         Color::Rgb(219, 222, 225)
-    };
-    let left = format!("{} {}", plus_icon, value);
-    let right = format!("{} {}", emoji_icon, send_icon);
-    // Display width, not char count: emoji glyphs are 2 cells wide.
-    let right_width = ratatui::text::Line::from(right.as_str()).width() as u16;
-    let left_area = Rect {
-        x: content.x,
-        y: content.y,
-        width: content.width.saturating_sub(right_width),
-        height: content.height,
-    };
-    f.render_widget(
-        Paragraph::new(left)
-            .style(Style::new().fg(input_color).bg(input_bg))
-            .alignment(Alignment::Left),
-        left_area,
-    );
-    f.render_widget(
-        Paragraph::new(right)
-            .style(Style::new().fg(input_color).bg(input_bg))
-            .alignment(Alignment::Right),
-        Rect {
-            x: content.x + content.width.saturating_sub(right_width),
-            y: content.y,
-            width: right_width.min(content.width),
-            height: content.height,
-        },
-    );
+    }
 }
 
 /// The x offset of the chat column, mirroring the layout in `draw`: desktop
@@ -2525,12 +2561,14 @@ pub fn chat_column_x(app: &App, term_w: u16) -> u16 {
     39
 }
 
-/// Which composer control a click hits: the send button, the emoji button, or
-/// the input area itself. Mirrors the layout in `draw_message_bar`.
+/// Which composer control a click hits: the send button, the emoji button,
+/// the attachment button, or the input area itself. Mirrors the layout in
+/// `draw_message_bar`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ComposerHit {
     Send,
     Emoji,
+    Attach,
     Input,
 }
 
@@ -2541,33 +2579,43 @@ pub fn composer_hit_at(
     term_w: u16,
     term_h: u16,
 ) -> Option<ComposerHit> {
-    if row < term_h.saturating_sub(3) {
+    let composer_h = composer_height(app);
+    if row < term_h.saturating_sub(composer_h) {
         return None;
     }
     let chat_x = chat_column_x(app, term_w);
     let outer = Rect {
         x: chat_x + 1,
-        y: term_h.saturating_sub(3),
+        y: term_h.saturating_sub(composer_h),
         width: term_w.saturating_sub(chat_x + 2),
-        height: 3,
+        height: composer_h,
     };
     let content = outer.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });
+    let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
     let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
     let send_icon = TerminalIcon::Send.glyph(app.icon_style);
+    let plus_w = ratatui::text::Line::from(plus_icon).width() as u16;
     let right = format!("{} {}", emoji_icon, send_icon);
     let right_width = ratatui::text::Line::from(right.as_str()).width() as u16;
     let right_x = content.x + content.width.saturating_sub(right_width);
     let emoji_w = ratatui::text::Line::from(emoji_icon).width() as u16;
-    if col >= right_x && col < right_x + emoji_w {
-        return Some(ComposerHit::Emoji);
+    // Icons live on the top content row; the text input is below it.
+    if row == content.y {
+        if col >= content.x && col < content.x + plus_w {
+            return Some(ComposerHit::Attach);
+        }
+        if col >= right_x && col < right_x + emoji_w {
+            return Some(ComposerHit::Emoji);
+        }
+        if col > right_x + emoji_w {
+            return Some(ComposerHit::Send);
+        }
+        return None;
     }
-    if col > right_x + emoji_w {
-        return Some(ComposerHit::Send);
-    }
-    if col >= content.x && col < right_x {
+    if col >= content.x && col < content.right() {
         return Some(ComposerHit::Input);
     }
     None
@@ -4640,8 +4688,8 @@ mod tests {
         app.select(Selection::Channel(0, 0));
 
         // Shrink below the narrow breakpoint: channel list and members hide.
-        app.note_terminal_size(100);
-        app.note_terminal_size(40);
+        app.note_terminal_size(100, 30);
+        app.note_terminal_size(40, 30);
         assert!(app.sidebar_hidden);
         assert!(!app.show_members);
 
@@ -4679,7 +4727,7 @@ mod tests {
         assert!(text.contains("CHANNELS"));
 
         // Growing back to a large width reverts everything.
-        app.note_terminal_size(120);
+        app.note_terminal_size(120, 30);
         assert!(!app.sidebar_hidden);
         assert!(
             app.show_members,
