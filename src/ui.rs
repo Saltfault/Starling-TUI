@@ -2879,6 +2879,7 @@ pub fn dismiss_active_popup(app: &mut App) {
     } else if app.in_call {
         app.in_call = false;
         app.show_video = false;
+        app.error_message = None;
     } else if app.show_pinned {
         app.show_pinned = false;
     } else if app.show_notifications {

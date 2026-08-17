@@ -34,7 +34,10 @@ pub async fn place_call(
     let conn = endpoint
         .connect(EndpointAddr::from(peer), VOICE_ALPN)
         .await?;
-    let mut started = false;
+    // The connection is the join signal: announce the peer immediately so the
+    // UI clears its waiting notice even before the first audio datagram.
+    let _ = evt_tx.send(AppEvent::CallStarted(peer));
+    let mut got_audio = false;
     let connect_deadline = tokio::time::sleep(std::time::Duration::from_secs(10));
     tokio::pin!(connect_deadline);
 
@@ -46,20 +49,15 @@ pub async fn place_call(
             }
             datagram = conn.read_datagram() => {
                 let Ok(bytes) = datagram else { break };
-                if !started {
-                    started = true;
-                    let _ = evt_tx.send(AppEvent::CallStarted(peer));
-                }
+                got_audio = true;
                 let _ = evt_tx.send(AppEvent::VoiceFrame(bytes.to_vec()));
             }
-            _ = &mut connect_deadline, if !started => {
+            _ = &mut connect_deadline, if !got_audio => {
                 break;
             }
         }
     }
-    if started {
-        let _ = evt_tx.send(AppEvent::CallEnded(peer));
-    }
+    let _ = evt_tx.send(AppEvent::CallEnded(peer));
     Ok(())
 }
 
@@ -72,7 +70,10 @@ pub async fn handle_incoming(
 ) -> anyhow::Result<()> {
     let peer = conn.remote_id();
 
-    let mut started = false;
+    // The connection is the join signal: announce the peer immediately so the
+    // UI clears its waiting notice even before the first audio datagram.
+    let _ = evt_tx.send(AppEvent::CallStarted(peer));
+    let mut got_audio = false;
     let connect_deadline = tokio::time::sleep(std::time::Duration::from_secs(10));
     tokio::pin!(connect_deadline);
 
@@ -84,20 +85,15 @@ pub async fn handle_incoming(
             }
             datagram = conn.read_datagram() => {
                 let Ok(bytes) = datagram else { break };
-                if !started {
-                    started = true;
-                    let _ = evt_tx.send(AppEvent::CallStarted(peer));
-                }
+                got_audio = true;
                 let _ = evt_tx.send(AppEvent::VoiceFrame(bytes.to_vec()));
             }
-            _ = &mut connect_deadline, if !started => {
+            _ = &mut connect_deadline, if !got_audio => {
                 break;
             }
         }
     }
-    if started {
-        let _ = evt_tx.send(AppEvent::CallEnded(peer));
-    }
+    let _ = evt_tx.send(AppEvent::CallEnded(peer));
     Ok(())
 }
 

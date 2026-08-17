@@ -934,6 +934,7 @@ async fn main() -> anyhow::Result<()> {
                     #[cfg(feature = "audio")]
                     AppEvent::CallEnded(_peer) => {
                         app.in_call = false;
+                        app.error_message = None;
                     }
                     #[cfg(feature = "video")]
                     AppEvent::LocalVideoFrame(jpeg) => {
@@ -1908,6 +1909,7 @@ fn handle_normal_key(
                 let _ = cmd_tx.send(Command::HangUp);
                 app.in_call = false;
                 app.show_video = false;
+                app.error_message = None;
             } else {
                 start_call_with_message(
                     app,
@@ -1971,6 +1973,7 @@ fn handle_normal_key(
             let _ = cmd_tx.send(Command::HangUp);
             app.in_call = false;
             app.show_video = false;
+            app.error_message = None;
         }
 
         KeyCode::Esc if app.input_focus => {
@@ -2779,6 +2782,7 @@ fn handle_mouse_click(
                 let _ = cmd_tx.send(Command::HangUp);
                 app.in_call = false;
                 app.show_video = false;
+                app.error_message = None;
             }
             None => {}
         }
