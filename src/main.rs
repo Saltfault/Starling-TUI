@@ -3640,15 +3640,15 @@ mod tests {
         let mut app = App::default();
         app.v2_view = V2View::Space;
         app.input = "hello".into();
-        // Icons sit on the top content row: plus far left, emoji + send far
-        // right; the text input renders below them.
+        // Buttons sit on the composer's top border row: plus far left, emoji
+        // + send far right; the text input is inside the box below.
         let hit = crate::ui::composer_hit_at(&app, 117, 27, 120, 30);
         assert_eq!(hit, Some(crate::ui::ComposerHit::Send));
         let input = crate::ui::composer_hit_at(&app, 50, 28, 120, 30);
         assert_eq!(input, Some(crate::ui::ComposerHit::Input));
         // Above the composer: not a composer hit.
         assert_eq!(crate::ui::composer_hit_at(&app, 50, 20, 120, 30), None);
-        // The attachment button sits far left on the icon row.
+        // The attachment button sits far left on the top border row.
         let attach = crate::ui::composer_hit_at(&app, 41, 27, 120, 30);
         assert_eq!(attach, Some(crate::ui::ComposerHit::Attach));
     }
@@ -3658,11 +3658,27 @@ mod tests {
         let mut app = App::default();
         app.terminal_width = 120;
         app.terminal_height = 30;
-        assert_eq!(crate::ui::composer_height(&app), 4);
+        // A single line keeps the box at 3 rows; each extra line adds one.
+        assert_eq!(crate::ui::composer_height(&app), 3);
+        app.input = "line one".into();
+        assert_eq!(crate::ui::composer_height(&app), 3);
         app.input = "line one\nline two\nline three".into();
-        assert_eq!(crate::ui::composer_height(&app), 7);
+        assert_eq!(crate::ui::composer_height(&app), 5);
         // The composer hit region moves up as it grows.
         let hit = crate::ui::composer_hit_at(&app, 50, 26, 120, 30);
         assert_eq!(hit, Some(crate::ui::ComposerHit::Input));
+    }
+
+    #[test]
+    fn composer_buttons_work_on_narrow_terminals() {
+        // On mobile the composer sits above the bottom rail; the hit-test
+        // must account for that offset or every button click misses.
+        let mut app = App::default();
+        app.v2_view = V2View::Space;
+        app.input = "hello".into();
+        let hit = crate::ui::composer_hit_at(&app, 57, 14, 60, 20);
+        assert_eq!(hit, Some(crate::ui::ComposerHit::Send));
+        let input = crate::ui::composer_hit_at(&app, 30, 16, 60, 20);
+        assert_eq!(input, Some(crate::ui::ComposerHit::Input));
     }
 }

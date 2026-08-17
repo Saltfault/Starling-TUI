@@ -2426,11 +2426,11 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-/// The composer's height: 4 rows minimum (icon row + text row + borders),
-/// growing one row per line of input (wrapping at the box width) up to a
-/// third of the terminal height.
+/// The composer's height: 3 rows for a single line (top border with the
+/// buttons, text row, bottom border), growing one row per additional line of
+/// input (wrapping at the box width) up to a third of the terminal height.
 pub fn composer_height(app: &App) -> u16 {
-    let base = 4u16;
+    let base = 3u16;
     let max = (app.terminal_height / 3).max(base);
     if app.input.is_empty() {
         return base;
@@ -2439,7 +2439,7 @@ pub fn composer_height(app: &App) -> u16 {
     let lines = app.input.lines().fold(0usize, |acc, line| {
         acc + 1 + line.chars().count().saturating_sub(width) / width
     });
-    (base + lines as u16).clamp(base, max)
+    (base + lines.saturating_sub(1) as u16).clamp(base, max)
 }
 
 fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
@@ -2485,20 +2485,20 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
         horizontal: 1,
         vertical: 1,
     });
-    // Icon row on top: plus (attachment) far left, emoji + send far right.
-    // The text input renders below the icon row.
+    // Buttons live on the top border row: plus (attachment) far left, emoji
+    // and send far right. The text input renders inside the box below.
     let plus_icon = TerminalIcon::Plus.glyph(app.icon_style);
     let emoji_icon = TerminalIcon::Emoji.glyph(app.icon_style);
     let send_icon = TerminalIcon::Send.glyph(app.icon_style);
     let plus_w = ratatui::text::Line::from(plus_icon).width() as u16;
     let right = format!("{} {}", emoji_icon, send_icon);
     let right_width = ratatui::text::Line::from(right.as_str()).width() as u16;
-    let right_x = content.x + content.width.saturating_sub(right_width);
+    let right_x = outer.right().saturating_sub(right_width + 1);
     f.render_widget(
         Paragraph::new(plus_icon).style(Style::new().fg(input_color(app)).bg(input_bg)),
         Rect {
-            x: content.x,
-            y: content.y,
+            x: outer.x + 1,
+            y: outer.y,
             width: plus_w,
             height: 1,
         },
@@ -2509,17 +2509,11 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
             .alignment(Alignment::Right),
         Rect {
             x: right_x,
-            y: content.y,
+            y: outer.y,
             width: right_width,
             height: 1,
         },
     );
-    let text_area = Rect {
-        x: content.x,
-        y: content.y + 1,
-        width: content.width,
-        height: content.height.saturating_sub(1),
-    };
     let value = if app.input.is_empty() {
         placeholder
     } else {
@@ -2529,7 +2523,7 @@ fn draw_message_bar(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(value)
             .style(Style::new().fg(input_color(app)).bg(input_bg))
             .alignment(Alignment::Left),
-        text_area,
+        content,
     );
 }
 
@@ -2580,13 +2574,16 @@ pub fn composer_hit_at(
     term_h: u16,
 ) -> Option<ComposerHit> {
     let composer_h = composer_height(app);
-    if row < term_h.saturating_sub(composer_h) {
+    // On narrow terminals the composer sits above the bottom rail (3 rows).
+    let rail = if term_w < MOBILE_BREAKPOINT { 3 } else { 0 };
+    let composer_top = term_h.saturating_sub(rail + composer_h);
+    if row < composer_top {
         return None;
     }
     let chat_x = chat_column_x(app, term_w);
     let outer = Rect {
         x: chat_x + 1,
-        y: term_h.saturating_sub(composer_h),
+        y: composer_top,
         width: term_w.saturating_sub(chat_x + 2),
         height: composer_h,
     };
@@ -2600,11 +2597,11 @@ pub fn composer_hit_at(
     let plus_w = ratatui::text::Line::from(plus_icon).width() as u16;
     let right = format!("{} {}", emoji_icon, send_icon);
     let right_width = ratatui::text::Line::from(right.as_str()).width() as u16;
-    let right_x = content.x + content.width.saturating_sub(right_width);
+    let right_x = outer.right().saturating_sub(right_width + 1);
     let emoji_w = ratatui::text::Line::from(emoji_icon).width() as u16;
-    // Icons live on the top content row; the text input is below it.
-    if row == content.y {
-        if col >= content.x && col < content.x + plus_w {
+    // Buttons live on the top border row; the text input is inside the box.
+    if row == outer.y {
+        if col > outer.x && col < outer.x + 1 + plus_w {
             return Some(ComposerHit::Attach);
         }
         if col >= right_x && col < right_x + emoji_w {
