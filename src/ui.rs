@@ -2366,27 +2366,47 @@ fn draw_members(f: &mut Frame, app: &App, area: Rect) {
     let bg = Color::Rgb(43, 45, 49);
     let muted = Color::Rgb(148, 155, 164);
     let text = Color::Rgb(219, 222, 225);
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "MEMBERS",
-            Style::new().fg(muted).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
+    // For flocks in a call, the members panel shows the call participants
+    // (call icon + names) instead of the online roster. Roosts keep the
+    // normal members list.
+    let flock_call = app.in_call
+        && matches!(app.v2_view, V2View::Home)
+        && matches!(app.selection, Selection::Flock(_));
+    let mut lines = vec![Line::from(Span::styled(
+        if flock_call { "IN CALL" } else { "MEMBERS" },
+        Style::new().fg(muted).add_modifier(Modifier::BOLD),
+    ))];
+    if flock_call {
+        let call_glyph = TerminalIcon::Call.glyph(app.icon_style);
+        let call_style = Style::new().fg(Color::Rgb(88, 101, 242));
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {} ", call_glyph), call_style),
+            Span::styled(app.name.clone(), Style::new().fg(text)),
+        ]));
+        for peer in &app.peers {
+            let name = app.peer_display_name(peer);
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", call_glyph), call_style),
+                Span::styled(name, Style::new().fg(text)),
+            ]));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
             format!("Online — {}", app.active_peers().len() + 1),
             Style::new().fg(muted).add_modifier(Modifier::BOLD),
-        )),
-    ];
-    // The local user first, then every online peer, below the Online line.
-    lines.push(Line::from(Span::styled(
-        format!(" {}  {}", initials(&app.name), app.name),
-        Style::new().fg(text),
-    )));
-    for peer in app.active_peers() {
-        let name = app.peer_display_name(&peer);
+        )));
+        // The local user first, then every online peer, below the Online line.
         lines.push(Line::from(Span::styled(
-            format!(" {}  {}", initials(&name), name),
+            format!(" {}  {}", initials(&app.name), app.name),
             Style::new().fg(text),
         )));
+        for peer in app.active_peers() {
+            let name = app.peer_display_name(&peer);
+            lines.push(Line::from(Span::styled(
+                format!(" {}  {}", initials(&name), name),
+                Style::new().fg(text),
+            )));
+        }
     }
     lines.truncate(area.height as usize);
     f.render_widget(
