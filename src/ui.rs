@@ -2015,6 +2015,30 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
             }
             items.push(ListItem::new(Line::from(spans)).bg(row_bg));
         }
+        // Voice roster: everyone currently in a call in this channel, listed
+        // directly below the channel list with the call icon. The local user
+        // is always in the call they started or joined.
+        if app.in_call {
+            let call_glyph = TerminalIcon::Call.glyph(app.icon_style);
+            let call_style = Style::new().fg(Color::Rgb(88, 101, 242)).bg(bg);
+            items.push(
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!(" {} ", call_glyph), call_style),
+                    Span::styled(app.name.clone(), Style::new().fg(text).bg(bg)),
+                ]))
+                .bg(bg),
+            );
+            for peer in &app.peers {
+                let name = app.peer_display_name(peer);
+                items.push(
+                    ListItem::new(Line::from(vec![
+                        Span::styled(format!(" {} ", call_glyph), call_style),
+                        Span::styled(name, Style::new().fg(text).bg(bg)),
+                    ]))
+                    .bg(bg),
+                );
+            }
+        }
     }
     f.render_widget(List::new(items).block(Block::default().bg(bg)), rows[1]);
     let mic_icon = if app.muted {
