@@ -344,6 +344,8 @@ pub async fn run(
         .accept(GOSSIP_ALPN, gossip.clone())
         .accept(starling::history::HISTORY_V1_ALPN, history_proto);
     #[cfg(feature = "audio")]
+    let call_cancel = tokio_util::sync::CancellationToken::new();
+    #[cfg(feature = "audio")]
     {
         builder = builder.accept(
             crate::call::VOICE_ALPN,
@@ -351,6 +353,7 @@ pub async fn run(
                 evt_tx: evt_tx.clone(),
                 muted: muted.clone(),
                 input_device: input_device.clone(),
+                cancel: call_cancel.clone(),
             },
         );
     }
@@ -373,6 +376,7 @@ pub async fn run(
                 evt_tx: evt_tx.clone(),
                 muted: muted.clone(),
                 input_device: input_device.clone(),
+                cancel: call_cancel.clone(),
             },
         );
     }
@@ -748,6 +752,10 @@ pub async fn run(
             #[cfg(feature = "audio")]
             Command::HangUp => {
                 _mic_stream = None;
+                // Tear down every incoming voice session too: each handler
+                // keeps its own capture running until the connection dies,
+                // so hanging up must cancel them all.
+                call_cancel.cancel();
             }
 
             #[cfg(feature = "video")]
@@ -1061,6 +1069,7 @@ struct VoiceProto {
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     muted: Arc<AtomicBool>,
     input_device: Option<String>,
+    cancel: tokio_util::sync::CancellationToken,
 }
 
 #[cfg(feature = "audio")]
@@ -1081,7 +1090,12 @@ impl iroh::protocol::ProtocolHandler for VoiceProto {
             }
         };
         let _stream = stream;
-        let _ = crate::call::handle_incoming(conn, mic_rx, self.evt_tx.clone()).await;
+        // Hang-up cancels the token, which ends this session (and its
+        // capture) instead of leaving it running until the connection dies.
+        tokio::select! {
+            _ = self.cancel.cancelled() => {}
+            _ = crate::call::handle_incoming(conn, mic_rx, self.evt_tx.clone()) => {}
+        }
         Ok(())
     }
 }
@@ -1110,6 +1124,7 @@ struct VoiceV1Proto {
     evt_tx: mpsc::UnboundedSender<AppEvent>,
     muted: Arc<AtomicBool>,
     input_device: Option<String>,
+    cancel: tokio_util::sync::CancellationToken,
 }
 
 #[cfg(feature = "audio")]
@@ -1130,7 +1145,12 @@ impl iroh::protocol::ProtocolHandler for VoiceV1Proto {
             }
         };
         let _stream = stream;
-        let _ = crate::call::handle_incoming(conn, mic_rx, self.evt_tx.clone()).await;
+        // Hang-up cancels the token, which ends this session (and its
+        // capture) instead of leaving it running until the connection dies.
+        tokio::select! {
+            _ = self.cancel.cancelled() => {}
+            _ = crate::call::handle_incoming(conn, mic_rx, self.evt_tx.clone()) => {}
+        }
         Ok(())
     }
 }

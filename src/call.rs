@@ -50,7 +50,10 @@ pub async fn place_call(
             datagram = conn.read_datagram() => {
                 let Ok(bytes) = datagram else { break };
                 got_audio = true;
-                let _ = evt_tx.send(AppEvent::VoiceFrame(bytes.to_vec()));
+                let _ = evt_tx.send(AppEvent::VoiceFrame {
+                    peer,
+                    bytes: bytes.to_vec(),
+                });
             }
             _ = &mut connect_deadline, if !got_audio => {
                 break;
@@ -86,7 +89,10 @@ pub async fn handle_incoming(
             datagram = conn.read_datagram() => {
                 let Ok(bytes) = datagram else { break };
                 got_audio = true;
-                let _ = evt_tx.send(AppEvent::VoiceFrame(bytes.to_vec()));
+                let _ = evt_tx.send(AppEvent::VoiceFrame {
+                    peer,
+                    bytes: bytes.to_vec(),
+                });
             }
             _ = &mut connect_deadline, if !got_audio => {
                 break;

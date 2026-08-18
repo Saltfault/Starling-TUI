@@ -137,7 +137,10 @@ pub enum AppEvent {
     Ticket(EndpointId),
     Error(String),
     #[cfg(feature = "audio")]
-    VoiceFrame(Vec<u8>),
+    VoiceFrame {
+        peer: EndpointId,
+        bytes: Vec<u8>,
+    },
     #[cfg(feature = "audio")]
     CallStarted(EndpointId),
     #[cfg(feature = "audio")]

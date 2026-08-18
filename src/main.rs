@@ -914,13 +914,13 @@ async fn main() -> anyhow::Result<()> {
                         app.joining = None;
                     }
                     #[cfg(feature = "audio")]
-                    AppEvent::VoiceFrame(bytes) => {
+                    AppEvent::VoiceFrame { peer, bytes } => {
                         // Deafened: drop incoming audio before it reaches the
                         // output device.
                         if !deafened_flag.load(Ordering::Relaxed)
                             && let Some(p) = &mut playback
                         {
-                            p.push_opus(&bytes);
+                            p.push_opus(peer, &bytes);
                         }
                     }
                     #[cfg(feature = "audio")]
@@ -932,9 +932,14 @@ async fn main() -> anyhow::Result<()> {
                         app.error_message = None;
                     }
                     #[cfg(feature = "audio")]
-                    AppEvent::CallEnded(_peer) => {
-                        app.in_call = false;
-                        app.error_message = None;
+                    AppEvent::CallEnded(peer) => {
+                        // Only end the call when the last participant leaves;
+                        // one peer hanging up must not kill the whole call.
+                        app.peers.retain(|p| *p != peer);
+                        if app.peers.is_empty() {
+                            app.in_call = false;
+                            app.error_message = None;
+                        }
                     }
                     #[cfg(feature = "video")]
                     AppEvent::LocalVideoFrame(jpeg) => {

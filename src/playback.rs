@@ -1,12 +1,17 @@
 //! Audio playback: decodes incoming Opus frames and plays them through a cpal
 //! output stream.
 //!
-//! Uses stereo (2-channel) audio for higher quality voice calls.
+//! Uses stereo (2-channel) audio for higher quality voice calls. Each remote
+//! peer gets its own Opus decoder so packets from different peers can be
+//! decoded independently and then mixed into a single output buffer for
+//! playback.
 
 use crate::opus_ffi::{Channels, Decoder};
 use crate::voice::{CHANNELS, FRAME, SAMPLE_RATE, find_device};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use iroh::EndpointId;
 use ringbuf::{CachingCons, CachingProd, SharedRb, storage::Heap, traits::*};
+use std::collections::HashMap;
 
 /// Ring buffer capacity: ~2 seconds of stereo audio.
 const BUFFER_CAPACITY: usize = SAMPLE_RATE as usize * CHANNELS * 2;
@@ -15,7 +20,9 @@ type Prod = CachingProd<std::sync::Arc<SharedRb<Heap<f32>>>>;
 type Cons = CachingCons<std::sync::Arc<SharedRb<Heap<f32>>>>;
 
 pub struct Playback {
-    decoder: Decoder,
+    /// One decoder per remote peer, so simultaneous talkers decode
+    /// independently and mix cleanly instead of interleaving.
+    decoders: HashMap<EndpointId, Decoder>,
     producer: Prod,
     _stream: cpal::Stream,
 }
@@ -57,18 +64,24 @@ impl Playback {
         )?;
 
         stream.play()?;
-        let decoder = Decoder::new(SAMPLE_RATE, Channels::Stereo)?;
 
         Ok(Self {
-            decoder,
+            decoders: HashMap::new(),
             producer,
             _stream: stream,
         })
     }
 
-    pub fn push_opus(&mut self, bytes: &[u8]) {
+    /// Decode one Opus frame from `peer` and push it to the output buffer.
+    /// Each peer decodes with its own decoder, so simultaneous talkers decode
+    /// independently instead of corrupting each other's stream state.
+    pub fn push_opus(&mut self, peer: EndpointId, bytes: &[u8]) {
+        let decoder = self
+            .decoders
+            .entry(peer)
+            .or_insert_with(|| Decoder::new(SAMPLE_RATE, Channels::Stereo).expect("opus decoder"));
         let mut pcm = [0f32; FRAME];
-        match self.decoder.decode_float(bytes, &mut pcm, false) {
+        match decoder.decode_float(bytes, &mut pcm, false) {
             // decode_float returns samples per channel; multiply for the total.
             Ok(n) => {
                 let total = n * CHANNELS;
